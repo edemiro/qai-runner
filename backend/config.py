@@ -1,0 +1,77 @@
+"""Central configuration. Every path is absolute so the process can be started
+from any working directory without silently reading or writing the wrong .env."""
+
+import os
+from typing import Dict, List
+
+from dotenv import load_dotenv
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+LOG_FILE_PATH = os.path.join(BASE_DIR, "appium.log")
+DB_PATH = os.path.join(BASE_DIR, "qai.db")
+
+# Everything a run produces that is too big for SQLite: traces, videos, visual
+# baselines and their diffs. Kept out of the database so a run can be deleted
+# without rewriting the file, and so a trace can be served as a plain download.
+DATA_DIR = os.path.join(BASE_DIR, "data")
+ARTIFACT_DIR = os.path.join(DATA_DIR, "artifacts")
+AUTH_DIR = os.path.join(DATA_DIR, "auth")
+BASELINE_DIR = os.path.join(DATA_DIR, "baselines")
+
+for _directory in (DATA_DIR, ARTIFACT_DIR, AUTH_DIR, BASELINE_DIR):
+    os.makedirs(_directory, exist_ok=True)
+
+load_dotenv(ENV_PATH)
+
+APPIUM_HOST = os.environ.get("APPIUM_HOST", "http://localhost:4723")
+DEFAULT_MODEL = "gemini-2.5-flash"
+
+# Driving a real iPhone means WebDriverAgent has to be signed, and a free Apple
+# account cannot register the stock 'com.facebook.WebDriverAgentRunner' id
+# because it belongs to someone else. Whoever re-signs it picks a unique id and
+# names it here, so Appium looks for the build that actually exists. Empty for
+# simulators and Android, which need no signing at all.
+WDA_BUNDLE_ID = os.environ.get("WDA_BUNDLE_ID", "").strip()
+
+# The agent loop is bounded server-side as well as in the UI so a runaway model
+# cannot keep driving the device (and burning API quota) indefinitely.
+MAX_AGENT_STEPS = int(os.environ.get("MAX_AGENT_STEPS", "40"))
+
+# Only the local Vite dev server needs access. A wildcard here would let any
+# website in the browser drive the connected phone.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173",
+    ).split(",")
+    if origin.strip()
+]
+
+
+def write_env(updates: Dict[str, str]) -> None:
+    """Merge `updates` into .env, preserving every other line and comment.
+
+    Also updates os.environ so the change takes effect without a restart.
+    """
+    remaining = dict(updates)
+    lines: List[str] = []
+
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                key = stripped.split("=", 1)[0] if "=" in stripped else None
+                if key and key in remaining:
+                    lines.append(f"{key}={remaining.pop(key)}\n")
+                else:
+                    lines.append(line if line.endswith("\n") else line + "\n")
+
+    for key, value in remaining.items():
+        lines.append(f"{key}={value}\n")
+
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    os.environ.update(updates)

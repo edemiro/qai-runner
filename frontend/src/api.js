@@ -1,0 +1,260 @@
+const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const WS_BASE = BASE.replace(/^http/, 'ws');
+
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function request(path, { method = 'GET', body, signal } = {}) {
+  let response;
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    throw new ApiError('Backend is unreachable. Is it running on ' + BASE + '?', 0);
+  }
+
+  if (!response.ok) {
+    let detail = `Request failed (${response.status})`;
+    try {
+      const data = await response.json();
+      detail = data.detail || detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(detail, response.status);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+/** Consume an NDJSON stream, invoking `onEvent` for each complete line. */
+async function streamNdjson(path, { body, signal, onEvent }) {
+  let response;
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+      signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    throw new ApiError(`Could not reach the backend at ${BASE}. Is it still running?`, 0);
+  }
+
+  if (!response.ok) {
+    let detail = `Request failed (${response.status})`;
+    try {
+      detail = (await response.json()).detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(detail, response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      // The server died mid-run. Say so, rather than letting the caller
+      // surface a bare "network error" that could mean anything.
+      throw new ApiError(
+        'The run stopped because the connection to the backend dropped. '
+        + 'Check the backend console for the error that killed it.',
+        0,
+      );
+    }
+    const { value, done } = chunk;
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newline;
+    // Only parse whole lines; a chunk can split a JSON object in half.
+    while ((newline = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      try {
+        onEvent(JSON.parse(line));
+      } catch {
+        console.warn('Skipping malformed stream line:', line);
+      }
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    try {
+      onEvent(JSON.parse(tail));
+    } catch {
+      /* ignore trailing partial */
+    }
+  }
+}
+
+export const api = {
+  health: () => request('/api/health'),
+  providers: () => request('/api/settings/providers'),
+  providerModels: (provider) => request(`/api/settings/providers/${provider}/models`),
+  saveProvider: (provider, model, api_key, extra = null) =>
+    request('/api/settings/provider', { method: 'POST', body: { provider, model, api_key, extra } }),
+  testProvider: (provider, model, api_key, extra = null) =>
+    request('/api/settings/test', { method: 'POST', body: { provider, model, api_key, extra } }),
+
+  appiumStatus: () => request('/api/appium/status'),
+  startAppium: () => request('/api/appium/start', { method: 'POST' }),
+  stopAppium: () => request('/api/appium/stop', { method: 'POST' }),
+  appiumLogs: () => request('/api/appium/logs'),
+
+  devices: () => request('/api/devices'),
+  deviceApps: (udid, platform) =>
+    request(`/api/devices/${encodeURIComponent(udid)}/apps?platform=${encodeURIComponent(platform)}`),
+
+  createSession: (device, appId) =>
+    request('/api/appium/session', {
+      method: 'POST',
+      body: { udid: device.udid, platform: device.platform, name: device.name, appId: appId || null },
+    }),
+  createWebSession: (url, viewport, browser, headless = true, size = null) =>
+    request('/api/web/session', {
+      method: 'POST',
+      body: { url, viewport, browser, headless, width: size?.width, height: size?.height },
+    }),
+  navigate: (sessionId, url) =>
+    request(`/api/web/session/${sessionId}/navigate`, { method: 'POST', body: { url } }),
+  reopenWebSession: (sessionId) =>
+    request(`/api/web/session/${sessionId}/reopen`, { method: 'POST' }),
+  setViewport: (sessionId, width, height) =>
+    request(`/api/web/session/${sessionId}/viewport`, { method: 'POST', body: { width, height } }),
+
+  deleteSession: (sessionId) => request(`/api/session/${sessionId}`, { method: 'DELETE' }),
+  sessions: () => request('/api/sessions'),
+
+  screenshot: (sessionId) => request(`/api/session/${sessionId}/screenshot`),
+  source: (sessionId) => request(`/api/session/${sessionId}/source`),
+  elementAt: (sessionId, x, y) =>
+    request(`/api/session/${sessionId}/element-at?x=${Math.round(x)}&y=${Math.round(y)}`),
+
+  gesture: (sessionId, payload) =>
+    request(`/api/session/${sessionId}/gesture`, { method: 'POST', body: payload }),
+  action: (sessionId, payload) =>
+    request(`/api/session/${sessionId}/action`, { method: 'POST', body: payload }),
+
+  runAgent: (sessionId, body, onEvent, signal) =>
+    streamNdjson(`/api/session/${sessionId}/agent/run`, { body, onEvent, signal }),
+
+  // --- deterministic checks (no model, no tokens) -------------------------
+  suggestions: (sessionId) => request(`/api/session/${sessionId}/suggestions`),
+  explore: (sessionId, body, onEvent, signal) =>
+    streamNdjson(`/api/session/${sessionId}/explore`, { body, onEvent, signal }),
+  scanLinks: (sessionId) =>
+    request(`/api/session/${sessionId}/scan/links`, { method: 'POST' }),
+  scanAccessibility: (sessionId) =>
+    request(`/api/session/${sessionId}/scan/accessibility`, { method: 'POST' }),
+
+  stopAgent: (sessionId) => request(`/api/session/${sessionId}/agent/stop`, { method: 'POST' }),
+  agentStatus: (sessionId) => request(`/api/session/${sessionId}/agent/status`),
+
+  runs: (limit = 50, q = '', offset = 0) =>
+    request(`/api/runs?limit=${limit}&offset=${offset}`
+      + (q ? `&q=${encodeURIComponent(q)}` : '')),
+  run: (runId) => request(`/api/runs/${runId}`),
+  stepScreenshot: (runId, stepId) => request(`/api/runs/${runId}/steps/${stepId}/screenshot`),
+  renameRun: (runId, title) => request(`/api/runs/${runId}`, { method: 'PATCH', body: { title } }),
+  deleteRun: (runId) => request(`/api/runs/${runId}`, { method: 'DELETE' }),
+  exportRun: (runId, format) => request(`/api/runs/${runId}/export?format=${format}`),
+  replayRun: (runId, sessionId, onEvent, signal, heal = true) =>
+    streamNdjson(`/api/runs/${runId}/replay?session_id=${sessionId}&heal=${heal}`, { onEvent, signal }),
+
+  // --- suites -------------------------------------------------------------
+  suites: () => request('/api/suites'),
+  suite: (suiteId) => request(`/api/suites/${suiteId}`),
+  createSuite: (body) => request('/api/suites', { method: 'POST', body }),
+  updateSuite: (suiteId, body) => request(`/api/suites/${suiteId}`, { method: 'PATCH', body }),
+  deleteSuite: (suiteId) => request(`/api/suites/${suiteId}`, { method: 'DELETE' }),
+
+  addCase: (suiteId, body) => request(`/api/suites/${suiteId}/cases`, { method: 'POST', body }),
+  addCases: (suiteId, cases) =>
+    request(`/api/suites/${suiteId}/cases/bulk`, { method: 'POST', body: { cases } }),
+
+  // --- scenario writing to the Digital Channels standard -------------------
+  // From a written brief, or from whatever is on screen right now. The screen
+  // version names real fields and buttons, so prefer it when a page is open.
+  generateScenarios: (body) => request('/api/scenarios/generate', { method: 'POST', body }),
+  generateScenariosFromScreen: (sessionId, body) =>
+    request(`/api/session/${sessionId}/scenarios/generate`, { method: 'POST', body }),
+  updateCase: (caseId, body) => request(`/api/cases/${caseId}`, { method: 'PATCH', body }),
+  deleteCase: (caseId) => request(`/api/cases/${caseId}`, { method: 'DELETE' }),
+  saveRunAsCase: (runId, suiteId, name = null) =>
+    request(
+      `/api/runs/${runId}/save-as-case?suite_id=${suiteId}`
+        + (name ? `&name=${encodeURIComponent(name)}` : ''),
+      { method: 'POST' },
+    ),
+
+  // An execution from hand-picked scenarios, from one Test Set or several.
+  createExecution: (body, onEvent, signal) =>
+    streamNdjson('/api/executions', { body, onEvent, signal }),
+
+  runSuite: (suiteId, body, onEvent, signal) =>
+    streamNdjson(`/api/suites/${suiteId}/run`, { body, onEvent, signal }),
+  suiteRuns: (suiteId = null, limit = 50) =>
+    request(`/api/suite-runs?limit=${limit}${suiteId ? `&suite_id=${suiteId}` : ''}`),
+  suiteRun: (suiteRunId) => request(`/api/suite-runs/${suiteRunId}`),
+
+  // Reports and artifacts are files, so they are linked rather than fetched.
+  suiteReportUrl: (suiteRunId, format) =>
+    `${BASE}/api/suite-runs/${suiteRunId}/report?format=${format}`,
+  runReportUrl: (runId, format) => `${BASE}/api/runs/${runId}/report?format=${format}`,
+  artifactUrl: (artifactId) => `${BASE}/api/artifacts/${artifactId}/download`,
+
+  // --- insights -----------------------------------------------------------
+  trend: (days = 14) => request(`/api/insights/trend?days=${days}`),
+  flaky: (limit = 20) => request(`/api/insights/flaky?limit=${limit}`),
+  priorityBreakdown: (days = 14) => request(`/api/insights/priority?days=${days}`),
+
+  // --- saved sign-ins, mocking, baselines ---------------------------------
+  authProfiles: () => request('/api/auth-profiles'),
+  saveAuth: (sessionId, name) =>
+    request(`/api/session/${sessionId}/save-auth?name=${encodeURIComponent(name)}`, { method: 'POST' }),
+  deleteAuthProfile: (name) =>
+    request(`/api/auth-profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  routes: (sessionId) => request(`/api/session/${sessionId}/routes`),
+  setRoutes: (sessionId, rules) =>
+    request(`/api/session/${sessionId}/routes`, { method: 'POST', body: { rules } }),
+  pageEvents: (sessionId) => request(`/api/session/${sessionId}/page-events`),
+
+  baselines: () => request('/api/baselines'),
+  deleteBaseline: (name) =>
+    request(`/api/baselines/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  baselineImageUrl: (name, diff = false) =>
+    `${BASE}/api/baselines/${encodeURIComponent(name)}/image${diff ? '?diff=true' : ''}`,
+  visualCheck: (sessionId, body) =>
+    request(`/api/session/${sessionId}/visual-check`, { method: 'POST', body }),
+
+  startTrace: (sessionId) => request(`/api/session/${sessionId}/trace/start`, { method: 'POST' }),
+  stopTrace: (sessionId, runId = null) =>
+    request(`/api/session/${sessionId}/trace/stop${runId ? `?run_id=${runId}` : ''}`, { method: 'POST' }),
+
+  screenSocketUrl: (sessionId) => `${WS_BASE}/ws/session/${sessionId}/screen`,
+};
+
+export { BASE as API_BASE };

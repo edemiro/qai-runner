@@ -1,0 +1,828 @@
+"""Playwright-backed target: the same agent, driving a browser.
+
+Web locators are far more stable than mobile ones — a CSS selector with an id
+or a test id survives re-renders that would shift an XPath — so this driver
+resolves against the snapshot's own selector and lets Playwright do the
+waiting, instead of running the mobile side's semantic re-matching.
+"""
+
+import asyncio
+import base64
+import json
+import os
+import re
+import time
+import uuid
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+
+from config import ARTIFACT_DIR, AUTH_DIR
+from web_dom import EXTRACT_JS, WebSnapshot
+
+from .base import ActionResult, Snapshot
+
+# Kept per session so a step can report what the page complained about while it
+# ran. Bounded: a chatty page would otherwise grow this without limit.
+MAX_PAGE_EVENTS = 200
+
+
+def auth_path(profile: str) -> str:
+    """Where a named sign-in is stored. The name is sanitised because it
+    arrives from the UI and ends up as a filename."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", (profile or "default").strip())[:60] or "default"
+    return os.path.join(AUTH_DIR, f"{safe}.json")
+
+
+def list_auth_profiles() -> List[Dict[str, Any]]:
+    profiles = []
+    for name in sorted(os.listdir(AUTH_DIR)) if os.path.isdir(AUTH_DIR) else []:
+        if not name.endswith(".json"):
+            continue
+        full = os.path.join(AUTH_DIR, name)
+        profiles.append({
+            "name": name[:-5],
+            "savedAt": os.path.getmtime(full),
+            "sizeBytes": os.path.getsize(full),
+        })
+    return profiles
+
+
+def delete_auth_profile(profile: str) -> bool:
+    path = auth_path(profile)
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
+
+
+def run_artifact_dir(run_id: str) -> str:
+    path = os.path.join(ARTIFACT_DIR, re.sub(r"[^A-Za-z0-9_-]", "", run_id)[:32] or "run")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# Far enough off any real desktop that the window is never composited onto a
+# visible monitor.
+OFFSCREEN_POSITION = "-32000,-32000"
+
+
+def _launch_args(headless: bool, offscreen: bool, browser_name: str) -> List[str]:
+    """Extra Chromium flags for this launch.
+
+    Some sites refuse a headless browser outright, so QAi falls back to a real
+    windowed one. That fallback used to put an actual Chrome window on the
+    user's desktop, which is startling and gets in the way — the page is
+    supposed to live inside QAi. Positioning the window off-screen keeps the
+    full rendering path and fingerprint of a real browser while leaving the
+    desktop alone; the panel still shows it, because the panel is fed by
+    screenshots rather than by the window itself.
+
+    Only Chromium takes these flags, and only a headed launch has a window to
+    move.
+    """
+    if headless or not offscreen or browser_name != "chromium":
+        return []
+    return [
+        f"--window-position={OFFSCREEN_POSITION}",
+        # An off-screen window is "occluded" as far as Chromium is concerned,
+        # and it throttles or stops painting one — which would freeze the
+        # screenshot stream the panel depends on.
+        "--disable-features=CalculateNativeWinOcclusion",
+    ]
+
+
+def _append_event(sink: List[Dict[str, Any]], event: Dict[str, Any]) -> None:
+    event.setdefault("at", time.time())
+    sink.append(event)
+    if len(sink) > MAX_PAGE_EVENTS:
+        del sink[0 : len(sink) - MAX_PAGE_EVENTS]
+
+
+# Requests whose failure says something about the feature under test. A missing
+# font or a 404 on an analytics beacon is a fact about the page, but it is not
+# evidence that the button you just clicked is broken — and treating it as such
+# marks working controls as failures on any real site, which is exactly what
+# happened on the first real-world crawl.
+SIGNIFICANT_RESOURCES = {"document", "xhr", "fetch", "script"}
+
+
+def _network_level(resource_type: Optional[str], status: Optional[int]) -> str:
+    """`error` when the failure plausibly breaks the page, `warning` otherwise.
+
+    Both are recorded either way; the level only decides whether a run's
+    verdict is allowed to turn on it.
+    """
+    if resource_type in SIGNIFICANT_RESOURCES:
+        return "error"
+    return "warning"
+
+
+def _is_third_party(page, url: Optional[str]) -> bool:
+    """Is this someone else's server? Their outages are not the test's problem."""
+    if not url:
+        return False
+    try:
+        target = urlparse(url).netloc.lower()
+        origin = urlparse(page.url).netloc.lower()
+    except Exception:
+        return False
+    if not target or not origin:
+        return False
+    # Treat sub-domains of the same registrable-ish suffix as first party:
+    # cdn.example.com serving example.com is not a third party.
+    return target.split(":")[0].split(".")[-2:] != origin.split(":")[0].split(".")[-2:]
+
+
+def attach_page_listeners(page, sink: List[Dict[str, Any]]) -> None:
+    """Subscribe to the page's own error channels, recording into `sink`.
+
+    A run that clicks through happily while the console throws and an XHR
+    returns 500 is not a passing run — but nothing in the screenshot says so.
+    These are the signals a human tester would have devtools open for.
+
+    This is a free function rather than a method because it has to be attached
+    to the page *before* the first navigation: subscribing afterwards misses
+    every error the page raised while it was loading, which is where most of
+    them happen.
+    """
+
+    def on_console(message) -> None:
+        if message.type not in ("error", "warning"):
+            return
+        location = message.location if isinstance(message.location, dict) else {}
+        _append_event(sink, {
+            "kind": "console",
+            "level": message.type,
+            "text": message.text[:2000],
+            "url": location.get("url"),
+        })
+
+    def on_page_error(error) -> None:
+        _append_event(sink, {"kind": "pageerror", "level": "error", "text": str(error)[:2000]})
+
+    def on_request_failed(request) -> None:
+        failure = request.failure or ""
+        # A navigation the user themselves cancelled is noise, not a defect.
+        if "ERR_ABORTED" in failure:
+            return
+        _append_event(sink, {
+            "kind": "requestfailed",
+            "level": _network_level(request.resource_type, None),
+            "text": failure[:500],
+            "url": request.url[:500],
+            "resourceType": request.resource_type,
+            "thirdParty": _is_third_party(page, request.url),
+        })
+
+    def on_response(response) -> None:
+        if response.status < 400:
+            return
+        try:
+            resource_type = response.request.resource_type
+        except Exception:
+            resource_type = "other"
+        _append_event(sink, {
+            "kind": "httperror",
+            "level": _network_level(resource_type, response.status),
+            "text": f"HTTP {response.status} {response.status_text}"[:200],
+            "url": response.url[:500],
+            "status": response.status,
+            "resourceType": resource_type,
+            "thirdParty": _is_third_party(page, response.url),
+        })
+
+    page.on("console", on_console)
+    page.on("pageerror", on_page_error)
+    page.on("requestfailed", on_request_failed)
+    page.on("response", on_response)
+
+# One page's snapshots, addressed by id, exactly like the mobile ring buffer.
+SNAPSHOTS_PER_SESSION = 8
+
+# Chromium serves its own error document when a site refuses the connection, so
+# the navigation "succeeds" and only the URL gives it away. Treating that as a
+# loaded page is worse than failing: the session opens on an error screen, the
+# element tree is empty, and every later feature reports nonsense about it.
+ERROR_PAGE_PREFIXES = ("chrome-error://", "about:blank", "edge-error://")
+
+# The signature of a connection that opens and then dies without a response.
+# On sites that fingerprint automated browsers this is intermittent — the same
+# URL that fails now often loads on the next attempt — so it is worth retrying
+# rather than reporting straight away.
+TRANSIENT_SIGNATURES = (
+    "ERR_HTTP2_PROTOCOL_ERROR", "ERR_SSL_PROTOCOL_ERROR", "ERR_CONNECTION_RESET",
+    "ERR_QUIC_PROTOCOL_ERROR", "ERR_SPDY_PROTOCOL_ERROR", "ERR_EMPTY_RESPONSE",
+    "ERR_CONNECTION_CLOSED", "ERR_NETWORK_CHANGED",
+)
+
+NAVIGATION_ATTEMPTS = 3
+RETRY_DELAYS = (1.5, 3.5)
+
+
+class NavigationError(RuntimeError):
+    """A navigation that did not end on the page that was asked for."""
+
+
+def is_error_page(url: Optional[str]) -> bool:
+    return bool(url) and url.startswith(ERROR_PAGE_PREFIXES)
+
+
+def looks_transient(message: str) -> bool:
+    return any(signature in message for signature in TRANSIENT_SIGNATURES)
+
+
+async def settle(page, timeout: int = 6000) -> None:
+    """Give client-side rendering a moment. networkidle never fires on a site
+    that polls, so the wait is capped rather than depended on."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=timeout)
+    except Exception:
+        pass
+
+
+async def goto_with_retry(page, url: str, attempts: int = NAVIGATION_ATTEMPTS) -> None:
+    """Navigate, retrying while the failure looks like the intermittent kind.
+
+    Raises NavigationError with the last reason if every attempt fails. Three
+    failure modes are handled: goto() raising, goto() succeeding onto
+    Chromium's error document, and — the one that slipped through — a page that
+    passes the initial check and only then falls back to an error document
+    while its scripts run. The verdict is therefore taken after the page has
+    settled, not the instant navigation reports done.
+    """
+    last = "the page did not load"
+
+    for attempt in range(attempts):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            if not is_error_page(page.url):
+                await settle(page)
+                if not is_error_page(page.url):
+                    return
+                last = f"{url} loaded and then fell back to an error page"
+            else:
+                last = f"{url} returned an error page instead of content"
+        except Exception as exc:
+            last = str(exc).splitlines()[0]
+            if not looks_transient(last):
+                raise NavigationError(last) from exc
+
+        if attempt < attempts - 1:
+            await asyncio.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
+
+    raise NavigationError(f"{last} (tried {attempts} times)")
+
+VIEWPORTS = {
+    "desktop": {"width": 1440, "height": 900, "mobile": False},
+    "tablet": {"width": 834, "height": 1112, "mobile": True},
+    "mobile": {"width": 390, "height": 844, "mobile": True},
+}
+
+
+def _clamp(value: Optional[int], low: int, high: int) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return max(low, min(int(value), high))
+    except (TypeError, ValueError):
+        return None
+
+KEY_MAP = {
+    "back": "__history_back__",
+    "forward": "__history_forward__",
+    "enter": "Enter",
+    "escape": "Escape",
+    "tab": "Tab",
+    "delete": "Backspace",
+    "search": "Enter",
+    "home": "Home",
+    "end": "End",
+}
+
+
+class WebTarget:
+    kind = "web"
+
+    def __init__(
+        self, session_id: str, playwright, browser, context, page,
+        config: Dict[str, Any], events: Optional[List[Dict[str, Any]]] = None,
+    ):
+        self.session_id = session_id
+        self._pw = playwright
+        self._browser = browser
+        self._context = context
+        self.page = page
+        self.config = config
+        self._snapshots: List[WebSnapshot] = []
+        # Listeners are attached before the first navigation, so this list may
+        # already hold what the page complained about while it was loading.
+        self._events: List[Dict[str, Any]] = events if events is not None else []
+        self._tracing = False
+        self._routes: List[Dict[str, Any]] = []
+
+    # --- what the page complained about ---------------------------------- #
+
+    def _record(self, event: Dict[str, Any]) -> None:
+        _append_event(self._events, event)
+
+    def _attach_listeners(self, page) -> None:
+        attach_page_listeners(page, self._events)
+
+    def drain_events(self) -> List[Dict[str, Any]]:
+        """Hand over everything seen since the last call and start fresh."""
+        events, self._events = self._events, []
+        return events
+
+    def peek_events(self) -> List[Dict[str, Any]]:
+        return list(self._events)
+
+    # --- network mocking -------------------------------------------------- #
+
+    async def set_routes(self, rules: List[Dict[str, Any]]) -> int:
+        """Install URL-pattern rules that fulfil or abort matching requests.
+
+        Testing the error path — a 500 from the search API, a timeout on
+        checkout — is impossible against a live backend that insists on
+        working. Each rule is {url, status?, body?, contentType?, abort?}.
+        """
+        await self._context.unroute_all(behavior="ignoreErrors")
+        self._routes = []
+
+        for rule in rules or []:
+            pattern = rule.get("url")
+            if not pattern:
+                continue
+            self._routes.append(rule)
+
+            async def handler(route, _rule=rule):
+                if _rule.get("abort"):
+                    await route.abort(_rule.get("abort") if isinstance(_rule.get("abort"), str) else "failed")
+                    return
+                body = _rule.get("body", "")
+                if not isinstance(body, str):
+                    body = json.dumps(body, ensure_ascii=False)
+                await route.fulfill(
+                    status=int(_rule.get("status", 200)),
+                    content_type=_rule.get("contentType", "application/json"),
+                    body=body,
+                )
+
+            await self._context.route(pattern, handler)
+
+        return len(self._routes)
+
+    def describe_routes(self) -> List[Dict[str, Any]]:
+        return list(self._routes)
+
+    # --- trace & video ---------------------------------------------------- #
+
+    async def start_trace(self) -> bool:
+        if self._tracing:
+            return True
+        try:
+            await self._context.tracing.start(screenshots=True, snapshots=True, sources=False)
+            self._tracing = True
+        except Exception as exc:
+            print(f"[web] tracing unavailable: {exc}")
+        return self._tracing
+
+    async def stop_trace(self, path: str) -> Optional[str]:
+        """Write the trace to `path`. Returns the path, or None if there wasn't one."""
+        if not self._tracing:
+            return None
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            await self._context.tracing.stop(path=path)
+            self._tracing = False
+            return path if os.path.exists(path) else None
+        except Exception as exc:
+            print(f"[web] could not write trace: {exc}")
+            self._tracing = False
+            return None
+
+    async def video_path(self) -> Optional[str]:
+        """Available only after the page is closed — Playwright finalises the
+        file on close, so reading it earlier yields a truncated video."""
+        try:
+            video = self.page.video
+            return await video.path() if video else None
+        except Exception:
+            return None
+
+    # --- saved sign-in ---------------------------------------------------- #
+
+    async def save_auth(self, profile: str) -> str:
+        """Persist cookies and localStorage so later runs can skip the login.
+
+        Logging in on every case is slow, brittle, and a good way to get an
+        account rate-limited or locked.
+        """
+        path = auth_path(profile)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        await self._context.storage_state(path=path)
+        return path
+
+    # --- lifecycle ------------------------------------------------------- #
+
+    @classmethod
+    async def launch(
+        cls,
+        url: str,
+        viewport: str = "desktop",
+        headless: bool = True,
+        browser_name: str = "chromium",
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        auth_profile: Optional[str] = None,
+        record_video_dir: Optional[str] = None,
+        offscreen: bool = True,
+    ) -> "WebTarget":
+        from playwright.async_api import async_playwright
+
+        playwright = await async_playwright().start()
+        browser = None
+        try:
+            launcher = getattr(playwright, browser_name, playwright.chromium)
+            browser = await launcher.launch(
+                headless=headless,
+                args=_launch_args(headless, offscreen, browser_name),
+            )
+            spec = VIEWPORTS.get(viewport, VIEWPORTS["desktop"])
+            # An explicit size wins over the preset: rendering the page at the
+            # exact size of the panel it will be shown in means the screenshot
+            # fills that panel with no letterboxing and no downscaling.
+            size = {
+                "width": _clamp(width, 320, 3840) or spec["width"],
+                "height": _clamp(height, 320, 2160) or spec["height"],
+            }
+            context_options: Dict[str, Any] = {
+                "viewport": size,
+                "is_mobile": spec["mobile"] if browser_name == "chromium" else False,
+                "has_touch": spec["mobile"],
+                "locale": "tr-TR",
+            }
+
+            # A saved sign-in is loaded before the first navigation, so the very
+            # first page already sees an authenticated session.
+            if auth_profile:
+                saved = auth_path(auth_profile)
+                if os.path.exists(saved):
+                    context_options["storage_state"] = saved
+                else:
+                    print(f"[web] auth profile '{auth_profile}' not found; starting signed out")
+                    auth_profile = None
+
+            if record_video_dir:
+                os.makedirs(record_video_dir, exist_ok=True)
+                context_options["record_video_dir"] = record_video_dir
+                context_options["record_video_size"] = size
+
+            context = await browser.new_context(**context_options)
+            page = await context.new_page()
+            page.set_default_timeout(15000)
+
+            # Subscribe before navigating: a page that throws while loading —
+            # which is most of them — would otherwise report a clean console.
+            events: List[Dict[str, Any]] = []
+            attach_page_listeners(page, events)
+
+            # Handles every way this fails — goto() raising, goto() quietly
+            # landing on Chromium's error document, and a page that only falls
+            # back to one once its scripts run — waits for the page to settle,
+            # and retries the kind of refusal that clears on its own.
+            await goto_with_retry(page, url)
+        except Exception:
+            # Close the browser too, not just the driver — a leaked chromium
+            # process survives the failed attempt and holds its profile lock.
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            await playwright.stop()
+            raise
+
+        return cls(
+            session_id=f"web-{uuid.uuid4().hex[:12]}",
+            playwright=playwright,
+            browser=browser,
+            context=context,
+            page=page,
+            config={
+                "url": url, "viewport": viewport, "browser": browser_name,
+                "headless": headless, "width": size["width"], "height": size["height"],
+                "authProfile": auth_profile, "videoDir": record_video_dir,
+                "offscreen": offscreen,
+            },
+            events=events,
+        )
+
+    def is_alive(self) -> bool:
+        """Is the page still there?
+
+        A browser that crashed or was closed keeps answering "no frame"
+        forever, which the UI cannot tell apart from a slow screen.
+        """
+        try:
+            return not self.page.is_closed()
+        except Exception:
+            return False
+
+    async def reopen(self) -> Dict[str, Any]:
+        """Bring a dead page back at the same URL, keeping the session id.
+
+        Closing and re-opening from the UI would lose the session and the run
+        history attached to it.
+        """
+        from playwright.async_api import async_playwright
+
+        url = self.page.url if self.is_alive() else self.config.get("url")
+        if not url or url.startswith("chrome-error://"):
+            url = self.config.get("url")
+
+        for closer in (self._context.close, self._browser.close, self._pw.stop):
+            try:
+                await closer()
+            except Exception:
+                pass
+
+        playwright = await async_playwright().start()
+        browser_name = self.config.get("browser", "chromium")
+        launcher = getattr(playwright, browser_name, playwright.chromium)
+        headless = self.config.get("headless", True)
+        browser = await launcher.launch(
+            headless=headless,
+            args=_launch_args(headless, self.config.get("offscreen", True), browser_name),
+        )
+        size = {"width": self.config.get("width", 1440), "height": self.config.get("height", 900)}
+
+        options: Dict[str, Any] = {"viewport": size, "locale": "tr-TR"}
+        profile = self.config.get("authProfile")
+        if profile and os.path.exists(auth_path(profile)):
+            options["storage_state"] = auth_path(profile)
+
+        context = await browser.new_context(**options)
+        page = await context.new_page()
+        page.set_default_timeout(15000)
+
+        self._pw, self._browser, self._context, self.page = playwright, browser, context, page
+        self._snapshots.clear()
+        self._events.clear()
+        self._tracing = False
+        # The old page's listeners died with it; without re-subscribing, the
+        # reopened page reports no console or network errors at all.
+        self._attach_listeners(page)
+        if self._routes:
+            await self.set_routes(self._routes)
+
+        await goto_with_retry(page, url)
+        self.config["url"] = url
+        return {"url": page.url, "title": await page.title()}
+
+    async def navigate(self, url: str) -> Dict[str, Any]:
+        """Go to a new URL in the existing session.
+
+        Routed through the same guard as the initial load, because a site that
+        refuses the browser mid-session leaves an error document behind exactly
+        as it does on the first navigation — and the address bar used to report
+        that as a successful navigation.
+        """
+        await goto_with_retry(self.page, url)
+        self._snapshots.clear()
+        self.config["url"] = url
+        return {"url": self.page.url, "title": await self.page.title()}
+
+    async def set_viewport(self, width: int, height: int) -> Dict[str, int]:
+        """Re-render the page at a new size, so it keeps filling its panel."""
+        size = {
+            "width": _clamp(width, 320, 3840) or self.config.get("width", 1440),
+            "height": _clamp(height, 320, 2160) or self.config.get("height", 900),
+        }
+        await self.page.set_viewport_size(size)
+        self.config.update(size)
+        self._snapshots.clear()  # every bound in them is now stale
+        return size
+
+    async def close(self) -> None:
+        # An unstopped trace is discarded when the context goes, so drop it
+        # rather than leaving the recorder running into a closed browser.
+        if self._tracing:
+            try:
+                await self._context.tracing.stop()
+            except Exception:
+                pass
+            self._tracing = False
+
+        for closer in (self._context.close, self._browser.close, self._pw.stop):
+            try:
+                await closer()
+            except Exception:
+                pass
+        self._snapshots.clear()
+        self._events.clear()
+
+    def describe(self) -> Dict[str, Any]:
+        return {
+            "kind": "web",
+            "platform": "Web",
+            "name": self.config.get("url"),
+            "udid": self.config.get("browser", "chromium"),
+            "appId": self.config.get("url"),
+        }
+
+    # --- reading --------------------------------------------------------- #
+
+    async def snapshot(self) -> Optional[Snapshot]:
+        try:
+            payload = await self.page.evaluate(EXTRACT_JS)
+        except Exception as exc:
+            print(f"[web] snapshot failed: {exc}")
+            return None
+
+        snapshot = WebSnapshot(payload)
+        self._snapshots.append(snapshot)
+        if len(self._snapshots) > SNAPSHOTS_PER_SESSION:
+            del self._snapshots[0 : len(self._snapshots) - SNAPSHOTS_PER_SESSION]
+        return snapshot
+
+    def _find_snapshot(self, snapshot_id: Optional[str]) -> Optional[WebSnapshot]:
+        if snapshot_id:
+            for snapshot in reversed(self._snapshots):
+                if snapshot.snapshot_id == snapshot_id:
+                    return snapshot
+            return None
+        return self._snapshots[-1] if self._snapshots else None
+
+    async def screenshot(self) -> Optional[str]:
+        try:
+            data = await self.page.screenshot(type="png")
+            return base64.b64encode(data).decode()
+        except Exception as exc:
+            print(f"[web] screenshot failed: {exc}")
+            return None
+
+    async def element_at(self, x: int, y: int) -> Optional[Dict[str, Any]]:
+        snapshot = self._find_snapshot(None) or await self.snapshot()
+        if snapshot is None:
+            return None
+
+        best, best_area = None, None
+        for element in snapshot.get_all_elements():
+            b = element.bounds
+            if b["x1"] <= x <= b["x2"] and b["y1"] <= y <= b["y2"]:
+                area = max(b["width"], 1) * max(b["height"], 1)
+                if best_area is None or area < best_area:
+                    best, best_area = element, area
+
+        if best is None:
+            return None
+        payload = best.to_dict(include_children=False)
+        payload["elementId"] = best.element_id
+        return payload
+
+    # --- acting ---------------------------------------------------------- #
+
+    async def scroll(self, direction: str) -> ActionResult:
+        direction = (direction or "down").lower()
+        deltas = {
+            "down": (0, 0.8), "up": (0, -0.8),
+            "right": (0.8, 0), "left": (-0.8, 0),
+        }
+        if direction not in deltas:
+            return ActionResult(False, f"Unknown scroll direction '{direction}'")
+
+        dx, dy = deltas[direction]
+        try:
+            size = self.page.viewport_size or {"width": 1440, "height": 900}
+            await self.page.mouse.wheel(dx * size["width"], dy * size["height"])
+            await asyncio.sleep(0.4)
+        except Exception as exc:
+            return ActionResult(False, f"Scroll {direction} failed: {exc}")
+        return ActionResult(True, f"Scrolled {direction}")
+
+    # --- raw pointer, for hands-on control of the page ------------------- #
+    #
+    # The panel used to send a completed click no matter how the user actually
+    # pressed: hold the mouse for five seconds and the page still received an
+    # instant click. Splitting press from release makes the panel faithful —
+    # what the user does with their mouse is what the page receives, live —
+    # which is what any hold-to-confirm control, drag handle or long-press
+    # menu needs in order to be testable by hand at all.
+
+    async def pointer_down(self, x: int, y: int) -> ActionResult:
+        try:
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.down()
+        except Exception as exc:
+            return ActionResult(False, f"Pointer down failed: {exc}")
+        return ActionResult(True, f"Pressed at ({x}, {y})")
+
+    async def pointer_move(self, x: int, y: int) -> ActionResult:
+        try:
+            await self.page.mouse.move(x, y)
+        except Exception as exc:
+            return ActionResult(False, f"Pointer move failed: {exc}")
+        return ActionResult(True, f"Moved to ({x}, {y})")
+
+    async def pointer_up(self, x: Optional[int] = None, y: Optional[int] = None) -> ActionResult:
+        try:
+            if x is not None and y is not None:
+                await self.page.mouse.move(x, y)
+            await self.page.mouse.up()
+        except Exception as exc:
+            return ActionResult(False, f"Pointer up failed: {exc}")
+        return ActionResult(True, "Released")
+
+    async def press_key(self, key: str) -> ActionResult:
+        mapped = KEY_MAP.get((key or "").lower())
+        if mapped is None:
+            return ActionResult(False, f"Key '{key}' is not supported on the web target")
+
+        try:
+            if mapped == "__history_back__":
+                await self.page.go_back(wait_until="domcontentloaded")
+                return ActionResult(True, "Navigated back")
+            if mapped == "__history_forward__":
+                await self.page.go_forward(wait_until="domcontentloaded")
+                return ActionResult(True, "Navigated forward")
+            await self.page.keyboard.press(mapped)
+        except Exception as exc:
+            return ActionResult(False, f"Key '{key}' failed: {exc}")
+        return ActionResult(True, f"Pressed {key}")
+
+    async def act(
+        self,
+        kind: str,
+        element_id: Optional[str],
+        selector: Optional[str],
+        value: Optional[str],
+        snapshot_id: Optional[str],
+    ) -> ActionResult:
+        snapshot = self._find_snapshot(snapshot_id)
+        element = None
+
+        if element_id and snapshot is not None:
+            element = snapshot.elements_by_id.get(element_id)
+        if element is None and element_id and snapshot_id:
+            return ActionResult(
+                False,
+                f"Snapshot {snapshot_id} is no longer held; re-read the page and retry.",
+            )
+
+        target_selector = (element.selector if element else None) or selector
+        if not target_selector:
+            return ActionResult(False, f"Action '{kind}' needs an elementId")
+
+        label = element.describe() if element else target_selector
+        info = None
+        if element is not None:
+            info = {
+                "id": element.resource_id,
+                "text": element.text,
+                "content-desc": element.name,
+                "role": element.role,
+                "xpath": element.selector,
+                "href": element.href,
+                "bounds": element.bounds,
+                "label": label,
+            }
+
+        try:
+            locator_handle = self.page.locator(target_selector).first
+            count = await locator_handle.count()
+            if count == 0:
+                return ActionResult(False, f'"{label}" is no longer on the page.')
+
+            if kind == "assert_visible":
+                visible = await locator_handle.is_visible()
+                return ActionResult(
+                    visible,
+                    f'"{label}" is visible' if visible else f'"{label}" is on the page but not visible',
+                    info,
+                )
+
+            await locator_handle.scroll_into_view_if_needed(timeout=8000)
+
+            if kind == "click":
+                await locator_handle.click(timeout=12000)
+                message = f'Clicked "{label}"'
+            elif kind == "type":
+                await locator_handle.fill(value or "", timeout=12000)
+                message = f'Typed "{value}" into "{label}"'
+            elif kind == "clear":
+                await locator_handle.fill("", timeout=12000)
+                message = f'Cleared "{label}"'
+            else:
+                return ActionResult(False, f"Unsupported action: {kind}")
+
+            # A click often navigates; give the new document a moment to arrive.
+            try:
+                await self.page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
+            await asyncio.sleep(0.3)
+            return ActionResult(True, message, info)
+
+        except Exception as exc:
+            detail = str(exc).split("\n")[0][:220]
+            return ActionResult(False, f'Could not {kind} "{label}": {detail}', info)

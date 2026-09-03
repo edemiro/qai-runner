@@ -1,0 +1,763 @@
+"""The autonomous QA agent loop.
+
+The loop lives on the server rather than in the browser. That gives it a hard
+step ceiling, a real cancel signal, per-step persistence, and one place where
+assertions decide whether a run passed or failed. The frontend only renders the
+event stream it receives.
+"""
+
+import asyncio
+import base64
+import json
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any, AsyncGenerator, Dict, List, Optional
+
+import authoring
+import storage
+import visual
+from config import MAX_AGENT_STEPS
+from drivers import ActionResult, Snapshot, UITarget
+from llm import ProviderError, Turn
+from llm import registry as providers
+
+SYSTEM_PROMPT = """You are QAi, an expert QA automation agent.
+
+{target_line}
+Each turn you receive the CURRENT SCREEN as an element tree and (when available)
+a screenshot of that same screen.
+
+EVERY reply must contain exactly one fenced ```json action block. A reply that
+only describes what you intend to do does nothing — the block is what runs.
+Write one short sentence, then the block.
+
+AVAILABLE ACTIONS
+```json
+{"type":"action","action":"click","elementId":"el_12","reason":"why"}
+{"type":"action","action":"type","elementId":"el_4","value":"text","reason":"why"}
+{"type":"action","action":"clear","elementId":"el_4","reason":"why"}
+{"type":"action","action":"scroll","value":"down","reason":"why"}
+{"type":"action","action":"swipe","value":"left","reason":"why"}
+{"type":"action","action":"key","value":"back","reason":"why"}
+{"type":"action","action":"wait","value":"2","reason":"why"}
+{"type":"action","action":"assert_visible","elementId":"el_9","reason":"what this proves"}
+{"type":"action","action":"assert_text","value":"Welcome back","reason":"what this proves"}
+{"type":"action","action":"assert_visual","value":"checkout-page","reason":"what this proves"}
+{"type":"action","action":"assert_no_errors","reason":"what this proves"}
+{"type":"action","action":"write_scenarios","value":"Test Set name","brief":"what to test","reason":"why"}
+{"type":"action","action":"run_test_set","value":"Test Set name","execution":"Execution name","reason":"why"}
+{"type":"action","action":"done","value":"pass","reason":"one-line summary of the outcome"}
+```
+
+`scroll` and `swipe` take one of: up, down, left, right.
+`key` takes one of: {keys}.
+`wait` takes a number of seconds (max 10).
+`assert_visual` compares the screen against a stored baseline named by `value`.
+  The first time a name is used the current screen becomes the baseline and the
+  check passes, so use a stable, descriptive name.
+`assert_no_errors` fails if the page has logged a console error or a failed
+  request since the run began. Use it when the goal mentions errors, or as a
+  final check that the flow was clean.
+`write_scenarios` writes test scenarios for the CURRENT screen into a Test Set,
+  in the company standard, with a priority each. `value` is the Test Set name;
+  it is created if it does not exist. `brief` is what to focus the scenarios on.
+  Use write_scenarios when asked to produce, write or extract scenarios — this
+  is the only way to do that, and it does not touch the screen.
+`run_test_set` creates an execution for a Test Set and runs it. `value` is the
+  Test Set name; `execution` is what to name the execution, omitted if none was
+  given (one is generated).
+
+When the goal contains lines shaped like `Test Set: "X"`, `Execution: "Y"` or
+`Açıklama: ...` — the guided fields a tester filled in on purpose — copy each
+verbatim into the matching field (Test Set → `value`, Execution → `execution`,
+Açıklama → `brief`) rather than paraphrasing or re-deriving it from the rest of
+the sentence. A missing line means the tester left that field blank on
+purpose: leave `value` empty (the backend names the set after the screen) or
+omit `execution` (one is generated) rather than inventing a name yourself.
+Only fall back to reading the goal as free prose when it carries none of these
+labels at all.
+`done` takes "pass" or "fail" and ends the run.
+
+A request can mix these with ordinary actions — "write the scenarios for this
+screen and then run them" is write_scenarios, then run_test_set, then done. Do
+not try to test the screen yourself when what was asked for is scenarios.
+
+RULES
+- Only use an elementId that appears in the CURRENT SCREEN tree. Never invent one.
+- Nodes that carry an elementId are the ones you can act on. A node that is only
+  a "text" entry is context — you cannot click it.
+- Prefer the smallest element that carries the label you are targeting.
+{target_rules}
+- The backend handles waiting, visibility, scrolling into view, and coordinate
+  fallbacks. Do not add your own waits before an action for those reasons.
+- A test that never asserts anything is not a test. Before you finish, verify the
+  outcome with assert_visible or assert_text.
+- If the goal is already satisfied, emit `done` with "pass" immediately.
+- If you are stuck, blocked, or the app is in an unexpected state, emit `done`
+  with "fail" and explain why in `reason`. Do not loop.
+- Keep prose to one or two short sentences. The action block carries the detail.
+- Write your prose and your `reason` fields in the same language the GOAL is
+  written in. If the goal is in Turkish, answer in Turkish. The JSON keys and
+  the action names always stay exactly as written above.
+- The action block must use these exact keys: "type":"action" and
+  "action":"<name>". Do not put the action name in "type".
+"""
+
+TARGET_PROFILES = {
+    "mobile": {
+        "target_line": "You drive a real mobile device through Appium.",
+        "keys": "back, home, recents, enter, search, delete",
+        "target_rules": (
+            "- The backend handles waiting, visibility, scrolling into view, and\n"
+            "  coordinate fallbacks. Do not add your own waits for those reasons."
+        ),
+    },
+    "web": {
+        "target_line": "You drive a real browser page through Playwright.",
+        "keys": "back, forward, enter, escape, tab, delete, search",
+        "target_rules": (
+            "- The backend scrolls the target into view and waits for navigation.\n"
+            "  Do not add your own waits for those reasons.\n"
+            "- Dismiss cookie banners and modal overlays before trying to reach the\n"
+            "  content behind them; they intercept clicks.\n"
+            "- Only the top of the page is in the tree. If what you need is not there,\n"
+            "  scroll and read the next screen rather than guessing an elementId."
+        ),
+    },
+}
+
+
+def build_system_prompt(kind: str) -> str:
+    """The loop is shared, but the vocabulary is not: a browser has no Home
+    button and a phone has no browser history.
+
+    Substitution is done with replace(), not format(): the prompt is full of
+    JSON braces that str.format would try to interpret as fields.
+    """
+    profile = TARGET_PROFILES.get(kind, TARGET_PROFILES["mobile"])
+    prompt = SYSTEM_PROMPT
+    for name, value in profile.items():
+        prompt = prompt.replace("{" + name + "}", value)
+    return prompt
+
+
+ACTION_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+TERMINAL_ACTIONS = {"done", "finish", "complete"}
+ASSERTION_ACTIONS = {"assert_visible", "assert_text", "assert_visual", "assert_no_errors"}
+
+# Every action the agent can take. Used to recognise an action block even when
+# the model puts the verb under "type" instead of "action" — a variation that
+# used to make the whole block invisible, ending the run as a silent pass.
+KNOWN_ACTIONS = {
+    "click", "type", "clear", "scroll", "swipe", "key", "wait",
+    "assert_visible", "assert_text", "assert_visual", "assert_no_errors",
+    "write_scenarios", "run_test_set",
+    "done", "finish", "complete",
+}
+
+# These act on QAi rather than on the screen, so they take the snapshot as
+# input instead of a target element and never count as an assertion.
+AUTHORING_ACTIONS = {"write_scenarios", "run_test_set"}
+
+
+@dataclass
+class AgentSession:
+    """Per-device-session agent state."""
+    cancel: asyncio.Event = field(default_factory=asyncio.Event)
+    running: bool = False
+    run_id: Optional[str] = None
+    history: List[Dict[str, Any]] = field(default_factory=list)
+
+
+_sessions: Dict[str, AgentSession] = {}
+
+
+def get_session(session_id: str) -> AgentSession:
+    return _sessions.setdefault(session_id, AgentSession())
+
+
+def cancel(session_id: str) -> bool:
+    state = _sessions.get(session_id)
+    if state is None or not state.running:
+        return False
+    state.cancel.set()
+    return True
+
+
+def is_running(session_id: str) -> bool:
+    state = _sessions.get(session_id)
+    return bool(state and state.running)
+
+
+def reset(session_id: str) -> None:
+    _sessions.pop(session_id, None)
+
+
+EFFORTS = ("low", "medium", "high")
+DEFAULT_EFFORT = "medium"
+
+
+def _resolve_effort(effort: Optional[str]) -> str:
+    """Fall back rather than fail: an unknown value is not worth losing a run."""
+    candidate = (effort or "").strip().lower()
+    return candidate if candidate in EFFORTS else DEFAULT_EFFORT
+
+
+def _resolve_provider(model: Optional[str] = None):
+    """The provider, model and key the run will use. Raises if unconfigured.
+
+    `model` overrides the Settings choice for this run only — comparing two
+    models on the same scenario is the whole point, and making the user edit a
+    global setting between attempts would lose that.
+    """
+    provider = providers.get()
+    api_key = providers.api_key_for(provider.id)
+    if not api_key:
+        raise RuntimeError(
+            f"No API key saved for {provider.label}. Add one in Settings, "
+            "or switch to a provider you have configured."
+        )
+    return provider, (model or "").strip() or providers.active_model(), api_key
+
+
+def _normalise_action(parsed: Any) -> Optional[Dict[str, Any]]:
+    """Accept the schema variations models actually produce.
+
+    The documented shape is {"type":"action","action":"click"}, but models
+    routinely collapse it to {"type":"click"} or drop the wrapper entirely.
+    Treating those as "no action" is dangerous rather than merely lossy: the
+    run ends, and a scenario that never touched the page is reported as passed.
+    """
+    if not isinstance(parsed, dict):
+        return None
+
+    verb = parsed.get("action")
+    if not isinstance(verb, str) or verb.lower() not in KNOWN_ACTIONS:
+        # The verb may be sitting in "type" instead.
+        candidate = parsed.get("type")
+        if isinstance(candidate, str) and candidate.lower() in KNOWN_ACTIONS:
+            parsed = {**parsed, "action": candidate}
+            verb = candidate
+        else:
+            return None
+
+    parsed["action"] = verb.lower()
+    return parsed
+
+
+def parse_action(text: str) -> Optional[Dict[str, Any]]:
+    """Pull the last well-formed action block out of a model response."""
+    candidates = ACTION_BLOCK.findall(text)
+    if not candidates:
+        # Tolerate a bare object when the model forgets the fence.
+        for match in re.finditer(r'\{[^{}]*"(?:type|action)"\s*:\s*"[^"]+"[^{}]*\}', text, re.DOTALL):
+            candidates.append(match.group(0))
+
+    for raw in reversed(candidates):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        action = _normalise_action(parsed)
+        if action is not None:
+            return action
+    return None
+
+
+def looks_like_an_attempted_action(text: str) -> bool:
+    """Did the model try to act, even if the block could not be parsed?
+
+    If so, ending the run as a pass would be a lie — better to fail loudly.
+    """
+    if "```json" in text:
+        return True
+    return bool(re.search(r'"(?:type|action)"\s*:\s*"', text))
+
+
+def _verdict_without_assertion(executed_assertion: bool, reply: str):
+    """A run that verified nothing has not passed — it just stopped.
+
+    This is the difference between a test suite and a clicking robot, so the
+    rule lives here rather than being left to the model's own judgement.
+    """
+    if executed_assertion:
+        return "passed", None
+    return "failed", (
+        "The agent stopped without asserting anything, so nothing was verified. "
+        "Say what the expected outcome is and it will check for it."
+    )
+
+
+def _event(kind: str, **payload) -> str:
+    return json.dumps({"event": kind, **payload}, ensure_ascii=False) + "\n"
+
+
+# Every provider downsamples a large frame before looking at it, so the extra
+# pixels of a modern phone screen are paid for twice — once uploading them each
+# step, once as image tokens — and buy nothing. A 1290x2796 iPhone frame costs
+# 3969 image tokens and 2.7MB on the wire; capped at this edge it is 1469 and
+# under 1MB, and every control is still legible. The frame stored with the step
+# is taken separately and stays full resolution, so reports do not degrade.
+_LLM_IMAGE_MAX_EDGE = 1568
+
+
+def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
+    if not screenshot:
+        return screenshot
+    try:
+        import io
+
+        from PIL import Image
+
+        raw = base64.b64decode(screenshot)
+        image = Image.open(io.BytesIO(raw))
+        if max(image.size) <= _LLM_IMAGE_MAX_EDGE:
+            return screenshot
+        image.thumbnail((_LLM_IMAGE_MAX_EDGE, _LLM_IMAGE_MAX_EDGE))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        # A frame the model can still read beats no frame at all: on any
+        # decoding trouble, send what the device gave us.
+        return screenshot
+
+
+async def _screen_context(target: UITarget):
+    """Snapshot the target and return (snapshot, llm json, screenshot base64)."""
+    snapshot = await target.snapshot()
+    screenshot = await asyncio.to_thread(_shrink_for_llm, await target.screenshot())
+    if snapshot is None:
+        return None, '{"error": "Could not read the current screen."}', screenshot
+    tree = snapshot.get_optimized_tree_for_llm()
+    # Compact separators, no indentation: on a large page the pretty-printing
+    # alone cost more tokens than the element data it was formatting.
+    return snapshot, json.dumps(tree, ensure_ascii=False, separators=(",", ":")), screenshot
+
+
+def _build_turns(
+    history: List[Dict[str, Any]],
+    screen_json: str,
+    screenshot: Optional[str],
+    goal: str,
+) -> List[Turn]:
+    """Assemble the conversation in the provider-neutral shape.
+
+    Only the newest screen is attached in full; older turns keep just the text.
+    Re-sending every historical tree and frame is what made token cost grow
+    quadratically with the number of steps.
+    """
+    turns = [Turn(role=entry["role"], text=entry["content"]) for entry in history]
+
+    text = f"GOAL: {goal}\n\nCURRENT SCREEN (element tree):\n```json\n{screen_json}\n```"
+    if screenshot:
+        # The tree misses custom-drawn UI, icons and WebView content; pixels don't.
+        text += "\n\nA screenshot of the same screen is attached. Use it when the tree is ambiguous."
+
+    turns.append(Turn(role="user", text=text, image_b64=screenshot))
+    return turns
+
+
+async def _run_authoring_action(
+    kind: str,
+    action: Dict[str, Any],
+    target: UITarget,
+    snapshot: Optional[Snapshot],
+    screenshot: Optional[str],
+    goal: str,
+) -> Dict[str, Any]:
+    """Write scenarios, or run a Test Set, from inside a chat run.
+
+    The tester asked for these in the same sentence as the testing, so they are
+    reachable from the same place rather than sending the person off to another
+    screen to finish the thought.
+    """
+    name = (action.get("value") or "").strip()
+    info = target.describe() if hasattr(target, "describe") else {}
+
+    if kind == "write_scenarios":
+        # A focused brief from a guided field beats the whole chat sentence —
+        # that sentence usually also carries the Test Set/execution names and
+        # instructions the model has no business feeding back in as "what to
+        # test". Only fall back to it when the model gave nothing more specific.
+        brief = (action.get("brief") or "").strip() or goal
+        outcome = await authoring.write_scenarios(
+            # Passed through as-is, blank included: authoring.write_scenarios
+            # already derives a name from the app/screen when this is empty —
+            # inventing "Chat Test Set" here would only pre-empt that and land
+            # every unnamed run under the same unhelpful label again.
+            name=name,
+            tree=snapshot.get_optimized_tree_for_llm() if snapshot else None,
+            screenshot=screenshot,
+            kind=target.kind,
+            url=info.get("appId") or info.get("name"),
+            brief=brief,
+        )
+    else:
+        execution_name = (action.get("execution") or "").strip() or None
+        outcome = await authoring.run_test_set(name=name, execution_name=execution_name)
+
+    return {"ok": outcome["ok"], "message": outcome["message"], "element": None}
+
+
+async def _execute_action(
+    target: UITarget,
+    action: Dict[str, Any],
+    snapshot: Optional[Snapshot],
+) -> Dict[str, Any]:
+    """Run one action against whatever target this run is driving.
+
+    Only the platform-neutral actions live here; anything that touches a device
+    or a page is delegated to the driver.
+    """
+    kind = (action.get("action") or "").lower()
+    element_id = action.get("elementId")
+    selector = action.get("xpath") or action.get("selector")
+    value = action.get("value")
+    snapshot_id = snapshot.snapshot_id if snapshot else None
+
+    def as_dict(result: ActionResult) -> Dict[str, Any]:
+        return {"ok": result.ok, "message": result.message, "element": result.element}
+
+    if kind == "wait":
+        seconds = min(float(value or 1), 10.0)
+        await asyncio.sleep(seconds)
+        return {"ok": True, "message": f"Waited {seconds:g}s", "element": None}
+
+    if kind in ("scroll", "swipe"):
+        return as_dict(await target.scroll((value or "down").lower()))
+
+    if kind == "key":
+        key = (value or action.get("key") or "back").lower()
+        return as_dict(await target.press_key(key))
+
+    if kind == "assert_visual":
+        name = (value or "").strip()
+        if not name:
+            return {"ok": False, "message": "assert_visual needs a baseline name", "element": None}
+        shot = await target.screenshot()
+        if not shot:
+            return {"ok": False, "message": "Could not read the screen to compare", "element": None}
+        try:
+            result = visual.compare(name, base64.b64decode(shot))
+        except Exception as exc:
+            return {"ok": False, "message": f"Visual check failed: {exc}", "element": None}
+        return {
+            "ok": result["passed"],
+            "message": f'Visual "{name}": {result["message"]}',
+            "element": None,
+        }
+
+    if kind == "assert_no_errors":
+        # Peeks rather than drains: the run's own record still needs these
+        # events when it closes, and draining here would swallow them.
+        events = target.peek_events() if hasattr(target, "peek_events") else []
+        errors = [e for e in events if e.get("level") == "error"]
+        if not errors:
+            return {"ok": True, "message": "No console or network errors on this page", "element": None}
+        first = errors[0]
+        location = f" ({first['url']})" if first.get("url") else ""
+        return {
+            "ok": False,
+            "message": (
+                f"{len(errors)} page error(s). First: {first.get('kind')}: "
+                f"{(first.get('text') or '')[:200]}{location}"
+            ),
+            "element": None,
+        }
+
+    if kind == "assert_text":
+        needle = (value or "").strip()
+        if not needle:
+            return {"ok": False, "message": "assert_text needs a value", "element": None}
+        # Re-read so the assertion sees the settled state, not the pre-action one.
+        await asyncio.sleep(0.4)
+        fresh = await target.snapshot()
+        if fresh is None:
+            return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
+        if fresh.contains_text(needle):
+            return {"ok": True, "message": f'Found "{needle}" on screen', "element": None}
+        visible = ", ".join(fresh.visible_text()[:12])
+        return {
+            "ok": False,
+            "message": f'Expected "{needle}" on screen but it is not there. Visible text: {visible}',
+            "element": None,
+        }
+
+    return as_dict(await target.act(kind, element_id, selector, value, snapshot_id))
+
+
+async def run_agent(
+    target: UITarget,
+    goal: str,
+    max_steps: Optional[int] = None,
+    use_vision: bool = True,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+    session_state: Optional["AgentSession"] = None,
+) -> AsyncGenerator[str, None]:
+    """Drive `target` toward `goal`, yielding NDJSON events as it goes.
+
+    The loop is identical for a phone and for a browser page — only the driver
+    behind `target` differs.
+
+    `session_state` is an escape hatch for a run started BY another run — the
+    `run_test_set` action lets a chat turn kick off a whole Test Set on the same
+    device it is already driving. Left at its default, that inner call would
+    share `_sessions[session_id]` with the outer one: the reentrancy guard below
+    would refuse it outright (every case would "fail" in milliseconds with no
+    run ever created — this is exactly the bug that shipped), and even past
+    that, both calls would scribble over the same `history`/`run_id`/`cancel`.
+    A suite runner driving a device from inside an agent run passes its own
+    throwaway `AgentSession()` here instead, so the nested runs are invisible to
+    the one that spawned them.
+    """
+    session_id = target.session_id
+    state = session_state if session_state is not None else get_session(session_id)
+    if state.running:
+        yield _event("error", message="An agent run is already in progress for this session.")
+        return
+
+    ceiling = min(max_steps or MAX_AGENT_STEPS, MAX_AGENT_STEPS)
+
+    effort = _resolve_effort(effort)
+
+    try:
+        provider, model, api_key = _resolve_provider(model)
+    except (RuntimeError, ProviderError) as exc:
+        yield _event("error", message=str(exc))
+        return
+
+    info = target.describe()
+    system_prompt = build_system_prompt(target.kind)
+
+    # Anything raised outside the loop's try block escapes the generator and
+    # kills the HTTP stream, which the browser can only report as a network
+    # error with no message. Every failure has to leave as an event instead.
+    try:
+        run_id = storage.create_run(
+            goal=goal,
+            platform=info.get("platform"),
+            device_name=info.get("name"),
+            device_udid=info.get("udid"),
+            app_id=info.get("appId"),
+            # Recorded as "provider/model" so an old run's report says which
+            # engine produced it, even after you switch providers.
+            model=f"{provider.id}/{model}",
+        )
+    except Exception as exc:
+        yield _event("error", message=f"Could not start the run: {exc}")
+        return
+
+    state.running = True
+    state.run_id = run_id
+    state.cancel.clear()
+    state.history = []
+
+    yield _event("run_started", runId=run_id, goal=goal, maxSteps=ceiling)
+
+    final_status = "passed"
+    final_error: Optional[str] = None
+    step_no = 0
+    executed_assertion = False
+
+    try:
+        while step_no < ceiling:
+            if state.cancel.is_set():
+                final_status = "cancelled"
+                yield _event("cancelled", message="Run stopped by the user.")
+                break
+
+            step_no += 1
+            started = time.monotonic()
+
+            snapshot, screen_json, screenshot = await _screen_context(target)
+            if snapshot is not None:
+                yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
+
+            turns = _build_turns(state.history, screen_json, screenshot if use_vision else None, goal)
+
+            yield _event("thinking", step=step_no)
+            reply = ""
+            try:
+                async for token in provider.stream(system_prompt, turns, model, api_key, effort):
+                    reply += token
+                    yield _event("token", text=token, step=step_no)
+            except ProviderError as exc:
+                final_status, final_error = "failed", str(exc)
+                yield _event("error", message=final_error)
+                break
+            except Exception as exc:
+                final_status, final_error = "failed", f"{provider.label} error: {exc}"
+                yield _event("error", message=final_error)
+                break
+
+            # An empty response is its own failure, not "the model is done".
+            # Reporting it as "finished without asserting" hides the cause.
+            if not reply.strip():
+                final_status = "failed"
+                final_error = (
+                    f"{provider.label} returned an empty response for step {step_no}. "
+                    "This is usually a safety filter rejecting the screenshot or the "
+                    "scenario text. Try turning Vision off, rewording the goal, or "
+                    "switching provider in Settings."
+                )
+                yield _event("error", message=final_error)
+                break
+
+            state.history.append({"role": "assistant", "content": reply})
+
+            action = parse_action(reply)
+
+            # Models regularly describe the action instead of emitting it
+            # ("I will enter an invalid email."). One corrective nudge recovers
+            # the step; giving up here would end a perfectly good run on the
+            # first turn.
+            if action is None and not looks_like_an_attempted_action(reply):
+                state.history.append({
+                    "role": "user",
+                    "content": (
+                        "That reply had no action block, so nothing ran. Reply again with "
+                        "exactly one fenced ```json block using the documented keys "
+                        '("type":"action" and "action":"<name>"). If the goal is already '
+                        'met, use the `done` action.'
+                    ),
+                })
+                retry_turns = _build_turns(
+                    state.history, screen_json, screenshot if use_vision else None, goal
+                )
+                retry = ""
+                try:
+                    async for token in provider.stream(system_prompt, retry_turns, model, api_key, effort):
+                        retry += token
+                        yield _event("token", text=token, step=step_no)
+                except (ProviderError, Exception) as exc:
+                    final_status, final_error = "failed", str(exc)
+                    yield _event("error", message=final_error)
+                    break
+
+                state.history.append({"role": "assistant", "content": retry})
+                action = parse_action(retry)
+                if action is not None:
+                    reply = retry
+
+            if action is None:
+                # The tokens are already on screen; re-emitting them as a
+                # message would print the same paragraph twice.
+                if looks_like_an_attempted_action(reply):
+                    # The model tried to act and we could not read it. Ending
+                    # as a pass here is how a run that touched nothing gets
+                    # reported green.
+                    final_status = "failed"
+                    final_error = (
+                        "The model emitted an action block QAi could not parse, so no step ran. "
+                        "Raw reply: " + reply.strip()[:300]
+                    )
+                    yield _event("error", message=final_error)
+                    break
+
+                final_status, final_error = _verdict_without_assertion(
+                    executed_assertion, reply.strip()
+                )
+                yield _event("finished", status=final_status, summary=(final_error or reply.strip())[:400])
+                break
+
+            kind = (action.get("action") or "").lower()
+            reason = action.get("reason") or ""
+
+            if kind in TERMINAL_ACTIONS:
+                verdict = (action.get("value") or "pass").lower()
+                final_status = "passed" if verdict.startswith("pass") else "failed"
+                if final_status == "failed":
+                    final_error = reason or "The agent reported the scenario as failed."
+                elif not executed_assertion:
+                    # A green run that verified nothing is worse than a red one:
+                    # it gets trusted.
+                    final_status = "failed"
+                    final_error = (
+                        "The agent finished without asserting anything, so nothing was "
+                        "actually verified. Add an expected outcome to the scenario "
+                        '(for example: "…and verify the results page shows flights").'
+                    )
+                storage.add_step(
+                    run_id, action="done", status="passed" if final_status == "passed" else "failed",
+                    reason=reason, message=final_error or reason,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                yield _event("finished", status=final_status, summary=final_error or reason)
+                break
+
+            yield _event(
+                "step_started", step=step_no, action=kind,
+                target=action.get("elementId") or action.get("xpath"),
+                value=action.get("value"), reason=reason,
+            )
+
+            if kind in AUTHORING_ACTIONS:
+                # These need the screen as material, not as a place to click,
+                # so they are handled here where the snapshot is still in hand.
+                result = await _run_authoring_action(
+                    kind, action, target, snapshot, screenshot, goal,
+                )
+            else:
+                result = await _execute_action(target, action, snapshot)
+            after_shot = await target.screenshot()
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            if kind in ASSERTION_ACTIONS and result["ok"]:
+                executed_assertion = True
+
+            step_status = "passed" if result["ok"] else "failed"
+            step_row_id = storage.add_step(
+                run_id,
+                action=kind,
+                status=step_status,
+                target=(result.get("element") or {}).get("label") or action.get("elementId"),
+                value=action.get("value"),
+                reason=reason,
+                message=result["message"],
+                element=result.get("element"),
+                screenshot=after_shot,
+                duration_ms=duration_ms,
+            )
+
+            yield _event(
+                "step_finished", step=step_no, stepId=step_row_id, action=kind,
+                status=step_status, message=result["message"],
+                element=result.get("element"), durationMs=duration_ms,
+            )
+
+            # A failed assertion ends the run; a failed interaction is reported
+            # back to the model so it can try a different route.
+            if not result["ok"] and kind in ASSERTION_ACTIONS:
+                final_status, final_error = "failed", result["message"]
+                yield _event("finished", status="failed", summary=result["message"])
+                break
+
+            state.history.append({
+                "role": "user",
+                "content": (
+                    f"Step {step_no} ({kind}) {'succeeded' if result['ok'] else 'FAILED'}: {result['message']}\n"
+                    "The screen below is the result. Continue toward the goal, or emit `done`."
+                ),
+            })
+
+            # Keep the transcript bounded; only the recent turns matter.
+            if len(state.history) > 24:
+                state.history = state.history[-24:]
+
+            await asyncio.sleep(0.6)
+        else:
+            final_status = "failed"
+            final_error = f"Reached the {ceiling} step ceiling without finishing."
+            yield _event("finished", status="failed", summary=final_error)
+
+    except Exception as exc:
+        final_status, final_error = "failed", str(exc)
+        yield _event("error", message=str(exc))
+    finally:
+        storage.finish_run(run_id, final_status, final_error)
+        state.running = False
+        state.cancel.clear()
+        yield _event("run_closed", runId=run_id, status=final_status, steps=step_no)

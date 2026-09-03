@@ -1,0 +1,28 @@
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+backend/.env
+
+# Runtime artefacts
+backend/appium.log
+backend/qai.db
+backend/qai.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+.pytest_cache/
+*.bak*
+
+# Node
+node_modules/
+dist/
+*.local
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

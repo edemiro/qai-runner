@@ -1,0 +1,569 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Turkcell" label="Turkcell" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="" processId="44339" bundleId="com.turkcell.CSI">
+    <XCUIElementTypeWindow type="XCUIElementTypeWindow" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="155" index="0" traits="">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="99" index="0" traits="">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="16" y="59" width="377" height="32" index="0" traits="">
+                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="NavigationBarView-LandingButton" label="Açılış Ekranı" enabled="true" visible="false" accessible="true" x="16" y="59" width="32" height="32" index="0" traits="Button">
+                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="iconsAppsFilled" enabled="true" visible="false" accessible="false" x="22" y="65" width="20" height="20" index="0" traits="Image"/>
+                          </XCUIElementTypeButton>
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="56" y="59" width="2" height="32" index="1" traits=""/>
+                          <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="66" y="59" width="327" height="32" index="2" traits="">
+                            <XCUIElementTypeCell type="XCUIElementTypeCell" name="NavigationBarView-ToggleButton-Turkcell" label="Turkcell" enabled="true" visible="false" accessible="true" x="66" y="59" width="104" height="32" index="0" traits="Button">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="66" y="59" width="104" height="32" index="0" traits="">
+                                <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="78" y="63" width="80" height="24" index="0" traits="Image"/>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeCell>
+                            <XCUIElementTypeCell type="XCUIElementTypeCell" name="NavigationBarView-ToggleButton-Superonline" label="Superonline" enabled="true" visible="false" accessible="true" x="180" y="59" width="104" height="32" index="1" traits="Button">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="180" y="59" width="104" height="32" index="0" traits="">
+                                <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="192" y="63" width="80" height="24" index="0" traits="Image"/>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeCell>
+                            <XCUIElementTypeCell type="XCUIElementTypeCell" name="NavigationBarView-ToggleButton-Pasaj" label="Pasaj" enabled="true" visible="false" accessible="true" x="294" y="59" width="104" height="32" index="2" traits="Button">
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="294" y="59" width="104" height="32" index="0" traits="">
+                                <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="306" y="63" width="80" height="24" index="0" traits="Image"/>
+                              </XCUIElementTypeOther>
+                            </XCUIElementTypeCell>
+                          </XCUIElementTypeCollectionView>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="99" width="393" height="56" index="1" traits="">
+                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="SearchBarView-BackButton" label="Geri" enabled="true" visible="false" accessible="true" x="12" y="115" width="0" height="24" index="0" traits="Button">
+                          <XCUIElementTypeImage type="XCUIElementTypeImage" name="searchBarBackArrow" enabled="true" visible="false" accessible="false" x="-12" y="115" width="24" height="24" index="0" traits="Image"/>
+                        </XCUIElementTypeButton>
+                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Ürün veya kategori arayın" name="SearchBarView-SearchLabel" label="Ürün veya kategori arayın" enabled="true" visible="false" accessible="true" x="60" y="115" width="219" height="24" index="1" traits="SearchField"/>
+                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="SearchBarView-LoginButton" label="Giriş Yap" enabled="true" visible="false" accessible="true" x="299" y="111" width="86" height="32" index="2" traits="Button">
+                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Giriş Yap" name="Giriş Yap" label="Giriş Yap" enabled="true" visible="false" accessible="false" x="318" y="119" width="48" height="16" index="0" traits="StaticText"/>
+                        </XCUIElementTypeButton>
+                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="SearchBarView-NotificationButton" label="Bildirimler" enabled="true" visible="false" accessible="true" x="303" y="111" width="32" height="32" index="3" traits="Button">
+                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" enabled="true" visible="false" accessible="false" x="303" y="111" width="0" height="0" index="0" traits="StaticText"/>
+                        </XCUIElementTypeButton>
+                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="NavigationBarView-AvatarImage" label="Hediye" enabled="true" visible="false" accessible="true" x="344" y="111" width="32" height="32" index="4" traits="Button"/>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="1" traits="">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="0" traits="">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="0" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="0" traits="">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="0" traits="">
+                              <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="621" index="0" traits="">
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="1529" index="0" traits="">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="236" index="0" traits="">
+                                    <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="0" y="155" width="393" height="203" index="0" traits="">
+                                      <XCUIElementTypeCell type="XCUIElementTypeCell" name="BannerItem-1" label="5G LANSMAN Mayıs, 1/12" enabled="true" visible="false" accessible="true" x="0" y="138" width="393" height="237" index="0" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="138" width="393" height="236" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="138" width="393" height="236" index="0" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="0" y="138" width="393" height="236" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeCell>
+                                    </XCUIElementTypeCollectionView>
+                                    <XCUIElementTypePageIndicator type="XCUIElementTypePageIndicator" value="sayfa 1 / 12" enabled="true" visible="false" accessible="false" x="0" y="365" width="393" height="31" index="1" traits="Adjustable, UpdatesFrequently">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="103" y="365" width="187" height="26" index="0" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="117" y="365" width="193" height="26" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="117" y="373" width="9" height="10" index="0" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="117" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="134" y="373" width="9" height="10" index="1" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="134" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="150" y="373" width="10" height="10" index="2" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="150" y="373" width="10" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="167" y="373" width="9" height="10" index="3" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="167" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="184" y="373" width="9" height="10" index="4" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="184" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="200" y="373" width="10" height="10" index="5" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="200" y="373" width="10" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="217" y="373" width="9" height="10" index="6" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="217" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="234" y="373" width="9" height="10" index="7" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="234" y="373" width="9" height="10" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="251" y="374" width="8" height="8" index="8" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="251" y="374" width="8" height="8" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="269" y="376" width="5" height="4" index="9" traits="">
+                                            <XCUIElementTypeImage type="XCUIElementTypeImage" name="circlebadge.fill" label="circlebadge.fill" enabled="true" visible="false" accessible="false" x="269" y="376" width="5" height="4" index="0" traits="Image"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="91" y="375" width="57" height="7" index="1" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="155" y="375" width="7" height="7" index="2" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="169" y="375" width="7" height="7" index="3" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="183" y="375" width="7" height="7" index="4" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="197" y="375" width="7" height="7" index="5" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="211" y="375" width="7" height="7" index="6" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="225" y="375" width="7" height="7" index="7" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="239" y="375" width="7" height="7" index="8" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="253" y="375" width="7" height="7" index="9" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="267" y="375" width="7" height="7" index="10" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="281" y="375" width="7" height="7" index="11" traits="Image"/>
+                                      <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="295" y="375" width="7" height="7" index="12" traits="Image"/>
+                                    </XCUIElementTypePageIndicator>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="400" width="393" height="113" index="1" traits="">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="400" width="353" height="113" index="0" traits="">
+                                      <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="20" y="400" width="353" height="113" index="0" traits="">
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="20" y="400" width="174" height="53" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="400" width="174" height="53" index="0" traits="">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="Paketini Değiştir" label="Paketini Değiştir" enabled="true" visible="false" accessible="true" x="20" y="404" width="174" height="45" index="0" traits="Button"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="199" y="400" width="174" height="53" index="1" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="199" y="400" width="174" height="53" index="0" traits="">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="Ek Paket Al" label="Ek Paket Al" enabled="true" visible="false" accessible="true" x="199" y="404" width="174" height="45" index="0" traits="Button"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="20" y="456" width="174" height="53" index="2" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="456" width="174" height="53" index="0" traits="">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="TV+ Premium x HBO Max 129,99 TL" label="TV+ Premium x HBO Max 129,99 TL" enabled="true" visible="false" accessible="true" x="20" y="460" width="174" height="45" index="0" traits="Button"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="199" y="456" width="174" height="53" index="3" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="199" y="456" width="174" height="53" index="0" traits="">
+                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="lifebox 250 GB İlk 2 Ay 9,99 TL" label="lifebox 250 GB İlk 2 Ay 9,99 TL" enabled="true" visible="false" accessible="true" x="199" y="460" width="174" height="45" index="0" traits="Button"/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                      </XCUIElementTypeCollectionView>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="522" width="393" height="243" index="2" traits="">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="522" width="353" height="243" index="0" traits="">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="522" width="353" height="51" index="0" traits="">
+                                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="KALAN KULLANIMLARIM" name="KALAN KULLANIMLARIM" label="KALAN KULLANIMLARIM" enabled="true" visible="false" accessible="true" x="30" y="539" width="154" height="18" index="0" traits="Header"/>
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="BalanceContainerView-RightButton" label="Tümü" enabled="true" visible="false" accessible="true" x="328" y="522" width="37" height="50" index="1" traits="Button">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Tümü" name="Tümü" label="Tümü" enabled="true" visible="false" accessible="false" x="328" y="538" width="37" height="19" index="0" traits="StaticText"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="572" width="353" height="193" index="1" traits=""/>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="572" width="353" height="193" index="2" traits="">
+                                        <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="0" y="572" width="393" height="193" index="0" traits="">
+                                          <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="20" y="572" width="354" height="193" index="0" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="572" width="354" height="193" index="0" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="588" width="288" height="37" index="0" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="588" width="288" height="17" index="0" traits="">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Çalışan Yakını Platinum 64 GB Data , Internet , Kalan  52,95 GB , Toplam 64 GB , (%82) , Son Geçerlilik: 10 Haziran 2026 , 19 Gün Kaldı" name="BalanceChartViewCell-PackageNameLabel1" label="Çalışan Yakını Platinum 64 GB Data , Internet , Kalan  52,95 GB , Toplam 64 GB , (%82) , Son Geçerlilik: 10 Haziran 2026 , 19 Gün Kaldı" enabled="true" visible="false" accessible="true" x="36" y="587" width="288" height="19" index="0" traits="StaticText"/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Internet" name="Internet" label="Internet" enabled="true" visible="false" accessible="false" x="36" y="608" width="288" height="17" index="1" traits="StaticText"/>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="333" y="588" width="25" height="25" index="1" traits="Image"/>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="321" y="645" width="37" height="21" index="2" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="321" y="645" width="37" height="21" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="321" y="645" width="37" height="21" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="321" y="645" width="37" height="6" index="0" traits=""/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="64 GB" name="64 GB" label="64 GB" enabled="true" visible="false" accessible="false" x="321" y="650" width="37" height="16" index="1" traits="StaticText"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="676" width="322" height="10" index="3" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="676" width="322" height="10" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="676" width="267" height="10" index="0" traits=""/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="296" y="679" width="5" height="4" index="1" traits=""/>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="706" width="322" height="39" index="4" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="706" width="190" height="39" index="0" traits="">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Son Geçerlilik: 10 Haziran 2026" name="Son Geçerlilik: 10 Haziran 2026" label="Son Geçerlilik: 10 Haziran 2026" enabled="true" visible="false" accessible="false" x="36" y="706" width="177" height="20" index="0" traits="StaticText"/>
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="19 Gün Kaldı" name="19 Gün Kaldı" label="19 Gün Kaldı" enabled="true" visible="false" accessible="false" x="36" y="725" width="89" height="20" index="1" traits="StaticText"/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="225" y="706" width="133" height="32" index="1" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="225" y="706" width="10" height="32" index="0" traits=""/>
+                                                  <XCUIElementTypeButton type="XCUIElementTypeButton" name=" Kontrat Dönemim" label=" Kontrat Dönemim" enabled="true" visible="false" accessible="false" x="242" y="706" width="116" height="32" index="1" traits="Button">
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value=" Kontrat Dönemim" name=" Kontrat Dönemim" label=" Kontrat Dönemim" enabled="true" visible="false" accessible="false" x="250" y="714" width="100" height="16" index="0" traits="StaticText"/>
+                                                  </XCUIElementTypeButton>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeCell>
+                                          <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="383" y="572" width="355" height="193" index="1" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="383" y="572" width="355" height="193" index="0" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="588" width="289" height="37" index="0" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="588" width="289" height="17" index="0" traits="">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Akıllı Fatura Ek Fayda , Internet , Kalan  50 MB , Toplam 50 MB , (%100) , Son Geçerlilik: 10 Haziran 2026 , 19 Gün Kaldı" name="BalanceChartViewCell-PackageNameLabel2" label="Akıllı Fatura Ek Fayda , Internet , Kalan  50 MB , Toplam 50 MB , (%100) , Son Geçerlilik: 10 Haziran 2026 , 19 Gün Kaldı" enabled="true" visible="false" accessible="true" x="399" y="587" width="289" height="19" index="0" traits="StaticText"/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Internet" name="Internet" label="Internet" enabled="true" visible="false" accessible="false" x="399" y="608" width="289" height="17" index="1" traits="StaticText"/>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeImage type="XCUIElementTypeImage" enabled="true" visible="false" accessible="false" x="697" y="588" width="25" height="25" index="1" traits="Image"/>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="683" y="645" width="39" height="21" index="2" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="683" y="645" width="39" height="21" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="683" y="645" width="39" height="21" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="683" y="645" width="39" height="6" index="0" traits=""/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="50 MB" name="50 MB" label="50 MB" enabled="true" visible="false" accessible="false" x="683" y="650" width="39" height="16" index="1" traits="StaticText"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="676" width="323" height="10" index="3" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="676" width="323" height="10" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="676" width="323" height="10" index="0" traits=""/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="715" y="679" width="5" height="4" index="1" traits=""/>
+                                              </XCUIElementTypeOther>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="706" width="323" height="39" index="4" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="399" y="706" width="323" height="39" index="0" traits="">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Son Geçerlilik: 10 Haziran 2026" name="Son Geçerlilik: 10 Haziran 2026" label="Son Geçerlilik: 10 Haziran 2026" enabled="true" visible="false" accessible="false" x="399" y="706" width="178" height="20" index="0" traits="StaticText"/>
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="19 Gün Kaldı" name="19 Gün Kaldı" label="19 Gün Kaldı" enabled="true" visible="false" accessible="false" x="399" y="725" width="90" height="20" index="1" traits="StaticText"/>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeCell>
+                                        </XCUIElementTypeCollectionView>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="786" width="393" height="417" index="3" traits="">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="786" width="353" height="417" index="0" traits="">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="786" width="353" height="51" index="0" traits="">
+                                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="FATURALARIM" name="FATURALARIM" label="FATURALARIM" enabled="true" visible="false" accessible="true" x="30" y="803" width="89" height="18" index="0" traits="Header"/>
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="BillContainerView-RightButton" label="Fatura Ayarları" enabled="true" visible="false" accessible="true" x="265" y="786" width="100" height="50" index="1" traits="Button">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Fatura Ayarları" name="Fatura Ayarları" label="Fatura Ayarları" enabled="true" visible="false" accessible="false" x="265" y="802" width="100" height="19" index="0" traits="StaticText"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="836" width="353" height="367" index="1" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="836" width="353" height="367" index="0" traits=""/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="836" width="353" height="367" index="2" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="836" width="353" height="359" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="836" width="353" height="263" index="0" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="852" width="353" height="43" index="0" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="852" width="321" height="43" index="0" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="852" width="321" height="43" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="852" width="321" height="43" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="852" width="321" height="43" index="0" traits="">
+                                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="852" width="321" height="43" index="0" traits="">
+                                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="52" y="860" width="289" height="31" index="0" traits="">
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillView-PaymentInfo" enabled="true" visible="false" accessible="true" x="52" y="860" width="289" height="31" index="0" traits=""/>
+                                                        </XCUIElementTypeOther>
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="910" width="353" height="35" index="1" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="910" width="4" height="35" index="0" traits=""/>
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="910" width="337" height="35" index="1" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="107" y="920" width="2" height="15" index="0" traits=""/>
+                                                <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Son Faturam" name="BillView-LastBill" label="Son Faturam" enabled="true" visible="false" accessible="true" x="113" y="915" width="180" height="25" index="1" traits="StaticText"/>
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="296" y="910" width="77" height="35" index="2" traits="">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="527TL" name="BillView-Price" label="527TL" enabled="true" visible="false" accessible="true" x="296" y="910" width="61" height="35" index="0" traits="StaticText"/>
+                                                </XCUIElementTypeOther>
+                                                <XCUIElementTypeButton type="XCUIElementTypeButton" name="BillView-DropDownButton" label="Mayıs" enabled="true" visible="false" accessible="true" x="36" y="915" width="67" height="25" index="3" traits="Button">
+                                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Mayıs" name="Mayıs" label="Mayıs" enabled="true" visible="false" accessible="false" x="36" y="917" width="43" height="21" index="0" traits="StaticText"/>
+                                                </XCUIElementTypeButton>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="960" width="353" height="139" index="2" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="960" width="353" height="139" index="0" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="960" width="353" height="139" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="960" width="353" height="139" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillCardView-PaymentInfo" enabled="true" visible="false" accessible="true" x="20" y="960" width="353" height="31" index="0" traits=""/>
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="991" width="353" height="48" index="1" traits="">
+                                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="991" width="353" height="48" index="0" traits="">
+                                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="991" width="321" height="48" index="0" traits="">
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="991" width="157" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="991" width="157" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="991" width="157" height="48" index="0" traits="">
+                                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="BillView-DetailButton" label="Faturayı İncele" enabled="true" visible="false" accessible="true" x="36" y="991" width="157" height="48" index="0" traits="Button">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Faturayı İncele" name="Faturayı İncele" label="Faturayı İncele" enabled="true" visible="false" accessible="false" x="64" y="1006" width="100" height="18" index="0" traits="StaticText"/>
+                                                            </XCUIElementTypeButton>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                          </XCUIElementTypeOther>
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="200" y="991" width="157" height="48" index="1" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="200" y="991" width="157" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="200" y="991" width="157" height="48" index="0" traits="">
+                                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="BillView-PayButton" label="Hemen Öde" enabled="true" visible="false" accessible="true" x="200" y="991" width="157" height="48" index="0" traits="Button">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Hemen Öde" name="Hemen Öde" label="Hemen Öde" enabled="true" visible="false" accessible="false" x="238" y="1006" width="82" height="18" index="0" traits="StaticText"/>
+                                                            </XCUIElementTypeButton>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                          </XCUIElementTypeOther>
+                                                        </XCUIElementTypeOther>
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1039" width="353" height="60" index="2" traits="">
+                                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1039" width="353" height="60" index="0" traits="">
+                                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1039" width="353" height="60" index="0" traits="">
+                                                          <XCUIElementTypeButton type="XCUIElementTypeButton" name="BillView-CurrentPriceButton" label="Güncel Tutar" enabled="true" visible="false" accessible="true" x="36" y="1047" width="321" height="48" index="0" traits="Button">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Güncel Tutar" name="Güncel Tutar" label="Güncel Tutar" enabled="true" visible="false" accessible="false" x="153" y="1062" width="87" height="18" index="0" traits="StaticText"/>
+                                                          </XCUIElementTypeButton>
+                                                        </XCUIElementTypeOther>
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1115" width="353" height="80" index="1" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1115" width="353" height="80" index="0" traits="">
+                                              <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="28" y="1115" width="337" height="80" index="0" traits="">
+                                                <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="283" y="1115" width="82" height="80" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="283" y="1115" width="83" height="80" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillChartCell-Month1" enabled="true" visible="false" accessible="true" x="283" y="1115" width="83" height="80" index="0" traits="">
+                                                      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="false" x="287" y="1171" width="75" height="0" index="0" traits="StaticText"/>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="true" x="287" y="1171" width="75" height="0" index="1" traits="StaticText"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="MAYIS" name="BillChartCell-Month" label="MAYIS" enabled="true" visible="false" accessible="true" x="291" y="1171" width="67" height="16" index="2" traits="StaticText"/>
+                                                    <XCUIElementTypeImage type="XCUIElementTypeImage" name="BillView-MonthArrow1" enabled="true" visible="false" accessible="true" x="357" y="1171" width="17" height="16" index="3" traits="Image"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeCell>
+                                                <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="198" y="1115" width="82" height="80" index="1" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="198" y="1115" width="82" height="80" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillChartCell-Month2" enabled="true" visible="false" accessible="true" x="198" y="1115" width="82" height="80" index="0" traits="">
+                                                      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="false" x="202" y="1171" width="74" height="0" index="0" traits="StaticText"/>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="true" x="202" y="1171" width="74" height="0" index="1" traits="StaticText"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="NİSAN" name="BillChartCell-Month" label="NİSAN" enabled="true" visible="false" accessible="true" x="206" y="1171" width="32" height="16" index="2" traits="StaticText"/>
+                                                    <XCUIElementTypeImage type="XCUIElementTypeImage" name="BillView-MonthArrow2" enabled="true" visible="false" accessible="true" x="259" y="1171" width="17" height="16" index="3" traits="Image"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeCell>
+                                                <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="113" y="1115" width="82" height="80" index="2" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="113" y="1115" width="82" height="80" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillChartCell-Month3" enabled="true" visible="false" accessible="true" x="113" y="1115" width="82" height="80" index="0" traits="">
+                                                      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="false" x="117" y="1171" width="74" height="0" index="0" traits="StaticText"/>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="true" x="117" y="1171" width="74" height="0" index="1" traits="StaticText"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="MART" name="BillChartCell-Month" label="MART" enabled="true" visible="false" accessible="true" x="121" y="1171" width="30" height="16" index="2" traits="StaticText"/>
+                                                    <XCUIElementTypeImage type="XCUIElementTypeImage" name="BillView-MonthArrow3" enabled="true" visible="false" accessible="true" x="174" y="1171" width="17" height="16" index="3" traits="Image"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeCell>
+                                                <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="28" y="1115" width="82" height="80" index="3" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="28" y="1115" width="82" height="80" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" name="BillChartCell-Month4" enabled="true" visible="false" accessible="true" x="28" y="1115" width="82" height="80" index="0" traits="">
+                                                      <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="false" x="32" y="1171" width="74" height="0" index="0" traits="StaticText"/>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="BillChartCell-CurrentBill" enabled="true" visible="false" accessible="true" x="32" y="1171" width="74" height="0" index="1" traits="StaticText"/>
+                                                    <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="ŞUBAT" name="BillChartCell-Month" label="ŞUBAT" enabled="true" visible="false" accessible="true" x="36" y="1171" width="32" height="16" index="2" traits="StaticText"/>
+                                                    <XCUIElementTypeImage type="XCUIElementTypeImage" name="BillView-MonthArrow4" enabled="true" visible="false" accessible="true" x="89" y="1171" width="17" height="16" index="3" traits="Image"/>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeCell>
+                                              </XCUIElementTypeCollectionView>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="1225" width="393" height="142" index="4" traits="">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1225" width="353" height="142" index="0" traits="">
+                                      <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="20" y="1225" width="353" height="142" index="0" traits="">
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="20" y="1235" width="353" height="62" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1235" width="353" height="62" index="0" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="true" x="20" y="1239" width="353" height="54" index="0" traits=""/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                        <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="false" accessible="false" x="20" y="1301" width="353" height="62" index="1" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1301" width="353" height="62" index="0" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="true" x="20" y="1305" width="353" height="54" index="0" traits=""/>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeCell>
+                                      </XCUIElementTypeCollectionView>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="1377" width="393" height="242" index="5" traits="">
+                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1377" width="353" height="242" index="0" traits="">
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1377" width="353" height="50" index="0" traits="">
+                                        <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="PAKET VE SERVİSLERİM" name="PAKET VE SERVİSLERİM" label="PAKET VE SERVİSLERİM" enabled="true" visible="false" accessible="true" x="30" y="1393" width="146" height="18" index="0" traits="Header"/>
+                                        <XCUIElementTypeButton type="XCUIElementTypeButton" name="MyProductsContainerView-RightButton" label="Tümü" enabled="true" visible="false" accessible="true" x="328" y="1377" width="37" height="49" index="1" traits="Button">
+                                          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Tümü" name="Tümü" label="Tümü" enabled="true" visible="false" accessible="false" x="328" y="1392" width="37" height="19" index="0" traits="StaticText"/>
+                                        </XCUIElementTypeButton>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="1" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits=""/>
+                                      </XCUIElementTypeOther>
+                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="2" traits="">
+                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                                <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="192" index="0" traits="">
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="128" index="0" traits="">
+                                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1427" width="353" height="128" index="0" traits="">
+                                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="36" y="1443" width="321" height="96" index="0" traits="">
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="MyProductsCardHeaderRowView-ImageView" enabled="true" visible="false" accessible="true" x="36" y="1443" width="128" height="96" index="0" traits=""/>
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1443" width="193" height="96" index="1" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1443" width="193" height="96" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1443" width="193" height="96" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" name="MyProductsCardHeaderRowView-TitleLabelRowView" label="Çalışan Yakını Platinum 64 GB" enabled="true" visible="false" accessible="true" x="164" y="1443" width="193" height="48" index="0" traits=""/>
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1491" width="134" height="48" index="1" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1491" width="134" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="164" y="1491" width="134" height="48" index="0" traits="">
+                                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="Paket Detayı" label="Paket Detayı" enabled="true" visible="false" accessible="true" x="188" y="1491" width="86" height="48" index="0" traits="Button">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Paket Detayı" name="Paket Detayı" label="Paket Detayı" enabled="true" visible="false" accessible="false" x="188" y="1506" width="86" height="18" index="0" traits="StaticText"/>
+                                                            </XCUIElementTypeButton>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                          </XCUIElementTypeOther>
+                                                        </XCUIElementTypeOther>
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="353" height="64" index="1" traits="">
+                                                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="353" height="64" index="0" traits="">
+                                                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="353" height="48" index="0" traits="">
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="138" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="138" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="138" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="20" y="1555" width="4" height="48" index="0" traits=""/>
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="35" y="1555" width="123" height="48" index="1" traits="">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Kontrat Dönemim" name="Kontrat Dönemim" label="Kontrat Dönemim" enabled="true" visible="false" accessible="true" x="35" y="1555" width="123" height="17" index="0" traits="StaticText"/>
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="10.08.25 - 09.08.26" name="MyProductsCardHeaderRowView-DateRangeLabel" label="10.08.25 - 09.08.26" enabled="true" visible="false" accessible="true" x="35" y="1572" width="123" height="31" index="1" traits="StaticText"/>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                          </XCUIElementTypeOther>
+                                                          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="1" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="0" traits="">
+                                                            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="177" y="1555" width="196" height="48" index="0" traits="">
+                                                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="Paketini Değiştir" label="Paketini Değiştir" enabled="true" visible="false" accessible="true" x="201" y="1555" width="148" height="48" index="0" traits="Button">
+                                                            <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Paketini Değiştir" name="Paketini Değiştir" label="Paketini Değiştir" enabled="true" visible="false" accessible="false" x="220" y="1570" width="110" height="18" index="0" traits="StaticText"/>
+                                                            </XCUIElementTypeButton>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                            </XCUIElementTypeOther>
+                                                          </XCUIElementTypeOther>
+                                                        </XCUIElementTypeOther>
+                                                      </XCUIElementTypeOther>
+                                                    </XCUIElementTypeOther>
+                                                  </XCUIElementTypeOther>
+                                                </XCUIElementTypeOther>
+                                              </XCUIElementTypeOther>
+                                            </XCUIElementTypeOther>
+                                          </XCUIElementTypeOther>
+                                        </XCUIElementTypeOther>
+                                      </XCUIElementTypeOther>
+                                    </XCUIElementTypeOther>
+                                  </XCUIElementTypeOther>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Düşey sarma çubuğu, 3 sayfa" label="Düşey sarma çubuğu, 3 sayfa" enabled="true" visible="false" accessible="false" x="360" y="155" width="30" height="621" index="1" traits="Adjustable">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="387" y="116" width="3" height="36" index="0" traits=""/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Yatay sarma çubuğu, 1 sayfa" label="Yatay sarma çubuğu, 1 sayfa" enabled="true" visible="false" accessible="false" x="0" y="743" width="393" height="30" index="2" traits="Adjustable">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="-39" y="770" width="36" height="3" index="0" traits=""/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Düşey sarma çubuğu, 3 sayfa" label="Düşey sarma çubuğu, 3 sayfa" enabled="true" visible="false" accessible="false" x="360" y="155" width="30" height="621" index="3" traits="Adjustable">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="387" y="116" width="3" height="36" index="0" traits=""/>
+                                </XCUIElementTypeOther>
+                                <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Yatay sarma çubuğu, 1 sayfa" label="Yatay sarma çubuğu, 1 sayfa" enabled="true" visible="false" accessible="false" x="0" y="743" width="393" height="30" index="4" traits="Adjustable">
+                                  <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="-39" y="770" width="36" height="3" index="0" traits=""/>
+                                </XCUIElementTypeOther>
+                              </XCUIElementTypeScrollView>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" name="Salla kazan" label="Salla kazan" enabled="true" visible="false" accessible="true" x="8" y="692" width="78" height="78" index="1" traits="">
+                                <XCUIElementTypeImage type="XCUIElementTypeImage" name="sallakazan_topcik" enabled="true" visible="false" accessible="false" x="8" y="692" width="78" height="78" index="0" traits="Image"/>
+                              </XCUIElementTypeOther>
+                              <XCUIElementTypeButton type="XCUIElementTypeButton" name="Turkcell Asistan" label="Turkcell Asistan" enabled="true" visible="false" accessible="true" x="319" y="702" width="70" height="70" index="2" traits="Button"/>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="776" width="393" height="76" index="2" traits="">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="776" width="393" height="1" index="0" traits=""/>
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="776" width="393" height="60" index="1" traits="">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="776" width="79" height="60" index="0" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="Hesabım,Tab, 1/5, " label="Hesabım,Tab, 1/5, " enabled="true" visible="false" accessible="true" x="9" y="784" width="60" height="44" index="0" traits="TabBar">
+                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="tabbar_tcell_home" enabled="true" visible="false" accessible="false" x="27" y="784" width="25" height="25" index="0" traits="Image"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="78" y="776" width="80" height="60" index="1" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="Paketler,Tab, 2/5, " label="Paketler,Tab, 2/5, " enabled="true" visible="false" accessible="true" x="88" y="784" width="60" height="44" index="0" traits="TabBar">
+                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="tabbar_tcell_packages" enabled="true" visible="false" accessible="false" x="105" y="784" width="25" height="25" index="0" traits="Image"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="157" y="776" width="79" height="60" index="2" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="İşlemler,Tab, 3/5, " label="İşlemler,Tab, 3/5, " enabled="true" visible="false" accessible="true" x="167" y="784" width="59" height="44" index="0" traits="TabBar">
+                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="tabbar_tcell_settings" enabled="true" visible="false" accessible="false" x="184" y="784" width="25" height="25" index="0" traits="Image"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="235" y="776" width="80" height="60" index="3" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="Hediyeler,Tab, 4/5, " label="Hediyeler,Tab, 4/5, " enabled="true" visible="false" accessible="true" x="245" y="784" width="60" height="44" index="0" traits="TabBar">
+                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="tabbar_tcell_gift" enabled="true" visible="false" accessible="false" x="263" y="784" width="24" height="25" index="0" traits="Image"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="314" y="776" width="79" height="60" index="4" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="Keşfet,Tab, 5/5, " label="Keşfet,Tab, 5/5, " enabled="true" visible="false" accessible="true" x="324" y="784" width="59" height="44" index="0" traits="TabBar">
+                            <XCUIElementTypeButton type="XCUIElementTypeButton" name="tabbar_tcell_discover" enabled="true" visible="false" accessible="false" x="341" y="784" width="25" height="25" index="0" traits="Image"/>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeOther>
+              </XCUIElementTypeOther>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+    <XCUIElementTypeWindow type="XCUIElementTypeWindow" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="1" traits="">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+            <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+              <XCUIElementTypeWebView type="XCUIElementTypeWebView" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                <XCUIElementTypeWebView type="XCUIElementTypeWebView" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                  <XCUIElementTypeWebView type="XCUIElementTypeWebView" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                      <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                        <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                          <XCUIElementTypeOther type="XCUIElementTypeOther" name="Insider" label="Insider" enabled="true" visible="true" accessible="false" x="0" y="0" width="393" height="852" index="0" traits="">
+                            <XCUIElementTypeOther type="XCUIElementTypeOther" name="Promotional pop-up, web sorgu kutusu" label="Promotional pop-up, web sorgu kutusu" enabled="true" visible="true" accessible="false" x="0" y="15" width="520" height="602" index="0" traits="">
+                              <XCUIElementTypeButton type="XCUIElementTypeButton" name="Close" label="Close" enabled="true" visible="true" accessible="true" x="339" y="223" width="23" height="23" index="0" traits="Button"/>
+                              <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="true" accessible="false" x="39" y="511" width="315" height="39" index="1" traits="">
+                                <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Fenerbahçe Beko’nun Final Four yolculuğu S Sport ile TV+’ta! TV+ ilk 6 ay 129,99 TL/ay!" name="Fenerbahçe Beko’nun Final Four yolculuğu S Sport ile TV+’ta! TV+ ilk 6 ay 129,99 TL/ay!" label="Fenerbahçe Beko’nun Final Four yolculuğu S Sport ile TV+’ta! TV+ ilk 6 ay 129,99 TL/ay!" enabled="true" visible="true" accessible="true" x="51" y="511" width="291" height="39" index="0" traits="StaticText"/>
+                              </XCUIElementTypeOther>
+                              <XCUIElementTypeLink type="XCUIElementTypeLink" name="Avantajı Yakala" label="Avantajı Yakala" enabled="true" visible="true" accessible="false" x="142" y="576" width="110" height="20" index="2" traits="Link">
+                                <XCUIElementTypeLink type="XCUIElementTypeLink" name="Avantajı Yakala" label="Avantajı Yakala" enabled="true" visible="true" accessible="false" x="142" y="576" width="110" height="20" index="0" traits="Link">
+                                  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" value="Avantajı Yakala" name="Avantajı Yakala" label="Avantajı Yakala" enabled="true" visible="true" accessible="true" x="142" y="576" width="110" height="20" index="0" traits="Link, StaticText"/>
+                                </XCUIElementTypeLink>
+                              </XCUIElementTypeLink>
+                            </XCUIElementTypeOther>
+                          </XCUIElementTypeOther>
+                        </XCUIElementTypeOther>
+                      </XCUIElementTypeOther>
+                    </XCUIElementTypeOther>
+                  </XCUIElementTypeWebView>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Düşey sarma çubuğu, 1 sayfa" label="Düşey sarma çubuğu, 1 sayfa" enabled="true" visible="true" accessible="false" x="360" y="55" width="30" height="742" index="1" traits="Adjustable">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="387" y="-39" width="3" height="36" index="0" traits=""/>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Yatay sarma çubuğu, 1 sayfa" label="Yatay sarma çubuğu, 1 sayfa" enabled="true" visible="true" accessible="false" x="55" y="819" width="283" height="30" index="2" traits="Adjustable">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="-39" y="846" width="36" height="3" index="0" traits=""/>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Düşey sarma çubuğu, 1 sayfa" label="Düşey sarma çubuğu, 1 sayfa" enabled="true" visible="true" accessible="false" x="360" y="55" width="30" height="742" index="3" traits="Adjustable">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="387" y="-39" width="3" height="36" index="0" traits=""/>
+                  </XCUIElementTypeOther>
+                  <XCUIElementTypeOther type="XCUIElementTypeOther" value="%0" name="Yatay sarma çubuğu, 1 sayfa" label="Yatay sarma çubuğu, 1 sayfa" enabled="true" visible="true" accessible="false" x="55" y="819" width="283" height="30" index="4" traits="Adjustable">
+                    <XCUIElementTypeOther type="XCUIElementTypeOther" enabled="true" visible="false" accessible="false" x="-39" y="846" width="36" height="3" index="0" traits=""/>
+                  </XCUIElementTypeOther>
+                </XCUIElementTypeWebView>
+              </XCUIElementTypeWebView>
+            </XCUIElementTypeOther>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</AppiumAUT>
