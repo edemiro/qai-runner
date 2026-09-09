@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  CheckCircle2, ChevronRight, Clock, Download, Loader2, XCircle,
+  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, XCircle,
 } from 'lucide-react';
 
+import { EmptyState } from '../components/EmptyState';
+import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
 
@@ -40,6 +42,15 @@ function when(seconds) {
   return new Date(seconds * 1000).toLocaleString();
 }
 
+/** Short enough to sit beside a platform badge on one line. The full date is
+ *  still on the execution's own header, where there is room for it. */
+function whenShort(seconds) {
+  if (!seconds) return '—';
+  const d = new Date(seconds * 1000);
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    + ' · ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
 function duration(ms) {
   if (!ms) return '—';
   return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
@@ -51,6 +62,16 @@ export function ExecutionsPage({ onOpenRun }) {
   const [selectedId, setSelectedId] = useState(null);
   const [execution, setExecution] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState('all');
+
+  const counts = {
+    all: executions.length,
+    web: executions.filter((e) => (e.kind || 'web') !== 'mobile').length,
+    mobile: executions.filter((e) => e.kind === 'mobile').length,
+  };
+  const visible = platform === 'all'
+    ? executions
+    : executions.filter((e) => (e.kind || 'web') === platform);
 
   const load = useCallback(async () => {
     try {
@@ -100,15 +121,22 @@ export function ExecutionsPage({ onOpenRun }) {
 
       <div className="suites-layout">
         <aside className="suite-list card">
+          <PlatformFilter value={platform} onChange={setPlatform} counts={counts} />
+
           {loading ? (
             <p className="muted small">Loading…</p>
           ) : executions.length === 0 ? (
-            <p className="muted small">
-              No execution yet. Open a Test Set and run it — the result lands here.
-            </p>
+            <EmptyState icon={ClipboardList} title="No executions yet" compact>
+              Open a Test Set and run it — every run lands here with its verdicts
+              and a report CI can read.
+            </EmptyState>
+          ) : visible.length === 0 ? (
+            <EmptyState icon={ClipboardList} title={`No ${platform} executions`} compact>
+              Nothing has been run on {platform} yet.
+            </EmptyState>
           ) : (
             <ul className="execution-list">
-              {executions.map((item) => (
+              {visible.map((item) => (
                 <li key={item.id}>
                   <button
                     className={`execution-item ${item.id === selectedId ? 'active' : ''}`}
@@ -116,7 +144,10 @@ export function ExecutionsPage({ onOpenRun }) {
                   >
                     <div className="execution-item-main">
                       <span className="execution-name">{item.suite_name || 'Test Set'}</span>
-                      <span className="execution-when">{when(item.started_at)}</span>
+                      <span className="execution-when">
+                        <PlatformTag kind={item.kind} />
+                        {whenShort(item.started_at)}
+                      </span>
                     </div>
                     <span className={`score ${item.passed === item.total ? 'all-pass' : 'has-fail'}`}>
                       {item.passed}/{item.total}
@@ -129,19 +160,33 @@ export function ExecutionsPage({ onOpenRun }) {
           )}
         </aside>
 
+        {!execution && !loading && (
+          <div className="suite-detail">
+            <div className="card">
+              <EmptyState icon={ClipboardList} title="Nothing selected">
+                {executions.length
+                  ? 'Pick an execution on the left to see how each scenario went.'
+                  : 'Run a Test Set and its results will show up here.'}
+              </EmptyState>
+            </div>
+          </div>
+        )}
+
         {execution && (
           <div className="suite-detail">
             <div className="card">
               <div className="card-head">
                 <div className="execution-headline">
                   <h2 className="card-title">{execution.suite_name || 'Test Set'}</h2>
-                  <p className="muted small">
+                  <p className="muted small execution-meta">
+                    <PlatformTag kind={execution.kind} />
                     {when(execution.started_at)} · {duration(execution.duration_ms)} ·{' '}
                     {execution.workers} worker{execution.workers === 1 ? '' : 's'}
                   </p>
                   {/* The verdict before the detail: an execution is read as a
                       shape first — how much green, how much red — and only then
                       scenario by scenario. */}
+                  {execution.runs.length > 0 && (
                   <div className="execution-scoreline">
                     <div className="execution-bar">
                       <div
@@ -159,6 +204,7 @@ export function ExecutionsPage({ onOpenRun }) {
                       {' '}of {execution.runs.length}
                     </span>
                   </div>
+                  )}
                 </div>
                 <div className="row-actions">
                   <a
@@ -179,6 +225,17 @@ export function ExecutionsPage({ onOpenRun }) {
               </div>
 
               {execution.error && <p className="execution-error">{execution.error}</p>}
+
+              {/* An execution with no scenario rows is not a normal empty list
+                  — it means the run never got as far as recording one, and the
+                  page used to answer that with a bar, "0 passed of 0", and a
+                  screenful of nothing. Say what happened instead. */}
+              {execution.runs.length === 0 && (
+                <EmptyState icon={ClipboardList} title="This execution recorded no scenarios" compact>
+                  It ended before any scenario produced a result
+                  {execution.error ? '' : ' — usually a device that was not connected, or a run that could not start'}.
+                </EmptyState>
+              )}
 
               <ul className="scenario-results">
                 {execution.runs.map((run, index) => (

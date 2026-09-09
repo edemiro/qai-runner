@@ -4681,3 +4681,140 @@ textarea,
   color: var(--text-primary);
   font-size: 12px;
 }
+
+/* ==========================================================================
+   Platform filter + empty states
+   ========================================================================== */
+
+.platform-filter {
+  display: flex;
+  gap: 5px;
+  padding: 0 0 var(--gap-3);
+  margin-bottom: var(--gap-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.platform-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-h-sm);
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+}
+
+.platform-chip:hover { color: var(--text-secondary); border-color: var(--border-strong); }
+
+.platform-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.platform-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+
+/* The row badge. Colour-coded because the two platforms are read at a glance
+   down a list, not compared one at a time. */
+.platform-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.platform-tag.is-web {
+  background: rgba(86, 182, 214, 0.14);
+  color: var(--info);
+  border-color: rgba(86, 182, 214, 0.32);
+}
+
+.platform-tag.is-mobile {
+  background: rgba(168, 119, 232, 0.14);
+  color: var(--purple);
+  border-color: rgba(168, 119, 232, 0.32);
+}
+
+/* Centred in whatever it is given rather than pinned to the top-left as a
+   stray sentence — an empty list is a state, and it should look like one. */
+.empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-2);
+  padding: 46px 24px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.empty-panel.compact { padding: 28px 14px; gap: 7px; }
+
+.empty-panel-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+}
+
+.empty-panel.compact .empty-panel-mark { width: 34px; height: 34px; border-radius: 10px; }
+
+.empty-panel-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 620;
+  color: var(--text-primary);
+}
+
+.empty-panel.compact .empty-panel-title { font-size: 12.5px; }
+
+.empty-panel-body {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.empty-panel.compact .empty-panel-body { font-size: 11.5px; }
+.empty-panel-action { margin-top: var(--gap-1); }
+
+/* Room for the platform badge without the name being squeezed out. */
+.suite-item-name { flex: 1 1 auto; min-width: 0; }
+.execution-when { display: inline-flex; align-items: center; gap: 6px; }
+.execution-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+
+/* The name gets the width; the badge and short date share one line under it. */
+.execution-item-main { min-width: 0; gap: 3px; }
+.execution-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.execution-when { white-space: nowrap; }
+
+/* Name, platform, Add: the name takes the row and the other two share the next
+   one, rather than three controls fighting over one line. */
+.suite-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--gap-2);
+}
+
+.suite-create input { grid-column: 1 / -1; }

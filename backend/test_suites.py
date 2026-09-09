@@ -615,3 +615,32 @@ def test_an_unknown_case_id_is_skipped_not_fatal():
     suite_id = storage.create_suite("Booking")
     real = storage.add_case(suite_id, "a1", "g")
     assert [c["id"] for c in storage.cases_by_id([real, "gone"])] == [real]
+
+
+# --------------------------------------------------------------------------- #
+# Platform on the execution
+# --------------------------------------------------------------------------- #
+
+def test_an_execution_records_the_platform_it_ran_on():
+    """Read off the Test Set at the moment it starts. Joining back later cannot
+    work: the set may be deleted, and a multi-set execution has no single set
+    to ask."""
+    suite_run_id = storage.create_suite_run(kind="mobile", name="Phone run")
+    try:
+        found = next(r for r in storage.list_suite_runs() if r["id"] == suite_run_id)
+        assert found["kind"] == "mobile"
+        assert storage.get_suite_run(suite_run_id)["kind"] == "mobile"
+    finally:
+        with storage._connect() as conn:
+            conn.execute("DELETE FROM suite_runs WHERE id = ?", (suite_run_id,))
+
+
+def test_an_execution_defaults_to_web_when_no_platform_is_given():
+    # Older callers and hand-assembled runs must land somewhere rather than
+    # falling outside both platform filters and disappearing from the list.
+    suite_run_id = storage.create_suite_run(name="Unspecified")
+    try:
+        assert storage.get_suite_run(suite_run_id)["kind"] == "web"
+    finally:
+        with storage._connect() as conn:
+            conn.execute("DELETE FROM suite_runs WHERE id = ?", (suite_run_id,))

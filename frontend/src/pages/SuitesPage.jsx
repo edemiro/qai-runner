@@ -13,6 +13,8 @@ import {
   Trash2,
 } from 'lucide-react';
 
+import { EmptyState } from '../components/EmptyState';
+import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
 import { ScenarioGenerator } from '../components/ScenarioGenerator';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -84,6 +86,8 @@ export function SuitesPage({ onOpenRun }) {
 
   const [suites, setSuites] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [platform, setPlatform] = useState('all');
+  const [newSuiteKind, setNewSuiteKind] = useState('web');
   const [suite, setSuite] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -114,6 +118,24 @@ export function SuitesPage({ onOpenRun }) {
   const [history, setHistory] = useState([]);
   const abortRef = useRef(null);
 
+  const counts = {
+    all: suites.length,
+    web: suites.filter((item) => (item.kind || 'web') !== 'mobile').length,
+    mobile: suites.filter((item) => item.kind === 'mobile').length,
+  };
+  const visible = platform === 'all'
+    ? suites
+    : suites.filter((item) => (item.kind || 'web') === platform);
+
+  /* Derived rather than synced through an effect: filtering to a platform the
+     selected set is not on used to leave that set open on the right while the
+     list beside it said there was nothing — two panes disagreeing about what is
+     on screen. Falling through to the first visible set keeps them agreeing
+     without a second copy of the selection to keep in step. */
+  const shownId = visible.some((item) => item.id === selectedId)
+    ? selectedId
+    : (visible[0]?.id ?? null);
+
   const loadSuites = useCallback(async () => {
     try {
       const data = await api.suites();
@@ -141,7 +163,7 @@ export function SuitesPage({ onOpenRun }) {
   useEffect(() => {
     let cancelled = false;
 
-    if (!selectedId) {
+    if (!shownId) {
       queueMicrotask(() => {
         if (!cancelled) setSuite(null);
       });
@@ -153,8 +175,8 @@ export function SuitesPage({ onOpenRun }) {
     (async () => {
       try {
         const [detail, runs] = await Promise.all([
-          api.suite(selectedId),
-          api.suiteRuns(selectedId, 10),
+          api.suite(shownId),
+          api.suiteRuns(shownId, 10),
         ]);
         if (cancelled) return;
         setSuite(detail);
@@ -167,7 +189,7 @@ export function SuitesPage({ onOpenRun }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, toast]);
+  }, [shownId, toast]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -176,7 +198,7 @@ export function SuitesPage({ onOpenRun }) {
     const name = newSuiteName.trim();
     if (!name) return;
     try {
-      const created = await api.createSuite({ name, kind: 'web', tags: [] });
+      const created = await api.createSuite({ name, kind: newSuiteKind, tags: [] });
       setNewSuiteName('');
       setSelectedId(created.id);
       await loadSuites();
@@ -407,26 +429,44 @@ export function SuitesPage({ onOpenRun }) {
               placeholder="New test set name"
               aria-label="New test set name"
             />
+            {/* Chosen at creation, not later: the platform decides which
+                scenarios can go in and which device can run them, so a set
+                that changed platform afterwards would strand its own cases. */}
+            <select
+              value={newSuiteKind}
+              onChange={(event) => setNewSuiteKind(event.target.value)}
+              aria-label="Platform for the new test set"
+            >
+              <option value="web">Web</option>
+              <option value="mobile">Mobile</option>
+            </select>
             <button className="btn btn-primary btn-sm" type="submit" disabled={!newSuiteName.trim()}>
               <Plus size={14} /> Add
             </button>
           </form>
 
+          <PlatformFilter value={platform} onChange={setPlatform} counts={counts} />
+
           {suites.length === 0 ? (
-            <p className="muted small suite-empty">
-              No suites yet. Create one above, then add cases — or save a run you
-              already like from the Test Runs page.
-            </p>
+            <EmptyState icon={Layers} title="No Test Sets yet" compact>
+              Name one above to get started, then generate scenarios into it — or
+              save a run you already like from Test Runs.
+            </EmptyState>
+          ) : visible.length === 0 ? (
+            <EmptyState icon={Layers} title={`No ${platform} Test Sets`} compact>
+              Create one with the platform picker set to {platform}.
+            </EmptyState>
           ) : (
             <ul className="suite-items">
-              {suites.map((item) => (
+              {visible.map((item) => (
                 <li key={item.id}>
                   <button
-                    className={`suite-item ${item.id === selectedId ? 'active' : ''}`}
+                    className={`suite-item ${item.id === shownId ? 'active' : ''}`}
                     onClick={() => setSelectedId(item.id)}
                   >
                     <Layers size={15} />
                     <span className="suite-item-name">{item.name}</span>
+                    <PlatformTag kind={item.kind} />
                     <span className="pill">{item.case_count}</span>
                     <ChevronRight size={14} className="suite-item-chevron" />
                   </button>
@@ -438,9 +478,12 @@ export function SuitesPage({ onOpenRun }) {
 
         {/* ---------------------------------------------------- detail ----- */}
         {!suite ? (
-          <section className="card suite-detail empty-state">
-            <Layers size={28} />
-            <p>Select a suite, or create one to get started.</p>
+          <section className="card suite-detail">
+            <EmptyState icon={Layers} title="Nothing selected">
+              {suites.length
+                ? 'Pick a Test Set on the left to see and run its scenarios.'
+                : 'Create a Test Set to start collecting scenarios.'}
+            </EmptyState>
           </section>
         ) : (
           <section className="suite-detail">

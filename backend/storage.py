@@ -128,6 +128,25 @@ CREATE TABLE IF NOT EXISTS page_events (
     created_at REAL NOT NULL
 );
 
+-- The scenario's own steps as the tester wrote them, and how each one went.
+-- Distinct from `steps`, which records what the agent did: a scenario step is
+-- the intent ("tap Book a flight, expect the search form"), an agent step is
+-- one click. A step can take several actions, and the report has to answer
+-- "did step 3 pass" without the reader counting clicks.
+CREATE TABLE IF NOT EXISTS scenario_steps (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    idx         INTEGER NOT NULL,
+    action      TEXT NOT NULL,
+    expected    TEXT,
+    status      TEXT NOT NULL,
+    message     TEXT,
+    actions_used INTEGER,
+    duration_ms INTEGER,
+    created_at  REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scenario_steps_run ON scenario_steps(run_id, idx);
 CREATE INDEX IF NOT EXISTS idx_cases_suite ON suite_cases(suite_id, idx);
 CREATE INDEX IF NOT EXISTS idx_suite_runs ON suite_runs(suite_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id);
@@ -162,6 +181,14 @@ MIGRATIONS = [
     ("runs", "case_layer", "TEXT"),
     ("runs", "case_idx", "INTEGER"),
     ("suite_runs", "name", "TEXT"),
+    # Which platform the execution ran against. Derived from its Test Set at
+    # the moment it starts rather than joined back later: a set can be deleted,
+    # and an execution assembled from several sets has no single set to ask.
+    ("suite_runs", "kind", "TEXT"),
+    # The scenario written out as ordered steps, each with what it expects to
+    # see. Stored as JSON on the case: a step has no identity of its own and is
+    # only ever read with the scenario it belongs to.
+    ("suite_cases", "steps", "TEXT"),
 ]
 
 
@@ -219,6 +246,25 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
     _detach_executions_from_suites(conn)
+    _backfill_execution_kind(conn)
+
+
+def _backfill_execution_kind(conn: sqlite3.Connection) -> None:
+    """Give executions that predate the `kind` column a platform.
+
+    Read from the Test Set they came from, falling back to a run they adopted —
+    an execution whose set has since been deleted still knows what it drove.
+    Without this every older execution would sit outside both platform filters
+    and simply not appear.
+    """
+    conn.execute(
+        """UPDATE suite_runs SET kind = COALESCE(
+               (SELECT s.kind FROM suites s WHERE s.id = suite_runs.suite_id),
+               (SELECT r.kind FROM runs r
+                 WHERE r.suite_run_id = suite_runs.id AND r.kind IS NOT NULL LIMIT 1),
+               'web')
+           WHERE kind IS NULL"""
+    )
 
 
 def _detach_executions_from_suites(conn: sqlite3.Connection) -> None:
@@ -451,7 +497,47 @@ def get_run(run_id: str, include_screenshots: bool = False) -> Optional[Dict[str
     run["healed_count"] = sum(1 for s in run["steps"] if s["healed"])
     run["pageEvents"] = list_page_events(run_id)
     run["artifacts"] = list_artifacts(run_id)
+    run["scenarioSteps"] = list_scenario_steps(run_id)
     return run
+
+
+# --- scenario steps ------------------------------------------------------- #
+
+def start_scenario_step(
+    run_id: str, idx: int, action: str, expected: Optional[str] = None,
+) -> int:
+    """Open a scenario step. Written before it runs so a run that dies midway
+    still shows which step it was on rather than ending at the last one that
+    happened to finish."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            """INSERT INTO scenario_steps
+                   (run_id, idx, action, expected, status, created_at)
+               VALUES (?, ?, ?, ?, 'running', ?)""",
+            (run_id, idx, action, expected or None, time.time()),
+        )
+        return cursor.lastrowid
+
+
+def finish_scenario_step(
+    step_row_id: int, status: str, message: Optional[str] = None,
+    actions_used: Optional[int] = None, duration_ms: Optional[int] = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE scenario_steps
+                  SET status = ?, message = ?, actions_used = ?, duration_ms = ?
+                WHERE id = ?""",
+            (status, message, actions_used, duration_ms, step_row_id),
+        )
+
+
+def list_scenario_steps(run_id: str) -> List[Dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM scenario_steps WHERE run_id = ? ORDER BY idx ASC", (run_id,)
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def get_step_screenshot(run_id: str, step_id: int) -> Optional[str]:
@@ -672,6 +758,29 @@ def get_suite(suite_id: str) -> Optional[Dict[str, Any]]:
 
 # --- suite cases ---------------------------------------------------------- #
 
+def _clean_steps(raw: Any) -> List[Dict[str, str]]:
+    """Ordered steps, each an instruction and what it should produce.
+
+    Anything without an instruction is dropped rather than stored: a step with
+    no action is a row the runner would have to skip and the report would have
+    to explain.
+    """
+    if not isinstance(raw, list):
+        return []
+    steps = []
+    for entry in raw:
+        if isinstance(entry, str):
+            entry = {"action": entry}
+        if not isinstance(entry, dict):
+            continue
+        action = " ".join(str(entry.get("action") or "").split())
+        if not action:
+            continue
+        expected = " ".join(str(entry.get("expected") or "").split())
+        steps.append({"action": action[:600], "expected": expected[:600]})
+    return steps
+
+
 def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
     case = dict(row)
     case["tags"] = _load_tags(case.get("tags"))
@@ -681,6 +790,10 @@ def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
             case["dataset"] = json.loads(case["dataset"])
         except Exception:
             case["dataset"] = None
+    try:
+        case["steps"] = json.loads(case["steps"]) if case.get("steps") else []
+    except Exception:
+        case["steps"] = []
     return case
 
 
@@ -689,8 +802,10 @@ def add_case(
     tags: Optional[List[str]] = None, dataset: Optional[List[Dict[str, Any]]] = None,
     auth_profile: Optional[str] = None, source_run_id: Optional[str] = None,
     priority: Optional[str] = None, layer: Optional[str] = None,
+    steps: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     case_id = uuid.uuid4().hex[:16]
+    cleaned_steps = _clean_steps(steps)
     with _connect() as conn:
         idx = conn.execute(
             "SELECT COALESCE(MAX(idx), 0) + 1 AS next FROM suite_cases WHERE suite_id = ?",
@@ -699,12 +814,14 @@ def add_case(
         conn.execute(
             """INSERT INTO suite_cases (id, suite_id, idx, name, goal, url, tags,
                                         dataset, auth_profile, source_run_id,
-                                        priority, layer, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                        priority, layer, steps, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 case_id, suite_id, idx, name[:200], goal, url, _dump_tags(tags),
                 json.dumps(dataset, ensure_ascii=False) if dataset else None,
-                auth_profile, source_run_id, priority, layer, time.time(),
+                auth_profile, source_run_id, priority, layer,
+                json.dumps(cleaned_steps, ensure_ascii=False) if cleaned_steps else None,
+                time.time(),
             ),
         )
     return case_id
@@ -722,6 +839,10 @@ def update_case(case_id: str, **fields: Any) -> bool:
     if "tags" in fields:
         sets.append("tags = ?")
         values.append(_dump_tags(fields["tags"]))
+    if "steps" in fields:
+        cleaned = _clean_steps(fields["steps"])
+        sets.append("steps = ?")
+        values.append(json.dumps(cleaned, ensure_ascii=False) if cleaned else None)
     if "dataset" in fields:
         sets.append("dataset = ?")
         values.append(
@@ -793,6 +914,7 @@ def create_suite_run(
     workers: int = 1,
     name: Optional[str] = None,
     sources: Optional[List[Dict[str, Any]]] = None,
+    kind: Optional[str] = None,
 ) -> str:
     """Open an execution.
 
@@ -816,12 +938,13 @@ def create_suite_run(
             source["suite_name"] = label
 
         conn.execute(
-            """INSERT INTO suite_runs (id, suite_id, name, status, workers, started_at)
-               VALUES (?, ?, ?, 'running', ?, ?)""",
+            """INSERT INTO suite_runs (id, suite_id, name, kind, status, workers, started_at)
+               VALUES (?, ?, ?, ?, 'running', ?, ?)""",
             (
                 suite_run_id,
                 suite_id or (contributing[0].get("suite_id") if contributing else None),
                 name or " + ".join(dict.fromkeys(labels)) or "Execution",
+                kind or "web",
                 workers,
                 time.time(),
             ),

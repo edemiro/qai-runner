@@ -128,15 +128,44 @@ TARGET_PROFILES = {
 }
 
 
-def build_system_prompt(kind: str) -> str:
+STEPWISE_PROMPT = """
+
+RUNNING A WRITTEN SCENARIO
+This run is not open-ended: the tester has written the scenario out as numbered
+steps, and you are given exactly one of them at a time. Your job for each is to
+carry out that step and prove its expected result — nothing else.
+
+{"type":"action","action":"step_done","value":"pass","reason":"what proved it"}
+{"type":"action","action":"step_done","value":"fail","reason":"what was wrong"}
+
+- Work only on the step you were given. Do not run ahead to a later one, and do
+  not redo an earlier one, even if the screen makes it look convenient.
+- Prove the expected result before closing the step. Where it is something on
+  screen, assert_visible or assert_text is the proof; where the step only
+  navigates, saying what you now see is enough.
+- Close every step with `step_done`. "pass" means the expected result held;
+  "fail" means it did not, and the reason must say what you saw instead.
+- A step that cannot be carried out at all is a `step_done` with "fail" — not a
+  guess at the next step, and not `done`.
+- `done` ends the whole scenario and is only for a failure so severe that the
+  remaining steps are meaningless.
+"""
+
+
+def build_system_prompt(kind: str, stepwise: bool = False) -> str:
     """The loop is shared, but the vocabulary is not: a browser has no Home
     button and a phone has no browser history.
+
+    `stepwise` swaps in the rules for a scenario the tester has written out as
+    numbered steps. Those runs are judged step by step, so the model has to be
+    told to stay inside the step it was handed rather than pursuing the goal
+    however it sees fit.
 
     Substitution is done with replace(), not format(): the prompt is full of
     JSON braces that str.format would try to interpret as fields.
     """
     profile = TARGET_PROFILES.get(kind, TARGET_PROFILES["mobile"])
-    prompt = SYSTEM_PROMPT
+    prompt = SYSTEM_PROMPT + (STEPWISE_PROMPT if stepwise else "")
     for name, value in profile.items():
         prompt = prompt.replace("{" + name + "}", value)
     return prompt
@@ -153,6 +182,7 @@ KNOWN_ACTIONS = {
     "click", "type", "clear", "scroll", "swipe", "key", "wait",
     "assert_visible", "assert_text", "assert_visual", "assert_no_errors",
     "write_scenarios", "run_test_set",
+    "step_done",
     "done", "finish", "complete",
 }
 
@@ -496,11 +526,18 @@ async def run_agent(
     model: Optional[str] = None,
     effort: Optional[str] = None,
     session_state: Optional["AgentSession"] = None,
+    steps: Optional[List[Dict[str, str]]] = None,
 ) -> AsyncGenerator[str, None]:
     """Drive `target` toward `goal`, yielding NDJSON events as it goes.
 
     The loop is identical for a phone and for a browser page — only the driver
     behind `target` differs.
+
+    `steps` turns the run from open-ended into a written scenario: the agent is
+    handed one step at a time and has to prove that step's expected result
+    before moving on. That is what makes the report answer "did step 3 pass"
+    rather than only "did the run pass" — the question a tester with a written
+    scenario is actually asking.
 
     `session_state` is an escape hatch for a run started BY another run — the
     `run_test_set` action lets a chat turn kick off a whole Test Set on the same
@@ -519,7 +556,14 @@ async def run_agent(
         yield _event("error", message="An agent run is already in progress for this session.")
         return
 
-    ceiling = min(max_steps or MAX_AGENT_STEPS, MAX_AGENT_STEPS)
+    # A written scenario needs room for every step, so the ceiling is scaled to
+    # the number of steps rather than capped at the free-roaming limit — 20
+    # steps cannot possibly fit in the 40 actions an open-ended run gets.
+    planned_steps = storage._clean_steps(steps) if steps else []
+    if planned_steps:
+        ceiling = max_steps or (len(planned_steps) * 12 + 10)
+    else:
+        ceiling = min(max_steps or MAX_AGENT_STEPS, MAX_AGENT_STEPS)
 
     effort = _resolve_effort(effort)
 
@@ -530,7 +574,9 @@ async def run_agent(
         return
 
     info = target.describe()
-    system_prompt = build_system_prompt(target.kind)
+    scenario_steps = planned_steps
+    stepwise = bool(scenario_steps)
+    system_prompt = build_system_prompt(target.kind, stepwise=stepwise)
 
     # Anything raised outside the loop's try block escapes the generator and
     # kills the HTTP stream, which the browser can only report as a network
@@ -562,6 +608,34 @@ async def run_agent(
     step_no = 0
     executed_assertion = False
 
+    # Written-scenario bookkeeping. `step_index` is which scenario step is open,
+    # `scenario_row_id` its database row, and `step_actions` how many agent actions
+    # it has spent — a step that never closes itself has to be cut off rather
+    # than eating the whole run's budget.
+    step_index = 0
+    scenario_row_id: Optional[int] = None
+    step_actions = 0
+    step_asserted = False
+    step_started = time.monotonic()
+    failed_steps = 0
+    # A step that never closes itself would otherwise spend the whole run's
+    # budget and starve every step after it.
+    ACTIONS_PER_STEP = 12
+
+    def open_step(index: int):
+        entry = scenario_steps[index]
+        return storage.start_scenario_step(
+            run_id, index + 1, entry["action"], entry.get("expected") or None,
+        )
+
+    if stepwise:
+        scenario_row_id = open_step(0)
+        yield _event(
+            "scenario_step_started", index=1, total=len(scenario_steps),
+            action=scenario_steps[0]["action"],
+            expected=scenario_steps[0].get("expected") or None,
+        )
+
     try:
         while step_no < ceiling:
             if state.cancel.is_set():
@@ -572,11 +646,67 @@ async def run_agent(
             step_no += 1
             started = time.monotonic()
 
+            # A step that has spent its budget without closing itself is cut
+            # off here and marked failed, so the steps after it still get to
+            # run instead of inheriting an exhausted ceiling.
+            if stepwise and step_actions >= ACTIONS_PER_STEP:
+                stalled = (
+                    f"Step {step_index + 1} used {ACTIONS_PER_STEP} actions without "
+                    "reaching its expected result."
+                )
+                storage.finish_scenario_step(
+                    scenario_row_id, "failed", message=stalled,
+                    actions_used=step_actions,
+                    duration_ms=int((time.monotonic() - step_started) * 1000),
+                )
+                yield _event(
+                    "scenario_step_finished", index=step_index + 1,
+                    total=len(scenario_steps), status="failed", message=stalled,
+                )
+                failed_steps += 1
+                if final_error is None:
+                    final_error = stalled
+                step_index += 1
+                if step_index >= len(scenario_steps):
+                    final_status = "failed"
+                    yield _event("finished", status="failed", summary=final_error)
+                    break
+                scenario_row_id = open_step(step_index)
+                step_actions = 0
+                step_asserted = False
+                step_started = time.monotonic()
+                state.history = state.history[-4:]
+                yield _event(
+                    "scenario_step_started", index=step_index + 1,
+                    total=len(scenario_steps),
+                    action=scenario_steps[step_index]["action"],
+                    expected=scenario_steps[step_index].get("expected") or None,
+                )
+                continue
+
             snapshot, screen_json, screenshot = await _screen_context(target)
             if snapshot is not None:
                 yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
 
-            turns = _build_turns(state.history, screen_json, screenshot if use_vision else None, goal)
+            # In a written scenario the model is shown the step it is on, not
+            # the scenario as a whole — handing it the finished article invites
+            # it to skip ahead to whichever step the current screen suits.
+            if stepwise:
+                current = scenario_steps[step_index]
+                focus = (
+                    f"STEP {step_index + 1} OF {len(scenario_steps)}: {current['action']}"
+                )
+                if current.get("expected"):
+                    focus += f"\nEXPECTED RESULT: {current['expected']}"
+                focus += (
+                    f"\n\n(Scenario: {goal})" if goal else ""
+                )
+            else:
+                focus = goal
+
+            turns = _build_turns(
+                state.history, screen_json, screenshot if use_vision else None, focus,
+            )
 
             yield _event("thinking", step=step_no)
             reply = ""
@@ -666,6 +796,63 @@ async def run_agent(
             kind = (action.get("action") or "").lower()
             reason = action.get("reason") or ""
 
+            if kind == "step_done" and stepwise:
+                verdict = (action.get("value") or "pass").lower()
+                passed = verdict.startswith("pass")
+                # A step that claims to pass while proving nothing is the same
+                # trap as a green run with no assertion, one scale down.
+                if passed and not step_asserted and scenario_steps[step_index].get("expected"):
+                    passed = False
+                    reason = (
+                        (reason + " — ") if reason else ""
+                    ) + "closed as passed without verifying the expected result."
+
+                storage.finish_scenario_step(
+                    scenario_row_id, "passed" if passed else "failed",
+                    message=reason or None, actions_used=step_actions,
+                    duration_ms=int((time.monotonic() - step_started) * 1000),
+                )
+                yield _event(
+                    "scenario_step_finished", index=step_index + 1,
+                    total=len(scenario_steps),
+                    status="passed" if passed else "failed", message=reason,
+                )
+                if not passed:
+                    failed_steps += 1
+                    if final_error is None:
+                        final_error = f"Step {step_index + 1} failed: {reason or 'no reason given'}"
+
+                step_index += 1
+                if step_index >= len(scenario_steps):
+                    final_status = "failed" if failed_steps else "passed"
+                    if failed_steps:
+                        final_error = (
+                            f"{failed_steps} of {len(scenario_steps)} steps failed. "
+                            + (final_error or "")
+                        ).strip()
+                    summary = (
+                        f"All {len(scenario_steps)} steps passed."
+                        if not failed_steps else final_error
+                    )
+                    yield _event("finished", status=final_status, summary=summary)
+                    break
+
+                scenario_row_id = open_step(step_index)
+                step_actions = 0
+                step_asserted = False
+                step_started = time.monotonic()
+                # Only the newest screen is carried forward: the previous step's
+                # back-and-forth is finished business, and leaving it in tempts
+                # the model to re-read an instruction it has already completed.
+                state.history = state.history[-4:]
+                yield _event(
+                    "scenario_step_started", index=step_index + 1,
+                    total=len(scenario_steps),
+                    action=scenario_steps[step_index]["action"],
+                    expected=scenario_steps[step_index].get("expected") or None,
+                )
+                continue
+
             if kind in TERMINAL_ACTIONS:
                 verdict = (action.get("value") or "pass").lower()
                 final_status = "passed" if verdict.startswith("pass") else "failed"
@@ -707,7 +894,9 @@ async def run_agent(
 
             if kind in ASSERTION_ACTIONS and result["ok"]:
                 executed_assertion = True
+                step_asserted = True
 
+            step_actions += 1
             step_status = "passed" if result["ok"] else "failed"
             step_row_id = storage.add_step(
                 run_id,

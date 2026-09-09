@@ -120,6 +120,9 @@ async def _execute_one(
             target, goal,
             max_steps=options.get("max_steps", MAX_AGENT_STEPS),
             use_vision=options.get("use_vision", True),
+            # A case written out as steps is run step by step and judged the
+            # same way; one without them keeps the open-ended behaviour.
+            steps=case.get("steps") or None,
         ):
             try:
                 payload = json.loads(line)
@@ -237,6 +240,7 @@ async def _run_mobile_case(
             max_steps=options.get("max_steps", MAX_AGENT_STEPS),
             use_vision=options.get("use_vision", True),
             session_state=agent.AgentSession(),
+            steps=case.get("steps") or None,
         ):
             try:
                 payload = json.loads(line)
@@ -388,6 +392,7 @@ async def run_suite(
             [{"suite_id": c.get("suite_id"), "suite_name": c.get("suite_name")} for c in cases]
             if cases else None
         ),
+        kind=suite.get("kind") or "web",
     )
 
     yield _event(
