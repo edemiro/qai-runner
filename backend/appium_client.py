@@ -9,37 +9,70 @@ from typing import Any, Dict, Optional
 
 from config import APPIUM_HOST
 
-_client: Optional[httpx.AsyncClient] = None
+_clients: Dict[str, httpx.AsyncClient] = {}
+
+# Which hub each live session belongs to. A session on a cloud device answers
+# at a different address than the local Appium server, and every later call —
+# source, screenshot, tap — has to reach the same place the session was made.
+# Empty for local sessions, which is the default and needs no bookkeeping.
+_session_hubs: Dict[str, str] = {}
 
 
-def get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(base_url=APPIUM_HOST, timeout=30.0)
-    return _client
+def get_client(base_url: str = APPIUM_HOST) -> httpx.AsyncClient:
+    client = _clients.get(base_url)
+    if client is None or client.is_closed:
+        # Cloud hubs sit behind a queue while a device is booked, so they are
+        # slower to answer than a phone on the desk.
+        client = httpx.AsyncClient(base_url=base_url, timeout=60.0, follow_redirects=True)
+        _clients[base_url] = client
+    return client
+
+
+def bind_session(session_id: str, base_url: str) -> None:
+    """Remember where a session lives, so later calls reach the same hub."""
+    if base_url and base_url != APPIUM_HOST:
+        _session_hubs[session_id] = base_url
+
+
+def release_session(session_id: str) -> None:
+    _session_hubs.pop(session_id, None)
+
+
+def _hub_for(path: str) -> str:
+    """The address a request belongs to, read from the session in its path."""
+    parts = path.strip("/").split("/")
+    if len(parts) >= 2 and parts[0] == "session":
+        return _session_hubs.get(parts[1], APPIUM_HOST)
+    return APPIUM_HOST
 
 
 async def close_client() -> None:
-    global _client
-    if _client is not None and not _client.is_closed:
-        await _client.aclose()
-    _client = None
+    for client in list(_clients.values()):
+        if not client.is_closed:
+            await client.aclose()
+    _clients.clear()
+    _session_hubs.clear()
 
 
 async def _request(method: str, path: str, **kwargs) -> Optional[httpx.Response]:
+    base_url = kwargs.pop("base_url", None) or _hub_for(path)
     try:
-        return await get_client().request(method, path, **kwargs)
+        return await get_client(base_url).request(method, path, **kwargs)
     except Exception as exc:  # network error, Appium down, timeout
         print(f"[appium] {method} {path} failed: {exc}")
         return None
 
 
-async def get(path: str, timeout: float = 10.0) -> Optional[httpx.Response]:
-    return await _request("GET", path, timeout=timeout)
+async def get(path: str, timeout: float = 10.0, base_url: Optional[str] = None) -> Optional[httpx.Response]:
+    return await _request("GET", path, timeout=timeout, base_url=base_url)
 
 
-async def post(path: str, json: Any = None, timeout: float = 15.0) -> Optional[httpx.Response]:
-    return await _request("POST", path, json=json if json is not None else {}, timeout=timeout)
+async def post(
+    path: str, json: Any = None, timeout: float = 15.0, base_url: Optional[str] = None,
+) -> Optional[httpx.Response]:
+    return await _request(
+        "POST", path, json=json if json is not None else {}, timeout=timeout, base_url=base_url,
+    )
 
 
 async def delete(path: str, timeout: float = 15.0) -> Optional[httpx.Response]:
@@ -51,15 +84,22 @@ async def is_server_running() -> bool:
     return res is not None and res.status_code == 200
 
 
-async def create_session(capabilities: Dict[str, Any]) -> httpx.Response:
-    res = await post("/session", capabilities, timeout=120.0)
+async def create_session(
+    capabilities: Dict[str, Any], base_url: Optional[str] = None,
+) -> httpx.Response:
+    # A cloud device can sit in a queue before it is handed over, which takes
+    # longer than any local start-up.
+    timeout = 300.0 if base_url else 120.0
+    res = await post("/session", capabilities, timeout=timeout, base_url=base_url)
     if res is None:
-        raise ConnectionError("Could not reach the Appium server on " + APPIUM_HOST)
+        where = "BrowserStack" if base_url else APPIUM_HOST
+        raise ConnectionError(f"Could not reach the Appium server on {where}")
     return res
 
 
 async def delete_session(session_id: str) -> bool:
     res = await delete(f"/session/{session_id}")
+    release_session(session_id)
     return res is not None and res.status_code == 200
 
 
@@ -90,12 +130,23 @@ async def get_platform(session_id: str, cache: Dict[str, str]) -> str:
 
 
 async def get_window_size(session_id: str) -> Dict[str, int]:
-    res = await get(f"/session/{session_id}/window/size", timeout=5.0)
-    if res is not None and res.status_code == 200:
-        val = res.json().get("value", {})
-        width, height = val.get("width"), val.get("height")
-        if width and height:
-            return {"width": int(width), "height": int(height)}
+    """The screen, in the units gestures are expressed in.
+
+    `/window/rect` is the W3C endpoint and the only one XCUITest answers —
+    `/window/size` is the old JSONWP one and returns 404 on iOS. That 404 used
+    to fall through to the Android-shaped default below, so every gesture on an
+    iPhone was computed against a 1080x2400 screen that was really 430x932:
+    a scroll started and ended past the bottom edge and the screen never moved.
+    """
+    for path in ("window/rect", "window/size"):
+        res = await get(f"/session/{session_id}/{path}", timeout=5.0)
+        if res is not None and res.status_code == 200:
+            val = res.json().get("value", {})
+            width, height = val.get("width"), val.get("height")
+            if width and height:
+                return {"width": int(width), "height": int(height)}
+    # Only when the device answers neither, which means the session is already
+    # in trouble; a plausible size keeps the caller from dividing by nothing.
     return {"width": 1080, "height": 2400}
 
 

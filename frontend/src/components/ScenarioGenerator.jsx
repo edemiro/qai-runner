@@ -139,6 +139,7 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
         url: readFrom || null,
         priority: s.priority,
         layer: s.layer,
+        steps: s.steps || [],
         tags: [],
       })));
       toast.success(`${picked.length} scenario${picked.length > 1 ? 's' : ''} added.`);
@@ -279,6 +280,20 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
                   <div className="generated-title">{scenario.title}</div>
                   {scenario.rationale && (
                     <div className="generated-why">{scenario.rationale}</div>
+                  )}
+                  {/* The steps are what actually gets run and reported, so they
+                      are worth reading before the scenario is saved. */}
+                  {scenario.steps?.length > 0 && (
+                    <ol className="generated-steps">
+                      {scenario.steps.map((step, i) => (
+                        <li key={i}>
+                          <span>{step.action}</span>
+                          {step.expected && (
+                            <em className="generated-step-expected">{step.expected}</em>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
                   )}
                 </div>
                 <span className="layer-tag">{scenario.layer}</span>

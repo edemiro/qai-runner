@@ -248,3 +248,50 @@ class MobileSuggestions(unittest.TestCase):
         self.assertIsNone(page["title"])
         self.assertIsNone(page["url"])
         self.assertEqual(page["controls"], 0)
+
+
+class GeneratedSteps(unittest.TestCase):
+    """A generated scenario carries the steps it will be run by.
+
+    The generator is how most scenarios reach a Test Set, so if it writes only a
+    title and a goal, the step-by-step report has nothing to report on."""
+
+    TITLE = "Booking - Availability | RT DOM 1 ADT - search a flight and control the results"
+
+    def _parse(self, **overrides):
+        entry = {
+            "title": self.TITLE,
+            "layer": "E2E",
+            "priority": "Critical",
+            "goal": "Search a flight.",
+            "steps": [
+                {"action": "Enter Istanbul as origin", "expected": "Origin reads Istanbul"},
+                {"action": "Press Search", "expected": "The results list appears"},
+            ],
+        }
+        entry.update(overrides)
+        scenarios, _, _ = writer.parse(json.dumps([entry]))
+        return scenarios[0]
+
+    def test_steps_survive_parsing_in_order(self):
+        steps = self._parse()["steps"]
+        assert [s["action"] for s in steps] == ["Enter Istanbul as origin", "Press Search"]
+        assert steps[1]["expected"] == "The results list appears"
+
+    def test_a_scenario_without_steps_is_still_written(self):
+        # It runs open-ended and is judged as a whole, exactly as before steps
+        # existed — losing the scenario would be the worse outcome.
+        assert self._parse(steps=None)["steps"] == []
+
+    def test_junk_steps_do_not_reach_the_test_set(self):
+        assert self._parse(steps=[{"expected": "no action"}, "  ", 7])["steps"] == []
+
+    def test_absurdly_many_steps_are_capped(self):
+        # Otherwise one malformed scenario ties up a device for hours: the
+        # runner budgets its actions per step.
+        many = [{"action": f"Adim {i}", "expected": "x"} for i in range(200)]
+        assert len(self._parse(steps=many)["steps"]) == 40
+
+    def test_the_prompt_asks_for_steps_with_expected_results(self):
+        assert '"steps"' in writer.SYSTEM_PROMPT
+        assert "expected" in writer.SYSTEM_PROMPT

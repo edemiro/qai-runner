@@ -159,8 +159,8 @@ class FakeTarget:
         self.calls.append(("act", kind, element_id, selector, value, snapshot_id))
         return self.act_result
 
-    async def scroll(self, direction):
-        self.calls.append(("scroll", direction))
+    async def scroll(self, direction, element_id=None):
+        self.calls.append(("scroll", direction, element_id))
         return self.scroll_result
 
     async def press_key(self, key):
@@ -229,11 +229,11 @@ class TestExecuteAction(unittest.IsolatedAsyncioTestCase):
     async def test_scroll_is_delegated_to_the_driver(self):
         result = await agent._execute_action(self.target, {"action": "scroll", "value": "up"}, self.snapshot)
         self.assertTrue(result["ok"])
-        self.assertIn(("scroll", "up"), self.target.calls)
+        self.assertIn(("scroll", "up", None), self.target.calls)
 
     async def test_swipe_is_treated_as_scroll(self):
         await agent._execute_action(self.target, {"action": "swipe", "value": "left"}, self.snapshot)
-        self.assertIn(("scroll", "left"), self.target.calls)
+        self.assertIn(("scroll", "left", None), self.target.calls)
 
     async def test_key_failure_is_reported_verbatim(self):
         self.target.key_result = ActionResult(False, "Key 'menu' is not supported on iOS")
@@ -438,3 +438,117 @@ class AuthoringActionDispatch(unittest.IsolatedAsyncioTestCase):
                 self._target(), None, None, goal="ignored",
             )
         rts.assert_awaited_once_with(name="Booking", execution_name=None)
+
+
+class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
+    """A scenario written as steps is judged step by step. That is the whole
+    point of writing it out: the report has to answer "did step 3 pass", not
+    only "did the run pass"."""
+
+    STEPS = [
+        {"action": "Adim 1", "expected": "Beklenen 1"},
+        {"action": "Adim 2", "expected": "Beklenen 2"},
+    ]
+
+    ASSERT = '```json\n{"type":"action","action":"assert_visible","elementId":"el_1","reason":"r"}\n```'
+
+    @staticmethod
+    def _close(verdict, reason):
+        return ('```json\n{"type":"action","action":"step_done","value":"%s",'
+                '"reason":"%s"}\n```' % (verdict, reason))
+
+    async def _run(self, script, steps=None):
+        class Provider:
+            id, label = "fake", "Fake"
+            def __init__(self): self.i = 0
+            async def stream(self, *a, **k):
+                reply = script[self.i] if self.i < len(script) else self_outer._close("fail", "script ran out")
+                self.i += 1
+                yield reply
+
+        self_outer = self
+
+        class Snapshot:
+            snapshot_id = "s"
+            def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
+
+        class Target:
+            kind, session_id = "web", "written-scenario"
+            def describe(self): return {"name": "t", "platform": "Web"}
+            async def snapshot(self): return Snapshot()
+            async def screenshot(self): return None
+
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                Target(), "senaryo", steps=steps or self.STEPS,
+                session_state=agent.AgentSession(),
+            ):
+                events.append(json.loads(line))
+        return events
+
+    @staticmethod
+    def _finished(events):
+        return next(e for e in events if e["event"] == "finished")
+
+    @staticmethod
+    def _verdicts(events):
+        return [
+            (e["index"], e["status"])
+            for e in events if e["event"] == "scenario_step_finished"
+        ]
+
+    async def test_each_step_is_reported_on_its_own(self):
+        events = await self._run([
+            self.ASSERT, self._close("pass", "ok"),
+            self.ASSERT, self._close("pass", "ok"),
+        ])
+        self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "passed")])
+        self.assertEqual(self._finished(events)["status"], "passed")
+
+    async def test_one_failed_step_fails_the_run_and_names_itself(self):
+        events = await self._run([
+            self.ASSERT, self._close("pass", "ok"),
+            self.ASSERT, self._close("fail", "beklenen cikmadi"),
+        ])
+        self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "failed")])
+        finished = self._finished(events)
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("Step 2", finished["summary"])
+
+    async def test_a_step_that_proves_nothing_cannot_pass(self):
+        # The same trap as a green run that asserted nothing, one scale down:
+        # a step with an expected result has to actually check it.
+        events = await self._run([self._close("pass", "kanit yok"), self.ASSERT,
+                                  self._close("pass", "ok")])
+        self.assertEqual(self._verdicts(events)[0], (1, "failed"))
+
+    async def test_a_step_without_an_expected_result_may_close_unproven(self):
+        # Nothing was claimed, so nothing has to be proved — the step is
+        # reported as carried out rather than verified.
+        events = await self._run(
+            [self._close("pass", "yapildi")],
+            steps=[{"action": "Sadece git", "expected": ""}],
+        )
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_a_step_that_never_closes_is_cut_off_not_left_running(self):
+        # Otherwise it spends the whole run's budget and starves the steps
+        # behind it.
+        events = await self._run([self.ASSERT] * 40, steps=[
+            {"action": "Bitmeyen adim", "expected": "hic gelmez"},
+            {"action": "Sonraki adim", "expected": "yine de kosmali"},
+        ])
+        verdicts = self._verdicts(events)
+        self.assertEqual(verdicts[0], (1, "failed"))
+        # The second step still got its turn rather than inheriting an
+        # exhausted ceiling.
+        self.assertGreaterEqual(len(verdicts), 2)
+
+    async def test_a_run_without_steps_keeps_the_open_ended_prompt(self):
+        self.assertNotIn("step_done", agent.build_system_prompt("web"))
+        self.assertIn("step_done", agent.build_system_prompt("web", stepwise=True))

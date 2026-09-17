@@ -3990,6 +3990,28 @@ a.scan-row-url {
 
 .generated-why { margin-top: 4px; font-size: 11px; color: var(--text-tertiary); }
 
+/* Generated steps, previewed before the scenario is saved. Numbered because
+   the order is part of what is being reviewed. */
+.generated-steps {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.generated-steps li::marker { color: var(--text-tertiary); }
+
+.generated-step-expected {
+  display: block;
+  font-style: normal;
+  color: var(--text-tertiary);
+}
+
+.generated-step-expected::before { content: '→ '; }
+
 .generator-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 .case-idx {
@@ -4818,3 +4840,351 @@ textarea,
 }
 
 .suite-create input { grid-column: 1 / -1; }
+
+/* ==========================================================================
+   Written scenario steps
+   ========================================================================== */
+
+.step-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-2);
+  padding: var(--gap-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.step-editor-head { display: flex; align-items: baseline; gap: var(--gap-2); flex-wrap: wrap; }
+
+.step-editor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.step-editor-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--gap-2);
+}
+
+.step-editor-idx {
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.step-editor-fields { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.step-editor-fields input {
+  width: 100%;
+  height: var(--control-h-sm);
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+/* The expected result is the half that makes a step checkable, so it is
+   marked as its own thing rather than reading as a second instruction. */
+.step-editor-fields input:nth-child(2) { border-left: 2px solid var(--accent-border); }
+
+.step-editor-actions { display: flex; gap: 2px; }
+
+/* --- the read-only view on a case row ----------------------------------- */
+
+.case-steps {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  counter-reset: qai-step;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.case-steps li {
+  counter-increment: qai-step;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.case-steps li::before {
+  content: counter(qai-step) '.';
+  flex: none;
+  min-width: 14px;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+.case-step-expected { color: var(--accent); opacity: 0.85; }
+
+.steps-pill {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+/* --- the scenario, judged step by step ---------------------------------- */
+
+.scenario-report { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.scenario-report-step {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--gap-3);
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+/* The verdict is carried on the edge as well as the badge: scanning a long
+   scenario for the step that broke should not need reading. */
+.scenario-report-step.passed { border-left-color: var(--success); }
+.scenario-report-step.failed { border-left-color: var(--danger); }
+.scenario-report-step.running { border-left-color: var(--accent); }
+
+.scenario-report-idx {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.scenario-report-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.scenario-report-action {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.scenario-report-expected { font-size: 11.5px; color: var(--accent); opacity: 0.9; }
+.scenario-report-message { font-size: 11.5px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+
+.scenario-report-meta { display: flex; align-items: center; gap: var(--gap-2); }
+
+/* A scenario step in the live timeline. Deliberately the same shape as the
+   step in the report, so the run you watch and the run you read back look
+   like the same thing. */
+.scenario-step-entry {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--gap-3);
+  padding: 10px 12px;
+  margin: 10px 0 4px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.scenario-step-entry.passed { border-left-color: var(--success); }
+.scenario-step-entry.failed { border-left-color: var(--danger); }
+.scenario-step-entry.running { border-left-color: var(--accent); }
+
+.scenario-step-idx {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.scenario-step-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.scenario-step-action { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.scenario-step-expected,
+.scenario-step-message { font-size: 11px; color: var(--text-tertiary); }
+
+/* --------------------------------------------------------------------------
+   Fullscreen: the page or the device, filling the display
+
+   A test that takes minutes is watched, not glanced at, and the panel shares
+   its row with the chat and the inspector. Fullscreen gives the screen under
+   test the whole display; Escape leaves, as everywhere else.
+   -------------------------------------------------------------------------- */
+
+.browser-shell.fullscreen {
+  border: none;
+  border-radius: 0;
+  background: #0a0d12;
+}
+
+/* The page is re-rendered at the panel's size, so at fullscreen the frame is
+   already the size of the display — it is not a small frame scaled up. */
+.browser-shell.fullscreen .browser-viewport { background: #0a0d12; }
+
+.mirror.fullscreen {
+  width: 100vw;
+  padding: 16px 20px;
+  border-left: none;
+  background: var(--bg-sunken);
+  align-items: center;
+}
+
+.mirror.fullscreen .mirror-header,
+.mirror.fullscreen .mirror-controls { width: min(520px, 100%); }
+
+/* Grow the device to the height available instead of the sidebar's width,
+   keeping its aspect ratio — a phone screen stretched to 100vw would be
+   unreadable. */
+.mirror.fullscreen .phone-frame-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+}
+
+.mirror.fullscreen .phone-frame {
+  height: 100%;
+  width: auto;
+  max-width: 100vw;
+}
+
+/* Chromium paints a fullscreen element on black by default, which would show
+   through around a letterboxed frame. */
+.browser-shell.fullscreen::backdrop,
+.mirror.fullscreen::backdrop { background: var(--bg-sunken); }
+
+/* --------------------------------------------------------------------------
+   Device source: this computer, or a device booked from BrowserStack
+   -------------------------------------------------------------------------- */
+
+.device-source {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-3);
+  margin-bottom: var(--gap-4);
+  flex-wrap: wrap;
+}
+
+.source-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+
+.source-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h-sm);
+  padding: 0 11px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.source-tab:hover { color: var(--text-primary); }
+.source-tab.active { background: var(--bg-surface); color: var(--text-primary); }
+
+.source-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.device-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 220px;
+  max-width: 420px;
+  height: var(--control-h);
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
+}
+
+.device-filter input {
+  border: none;
+  background: none;
+  outline: none;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.platform-badge.cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Which TK build a session opens
+
+   Dev, Test and Reg are the same app on different back ends, and picking one
+   is the decision this card exists for — so they are buttons, not three
+   entries buried in an alphabetical list of everything on the phone.
+   -------------------------------------------------------------------------- */
+
+.env-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--gap-3);
+}
+
+.env-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.env-buttons { display: flex; gap: 6px; }
+
+.env-button {
+  flex: 1;
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.env-button:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-strong); }
+
+.env-button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+/* Not installed: still shown, so it is clear the option exists and where it
+   went, rather than the row silently having two buttons on one phone. */
+.env-button:disabled { opacity: 0.4; cursor: not-allowed; }

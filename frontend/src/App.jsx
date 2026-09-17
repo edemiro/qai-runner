@@ -44,7 +44,7 @@ export default function App() {
   const [selectedElement, setSelectedElement] = useState(null);
   const [hoveredElement, setHoveredElement] = useState(null);
 
-  const [fps, setFps] = useState(6);
+  const [fps, setFps] = useState(2);
   const [selectedRunId, setSelectedRunId] = useState(null);
 
   const activeSession = useMemo(
@@ -276,6 +276,24 @@ export default function App() {
     [agent, llmConfigured, toast],
   );
 
+  /* Run one saved scenario against the session that is already open, instead
+     of through a whole Test Set run. A scenario written as steps is run and
+     judged step by step here too, so this is also how a step's expected result
+     gets checked while the scenario is still being written. */
+  const runCaseHere = useCallback(
+    (item) => {
+      if (!activeSessionId) {
+        toast.warning('Connect a browser or device first — this runs on the open session.');
+        return;
+      }
+      // The workspace is where the run can actually be watched.
+      setActiveTab(activeSession?.device?.kind === 'web' ? 'web' : 'mobile');
+      setAgentSubTab('chat');
+      startAgent(item.goal, { steps: item.steps || null });
+    },
+    [activeSessionId, activeSession, startAgent, toast],
+  );
+
   // ----------------------------------------------------------------- replay -
   const replayAbort = useRef(null);
   const replayRun = useCallback(
@@ -390,7 +408,7 @@ export default function App() {
     }
 
     if (activeTab === 'suites') {
-      return <SuitesPage onOpenRun={openRunReport} />;
+      return <SuitesPage onOpenRun={openRunReport} onRunHere={runCaseHere} />;
     }
 
     if (activeTab === 'insights') {
@@ -425,6 +443,7 @@ export default function App() {
           onDisconnect={disconnectDevice}
           onSelectSession={setActiveSessionId}
           appiumRunning={appiumStatus === 'running'}
+          onOpenSettings={() => setActiveTab('settings')}
         />
       );
     }

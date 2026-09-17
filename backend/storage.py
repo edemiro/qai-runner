@@ -758,12 +758,21 @@ def get_suite(suite_id: str) -> Optional[Dict[str, Any]]:
 
 # --- suite cases ---------------------------------------------------------- #
 
-def _clean_steps(raw: Any) -> List[Dict[str, str]]:
+MAX_STEPS = 40
+
+
+def clean_steps(raw: Any) -> List[Dict[str, str]]:
     """Ordered steps, each an instruction and what it should produce.
 
     Anything without an instruction is dropped rather than stored: a step with
     no action is a row the runner would have to skip and the report would have
     to explain.
+
+    Shared by everything that accepts steps — the API, the step editor and the
+    scenario generator — so a step means the same thing however it arrived.
+    The count is capped because the runner budgets its actions per step: a
+    scenario with hundreds of steps is a malformed one, and running it would
+    tie up a device for hours before anyone saw the mistake.
     """
     if not isinstance(raw, list):
         return []
@@ -778,7 +787,7 @@ def _clean_steps(raw: Any) -> List[Dict[str, str]]:
             continue
         expected = " ".join(str(entry.get("expected") or "").split())
         steps.append({"action": action[:600], "expected": expected[:600]})
-    return steps
+    return steps[:MAX_STEPS]
 
 
 def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
@@ -805,7 +814,7 @@ def add_case(
     steps: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     case_id = uuid.uuid4().hex[:16]
-    cleaned_steps = _clean_steps(steps)
+    cleaned_steps = clean_steps(steps)
     with _connect() as conn:
         idx = conn.execute(
             "SELECT COALESCE(MAX(idx), 0) + 1 AS next FROM suite_cases WHERE suite_id = ?",
@@ -840,7 +849,7 @@ def update_case(case_id: str, **fields: Any) -> bool:
         sets.append("tags = ?")
         values.append(_dump_tags(fields["tags"]))
     if "steps" in fields:
-        cleaned = _clean_steps(fields["steps"])
+        cleaned = clean_steps(fields["steps"])
         sets.append("steps = ?")
         values.append(json.dumps(cleaned, ensure_ascii=False) if cleaned else None)
     if "dataset" in fields:

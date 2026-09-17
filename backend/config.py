@@ -25,7 +25,6 @@ for _directory in (DATA_DIR, ARTIFACT_DIR, AUTH_DIR, BASELINE_DIR):
 load_dotenv(ENV_PATH)
 
 APPIUM_HOST = os.environ.get("APPIUM_HOST", "http://localhost:4723")
-DEFAULT_MODEL = "gemini-2.5-flash"
 
 # Driving a real iPhone means WebDriverAgent has to be signed, and a free Apple
 # account cannot register the stock 'com.facebook.WebDriverAgentRunner' id
@@ -33,6 +32,11 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 # names it here, so Appium looks for the build that actually exists. Empty for
 # simulators and Android, which need no signing at all.
 WDA_BUNDLE_ID = os.environ.get("WDA_BUNDLE_ID", "").strip()
+
+# BrowserStack, for running against real devices nobody has to keep on a desk.
+# Empty means the feature is simply not offered; nothing else changes.
+BROWSERSTACK_USERNAME = os.environ.get("BROWSERSTACK_USERNAME", "").strip()
+BROWSERSTACK_ACCESS_KEY = os.environ.get("BROWSERSTACK_ACCESS_KEY", "").strip()
 
 # The agent loop is bounded server-side as well as in the UI so a runaway model
 # cannot keep driving the device (and burning API quota) indefinitely.

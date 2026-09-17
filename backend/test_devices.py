@@ -106,3 +106,101 @@ class PhysicalDeviceFallback(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnvironments(unittest.TestCase):
+    """Dev, Test and Reg are the same TK app on different back ends, and which
+    one a session opens is the decision the device card exists for.
+
+    They are matched by the name the phone reports rather than by a hardcoded
+    bundle id: the ids differ per build and change, and a wrong one fails at
+    session start with nothing useful to say.
+    """
+
+    INSTALLED = [
+        {"id": "com.turkishairlines.smartmobile.enterprise.regresyon", "name": "ThyReg"},
+        {"id": "com.turkishairlines.store", "name": "TK Store"},
+    ]
+
+    def test_an_installed_environment_resolves_to_its_bundle_id(self):
+        matched = {e["label"]: e for e in devices.match_environments(self.INSTALLED)}
+        self.assertEqual(
+            matched["ThyReg"]["appId"],
+            "com.turkishairlines.smartmobile.enterprise.regresyon",
+        )
+        self.assertTrue(matched["ThyReg"]["installed"])
+
+    def test_a_missing_environment_is_still_offered_and_marked_absent(self):
+        # Shown rather than hidden: an option that silently disappears reads as
+        # the feature being broken, not as the app not being installed.
+        matched = {e["label"]: e for e in devices.match_environments(self.INSTALLED)}
+        self.assertIsNone(matched["ThyDev"]["appId"])
+        self.assertFalse(matched["ThyDev"]["installed"])
+
+    def test_all_three_are_always_returned_in_order(self):
+        labels = [e["label"] for e in devices.match_environments([])]
+        self.assertEqual(labels, ["ThyDev", "ThyTest", "ThyReg"])
+
+    def test_matching_ignores_case_and_padding(self):
+        matched = {
+            e["label"]: e
+            for e in devices.match_environments([{"id": "x.y", "name": "  thyreg "}])
+        }
+        self.assertEqual(matched["ThyReg"]["appId"], "x.y")
+
+    def test_an_unrelated_app_never_becomes_an_environment(self):
+        matched = devices.match_environments([{"id": "a.b", "name": "TK Store"}])
+        self.assertTrue(all(e["appId"] is None for e in matched))
+
+
+class IosAppListing(unittest.IsolatedAsyncioTestCase):
+    """iOS apps are read with Xcode's own device tool. The previous route
+    needed libimobiledevice, which is a separate install and usually missing —
+    and when it was missing the list came back empty, which reads as "this
+    phone has no apps" rather than "the tool is not here"."""
+
+    REPORT = {
+        "result": {
+            "apps": [
+                {"bundleIdentifier": "com.turkishairlines.smartmobile.enterprise.regresyon",
+                 "name": "ThyReg"},
+                {"bundleIdentifier": "com.qai.WebDriverAgentRunner.xctrunner",
+                 "name": "WebDriverAgentRunner-Runner"},
+                {"bundleIdentifier": "com.example.clip", "name": "Clip", "appClip": True},
+                {"name": "No bundle id"},
+            ]
+        }
+    }
+
+    async def _list(self, report):
+        import json as json_module
+
+        def write_report(cmd, timeout=0):
+            path = cmd[cmd.index("--json-output") + 1]
+            with open(path, "w", encoding="utf-8") as handle:
+                json_module.dump(report, handle)
+            return ""
+
+        with patch.object(devices, "_run", AsyncMock(side_effect=write_report)):
+            return await devices._ios_apps_via_devicectl("udid")
+
+    async def test_apps_are_read_with_their_real_names(self):
+        apps = await self._list(self.REPORT)
+        self.assertIn(
+            {"id": "com.turkishairlines.smartmobile.enterprise.regresyon", "name": "ThyReg"},
+            apps,
+        )
+
+    async def test_the_automation_runner_is_not_offered_as_a_target(self):
+        # WebDriverAgent is how QAi drives the phone, not something to test.
+        names = [app["name"] for app in await self._list(self.REPORT)]
+        self.assertNotIn("WebDriverAgentRunner-Runner", names)
+
+    async def test_app_clips_and_malformed_entries_are_skipped(self):
+        ids = [app["id"] for app in await self._list(self.REPORT)]
+        self.assertNotIn("com.example.clip", ids)
+        self.assertEqual(len(ids), 1)
+
+    async def test_an_unreadable_report_is_an_empty_list_not_a_crash(self):
+        with patch.object(devices, "_run", AsyncMock(return_value="")):
+            self.assertEqual(await devices._ios_apps_via_devicectl("udid"), [])

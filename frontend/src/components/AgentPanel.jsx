@@ -343,6 +343,33 @@ export function AgentPanel({
                 </div>
               );
             }
+            // The scenario's own steps head the actions taken to satisfy them,
+            // so the timeline reads as "step 2 of 5, and here is what it did".
+            if (entry.type === 'scenario-step') {
+              return (
+                <div key={entry.key} className={`scenario-step-entry ${entry.status}`}>
+                  <span className="scenario-step-idx">
+                    {entry.index}/{entry.total}
+                  </span>
+                  <div className="scenario-step-body">
+                    <div className="scenario-step-action">{entry.action}</div>
+                    {entry.expected && (
+                      <div className="scenario-step-expected">Expected: {entry.expected}</div>
+                    )}
+                    {entry.message && (
+                      <div className="scenario-step-message">{entry.message}</div>
+                    )}
+                  </div>
+                  {entry.status !== 'running' && (
+                    <span
+                      className={`verdict verdict-${entry.status === 'passed' ? 'pass' : 'fail'}`}
+                    >
+                      {entry.status === 'passed' ? 'Pass' : 'Fail'}
+                    </span>
+                  )}
+                </div>
+              );
+            }
             if (entry.type === 'step') return <StepEntry key={entry.key} entry={entry} />;
             if (entry.type === 'error') {
               return (

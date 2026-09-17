@@ -644,3 +644,131 @@ def test_an_execution_defaults_to_web_when_no_platform_is_given():
     finally:
         with storage._connect() as conn:
             conn.execute("DELETE FROM suite_runs WHERE id = ?", (suite_run_id,))
+
+
+# --- scenario steps -------------------------------------------------------
+#
+# Steps are what turns a scenario from "did it pass" into "which step failed",
+# so they have to survive the round trip to the database intact and in order.
+
+
+def _suite_with_steps(steps):
+    suite_id = storage.create_suite("Adimli", kind="web")
+    case_id = storage.add_case(suite_id, name="Senaryo", goal="g", steps=steps)
+    return storage.get_case(case_id)
+
+
+def test_steps_keep_their_order_and_expected_results():
+    case = _suite_with_steps([
+        {"action": "Ucus ara", "expected": "Sonuc listesi gelir"},
+        {"action": "Ilk ucusu sec", "expected": "Yolcu formu acilir"},
+    ])
+    assert [s["action"] for s in case["steps"]] == ["Ucus ara", "Ilk ucusu sec"]
+    assert case["steps"][1]["expected"] == "Yolcu formu acilir"
+
+
+def test_a_step_with_no_action_is_dropped_not_stored():
+    # An empty row in the editor is not a step the runner could carry out.
+    case = _suite_with_steps([
+        {"action": "Giris yap", "expected": "Ana sayfa"},
+        {"action": "   ", "expected": "bos"},
+        {"action": "", "expected": ""},
+    ])
+    assert len(case["steps"]) == 1
+
+
+def test_a_step_may_omit_its_expected_result():
+    case = _suite_with_steps([{"action": "Sadece git"}])
+    assert case["steps"] == [{"action": "Sadece git", "expected": ""}]
+
+
+def test_a_plain_string_is_accepted_as_a_step():
+    case = _suite_with_steps(["Ucus ara"])
+    assert case["steps"] == [{"action": "Ucus ara", "expected": ""}]
+
+
+def test_junk_steps_leave_the_case_without_any():
+    assert _suite_with_steps("not a list")["steps"] == []
+    assert _suite_with_steps([None, 42])["steps"] == []
+
+
+def test_editing_a_case_can_replace_its_steps():
+    suite_id = storage.create_suite("Adimli", kind="web")
+    case_id = storage.add_case(suite_id, name="S", goal="g",
+                               steps=[{"action": "Eski", "expected": "x"}])
+    storage.update_case(case_id, steps=[{"action": "Yeni", "expected": "y"}])
+    assert storage.get_case(case_id)["steps"] == [{"action": "Yeni", "expected": "y"}]
+
+
+def test_step_results_are_recorded_against_the_run_in_order():
+    run_id = storage.create_run(goal="g", kind="web")
+    first = storage.start_scenario_step(run_id, 1, "Ucus ara", "Sonuc listesi")
+    storage.finish_scenario_step(first, "passed", "liste gorundu", actions_used=3)
+    second = storage.start_scenario_step(run_id, 2, "Sec", "Form acilir")
+    storage.finish_scenario_step(second, "failed", "form acilmadi", actions_used=12)
+
+    steps = storage.list_scenario_steps(run_id)
+    assert [(s["idx"], s["status"]) for s in steps] == [(1, "passed"), (2, "failed")]
+    assert steps[0]["expected"] == "Sonuc listesi"
+    assert steps[1]["message"] == "form acilmadi"
+    assert steps[1]["actions_used"] == 12
+
+
+def test_a_run_carries_its_scenario_steps_to_the_report():
+    run_id = storage.create_run(goal="g", kind="web")
+    storage.finish_scenario_step(
+        storage.start_scenario_step(run_id, 1, "Adim", "Beklenen"), "passed", "oldu",
+    )
+    assert len(storage.get_run(run_id)["scenarioSteps"]) == 1
+
+
+def test_a_run_without_steps_reports_an_empty_list_not_an_error():
+    run_id = storage.create_run(goal="g", kind="web")
+    assert storage.get_run(run_id)["scenarioSteps"] == []
+
+
+# --- scenario steps in the exported reports -------------------------------
+
+
+def _run_with_scenario_steps():
+    run_id = storage.create_run(goal="Ucus ara", kind="web")
+    storage.finish_scenario_step(
+        storage.start_scenario_step(run_id, 1, "Kalkis gir", "Alan Istanbul olur"),
+        "passed", "alan Istanbul",
+    )
+    storage.finish_scenario_step(
+        storage.start_scenario_step(run_id, 2, "Ara butonuna bas", "Sonuc listesi gelir"),
+        "failed", "liste gelmedi",
+    )
+    storage.finish_run(run_id, "failed", error="Step 2 failed: liste gelmedi")
+    return storage.get_run(run_id)
+
+
+def test_junit_names_the_scenario_step_that_failed():
+    # Someone reading this in Jenkins should not have to open QAi to find out
+    # where the scenario broke.
+    xml = reporters.junit_xml([_run_with_scenario_steps()], "TK")
+    assert "Scenario step 2 failed: Ara butonuna bas" in xml
+    assert "expected: Sonuc listesi gelir" in xml
+    assert "got: liste gelmedi" in xml
+
+
+def test_junit_prints_the_scenario_step_by_step():
+    xml = reporters.junit_xml([_run_with_scenario_steps()], "TK")
+    assert "PASS 1. Kalkis gir" in xml
+    assert "FAIL 2. Ara butonuna bas" in xml
+
+
+def test_the_json_report_carries_the_scenario_steps():
+    report = reporters.json_report([_run_with_scenario_steps()], "TK")
+    steps = report["cases"][0]["scenarioSteps"]
+    assert [(s["idx"], s["status"]) for s in steps] == [(1, "passed"), (2, "failed")]
+    assert steps[1]["expected"] == "Sonuc listesi gelir"
+
+
+def test_a_run_without_scenario_steps_reports_exactly_as_before():
+    run_id = storage.create_run(goal="Serbest kosum", kind="web")
+    storage.finish_run(run_id, "passed")
+    run = storage.get_run(run_id)
+    assert reporters.json_report([run], "TK")["cases"][0]["scenarioSteps"] == []
+    assert "scenario:" not in reporters.junit_xml([run], "TK")

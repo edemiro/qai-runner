@@ -49,10 +49,23 @@ class MobileTarget:
 
     # --- acting ---------------------------------------------------------- #
 
-    async def scroll(self, direction: str) -> ActionResult:
-        size = await appium.get_window_size(self.session_id)
+    async def scroll(self, direction: str, element_id: Optional[str] = None) -> ActionResult:
+        origin_x = origin_y = 0
+        if element_id:
+            resolved = await locator.resolve(self.session_id, self._platform_cache, element_id=element_id)
+            if resolved is None:
+                return ActionResult(False, f"Could not find the scroll container '{element_id}'")
+            bounds = resolved.element.bounds
+            if not bounds:
+                return ActionResult(False, f'"{resolved.element.describe()}" has no bounds to scroll within')
+            origin_x, origin_y = bounds["x1"], bounds["y1"]
+            width, height = max(bounds["width"], 1), max(bounds["height"], 1)
+        else:
+            size = await appium.get_window_size(self.session_id)
+            width, height = size["width"], size["height"]
+
         ok = await MobileGestureController.perform_scroll(
-            self.session_id, (direction or "down").lower(), size["width"], size["height"]
+            self.session_id, (direction or "down").lower(), width, height, origin_x, origin_y
         )
         return ActionResult(ok, f"Scrolled {direction}" if ok else f"Scroll {direction} failed")
 

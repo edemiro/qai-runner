@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Building2, Check, Cpu, Eye, EyeOff, Key, Loader2, Play, Save, Square, Terminal, Zap,
+  Building2, Check, Cloud, Cpu, Eye, EyeOff, Key, Loader2, Play, Save, Square,
+  Terminal, Zap,
 } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -365,6 +366,128 @@ function ModelCard({ onSaved }) {
   );
 }
 
+
+/**
+ * BrowserStack credentials.
+ *
+ * Optional throughout: without them the Mobile page simply offers the devices
+ * attached to this computer, which is what it did before. The key is stored
+ * the same way the model keys are — in the backend's .env, never in the
+ * browser — and is verified by actually asking BrowserStack for the device
+ * list, because a key that saves but cannot book anything is not saved.
+ */
+function BrowserStackCard() {
+  const toast = useToast();
+  const [username, setUsername] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [configured, setConfigured] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await api.browserstackStatus();
+        if (cancelled) return;
+        setConfigured(status.configured);
+        if (status.username) setUsername(status.username);
+      } catch {
+        // An older backend, or none reachable — the card still explains itself.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async (event) => {
+    event.preventDefault();
+    if (!username.trim() || !accessKey.trim()) {
+      toast.warning('Both the username and the access key are needed.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.saveBrowserstackCredentials(username.trim(), accessKey.trim());
+      setConfigured(true);
+      setAccessKey('');
+      toast.success('BrowserStack connected — its devices are on the Mobile page.');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-header">
+        <div className="card-title-group">
+          <div className="card-icon">
+            <Cloud size={17} />
+          </div>
+          <div>
+            <h3 className="card-title">BrowserStack</h3>
+            <p className="card-desc">
+              Run on real devices without keeping them on a desk. Optional.
+            </p>
+          </div>
+        </div>
+        {configured && (
+          <span className="run-status passed">
+            <span className="status-dot" />
+            connected
+          </span>
+        )}
+      </div>
+
+      <form className="card-body" onSubmit={save}>
+        <label className="field">
+          <span className="field-label">Username</span>
+          <input
+            type="text"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="ergun_AbCdEf"
+            autoComplete="off"
+          />
+        </label>
+
+        <label className="field">
+          <span className="field-label">Access key</span>
+          <div className="input-with-button">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={accessKey}
+              onChange={(event) => setAccessKey(event.target.value)}
+              placeholder={configured ? 'Saved — type a new key to replace it' : 'Access key'}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => setShowKey((current) => !current)}
+              aria-label={showKey ? 'Hide the access key' : 'Show the access key'}
+            >
+              {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <span className="field-hint">
+            Both are on your BrowserStack account settings page. The app under test has
+            to be uploaded to BrowserStack already — QAi picks from what is there.
+          </span>
+        </label>
+
+        <button className="btn btn-primary" type="submit" disabled={saving}>
+          {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+          {saving ? 'Checking…' : 'Save and verify'}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 export function SettingsPage({ appiumStatus, onRefreshHealth }) {
   const toast = useToast();
   const [logs, setLogs] = useState('');
@@ -428,6 +551,7 @@ export function SettingsPage({ appiumStatus, onRefreshHealth }) {
       <div className="settings-grid">
         <AppiumCard status={appiumStatus} logs={logs} onStart={start} onStop={stop} busy={busy} />
         <ModelCard onSaved={onRefreshHealth} />
+        <BrowserStackCard />
       </div>
     </main>
   );

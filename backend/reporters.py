@@ -32,6 +32,19 @@ def _failure_text(run: Dict[str, Any]) -> str:
     if run.get("verdict_note") and run.get("verdict_note") != run.get("error"):
         lines.append(run["verdict_note"])
 
+    # For a scenario written as steps, which step failed is the first thing
+    # anyone reading this in Jenkins wants, so it goes above the agent's own
+    # actions — those explain how it failed, this says where.
+    for scenario_step in run.get("scenarioSteps", []):
+        if scenario_step.get("status") == "failed":
+            lines.append(
+                f"Scenario step {scenario_step['idx']} failed: {scenario_step['action']}"
+            )
+            if scenario_step.get("expected"):
+                lines.append(f"  expected: {scenario_step['expected']}")
+            if scenario_step.get("message"):
+                lines.append(f"  got: {scenario_step['message']}")
+
     for step in run.get("steps", []):
         if step.get("status") == "failed":
             target = f" [{step['target']}]" if step.get("target") else ""
@@ -50,6 +63,21 @@ def _failure_text(run: Dict[str, Any]) -> str:
 
 def _system_out(run: Dict[str, Any]) -> str:
     lines = [f"goal: {run.get('goal', '')}"]
+
+    scenario_steps = run.get("scenarioSteps", [])
+    if scenario_steps:
+        lines.append("scenario:")
+        for scenario_step in scenario_steps:
+            mark = {"passed": "PASS", "failed": "FAIL"}.get(
+                scenario_step.get("status"), "----"
+            )
+            lines.append(f"  {mark} {scenario_step['idx']}. {scenario_step['action']}")
+            if scenario_step.get("expected"):
+                lines.append(f"       expected: {scenario_step['expected']}")
+            if scenario_step.get("message"):
+                lines.append(f"       result:   {scenario_step['message']}")
+        lines.append("agent actions:")
+
     for step in run.get("steps", []):
         mark = "PASS" if step.get("status") == "passed" else "FAIL"
         healed = " (healed)" if step.get("healed") else ""
@@ -156,6 +184,17 @@ def json_report(runs: List[Dict[str, Any]], suite_name: str = "QAi") -> Dict[str
             "failedCount": run.get("failed_count"),
             "healedCount": run.get("healed_count", 0),
             "pageErrorCount": len(page_errors),
+            # The scenario as it was written, judged step by step. Empty for a
+            # run that was given a goal rather than steps.
+            "scenarioSteps": [
+                {
+                    "idx": s["idx"], "action": s["action"],
+                    "expected": s.get("expected"), "status": s["status"],
+                    "message": s.get("message"), "actionsUsed": s.get("actions_used"),
+                    "durationMs": s.get("duration_ms"),
+                }
+                for s in run.get("scenarioSteps", [])
+            ],
             "steps": [
                 {
                     "idx": step["idx"], "action": step["action"], "target": step.get("target"),

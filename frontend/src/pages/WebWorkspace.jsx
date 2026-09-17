@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Globe, Loader2, PanelRightClose, PanelRightOpen,
-  RefreshCw, RotateCcw, Wrench, X,
+  AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Globe, Loader2, Maximize2, Minimize2,
+  PanelRightClose, PanelRightOpen, RefreshCw, RotateCcw, Wrench, X,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -11,6 +11,7 @@ import { ScanPanel } from '../components/ScanPanel';
 import { WebTools } from '../components/WebTools';
 import { useAgentRun } from '../hooks/useAgentRun';
 import { useExplore } from '../hooks/useExplore';
+import { useFullscreen } from '../hooks/useFullscreen';
 import { useScreenStream } from '../hooks/useScreenStream';
 import { useToast } from '../hooks/useToast';
 import { parseBounds, roleColor } from '../lib/elements';
@@ -124,10 +125,14 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   const imgRef = useRef(null);
   const pressRef = useRef(null);
   const stageRef = useRef(null);
+  const shellRef = useRef(null);
 
   // While the mouse is held the page is usually animating something in
   // response, so the stream is temporarily sped up — at 4 fps a filling
   // progress ring is invisible and the hold feels like it did nothing.
+  const { isFullscreen, toggle: toggleFullscreen, supported: canFullscreen } =
+    useFullscreen(shellRef);
+
   const { screenshot, connection, lostReason } = useScreenStream(
     sessionId, holding ? Math.max(fps, 12) : fps, Boolean(sessionId),
   );
@@ -546,7 +551,10 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
         </div>
 
         <div className="web-main">
-          <div className="browser-shell">
+          <div
+            className={`browser-shell ${isFullscreen ? 'fullscreen' : ''}`}
+            ref={shellRef}
+          >
             <div className="browser-bar">
               <button className="browser-nav" onClick={() => send({ type: 'key', key: 'back' })} title="Back">
                 <ArrowLeft size={13} />
@@ -561,6 +569,16 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
               <span className="browser-size">
                 {screen.width} × {screen.height}
               </span>
+              {canFullscreen && (
+                <button
+                  className="browser-nav"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? 'Leave fullscreen (Esc)' : 'Fullscreen'}
+                  aria-label={isFullscreen ? 'Leave fullscreen' : 'Show the page fullscreen'}
+                >
+                  {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </button>
+              )}
             </div>
 
             {pageLost && (

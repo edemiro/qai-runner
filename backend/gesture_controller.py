@@ -104,20 +104,30 @@ class MobileGestureController:
         ]))
 
     @classmethod
-    async def perform_scroll(cls, session_id: str, direction: str, screen_width: int, screen_height: int) -> bool:
-        """Scroll the screen one 'page' in the given direction."""
-        mid_x, mid_y = screen_width // 2, screen_height // 2
+    async def perform_scroll(
+        cls, session_id: str, direction: str, width: int, height: int,
+        origin_x: int = 0, origin_y: int = 0,
+    ) -> bool:
+        """Scroll one 'page' in the given direction, within the rectangle at
+        (origin_x, origin_y) sized (width, height).
+
+        Defaults to the whole screen. A caller scrolling a specific container
+        (a dropdown, a picker wheel) passes that element's own bounds instead —
+        a full-screen swipe can miss a small container or scroll whatever is
+        behind it rather than the container itself.
+        """
+        mid_x, mid_y = origin_x + width // 2, origin_y + height // 2
         near, far = 0.25, 0.75
 
         direction = (direction or "down").lower()
         if direction == "down":
-            start, end = (mid_x, int(screen_height * far)), (mid_x, int(screen_height * near))
+            start, end = (mid_x, origin_y + int(height * far)), (mid_x, origin_y + int(height * near))
         elif direction == "up":
-            start, end = (mid_x, int(screen_height * near)), (mid_x, int(screen_height * far))
+            start, end = (mid_x, origin_y + int(height * near)), (mid_x, origin_y + int(height * far))
         elif direction == "left":
-            start, end = (int(screen_width * far), mid_y), (int(screen_width * near), mid_y)
+            start, end = (origin_x + int(width * far), mid_y), (origin_x + int(width * near), mid_y)
         elif direction == "right":
-            start, end = (int(screen_width * near), mid_y), (int(screen_width * far), mid_y)
+            start, end = (origin_x + int(width * near), mid_y), (origin_x + int(width * far), mid_y)
         else:
             return False
 

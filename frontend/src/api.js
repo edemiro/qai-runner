@@ -127,6 +127,15 @@ export const api = {
   deviceApps: (udid, platform) =>
     request(`/api/devices/${encodeURIComponent(udid)}/apps?platform=${encodeURIComponent(platform)}`),
 
+  // BrowserStack: the same sessions, on devices nobody has to keep on a desk.
+  browserstackStatus: () => request('/api/browserstack/status'),
+  browserstackDevices: () => request('/api/browserstack/devices'),
+  saveBrowserstackCredentials: (username, accessKey) =>
+    request('/api/browserstack/credentials', {
+      method: 'POST',
+      body: JSON.stringify({ username, accessKey }),
+    }),
+
   createSession: (device, appId) =>
     request('/api/appium/session', {
       method: 'POST',

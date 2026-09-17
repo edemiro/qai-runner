@@ -35,6 +35,8 @@ from pydantic import BaseModel
 
 import agent
 import appium_client as appium
+import browserstack
+import config
 import devices as device_discovery
 import drivers
 import explorer
@@ -255,7 +257,80 @@ async def get_devices():
 
 @app.get("/api/devices/{udid}/apps")
 async def get_device_apps(udid: str, platform: str = "Android"):
-    return {"apps": await device_discovery.list_installed_apps(udid, platform)}
+    if browserstack.is_cloud_device(udid):
+        # A cloud device has no installed apps to list; what it can run is
+        # whatever the account has uploaded.
+        apps = await _browserstack_apps()
+    else:
+        apps = await device_discovery.list_installed_apps(udid, platform)
+    # The TK builds are called out separately so the common choice is one tap
+    # rather than a search through every app on the phone.
+    return {"apps": apps, "environments": device_discovery.match_environments(apps)}
+
+
+# --------------------------------------------------------------------------- #
+# BrowserStack — the same session, on a device nobody has to keep on a desk
+# --------------------------------------------------------------------------- #
+
+class BrowserStackCredentials(BaseModel):
+    username: str
+    accessKey: str
+
+
+async def _browserstack_apps() -> List[Dict[str, Any]]:
+    if not browserstack.configured():
+        return []
+    try:
+        return [
+            {"id": app["id"], "name": app["name"], "version": app.get("version", "")}
+            for app in await browserstack.list_apps()
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"BrowserStack: {exc}")
+
+
+@app.get("/api/browserstack/status")
+async def browserstack_status():
+    user, _ = browserstack.credentials()
+    return {"configured": browserstack.configured(), "username": user or None}
+
+
+@app.post("/api/browserstack/credentials")
+async def save_browserstack_credentials(body: BrowserStackCredentials):
+    username, access_key = body.username.strip(), body.accessKey.strip()
+    if not username or not access_key:
+        raise HTTPException(status_code=400, detail="Both a username and an access key are required.")
+    config.write_env({
+        "BROWSERSTACK_USERNAME": username,
+        "BROWSERSTACK_ACCESS_KEY": access_key,
+    })
+    try:
+        await browserstack.list_devices()
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"BrowserStack did not answer: {exc}")
+    return {"status": "success", "username": username}
+
+
+@app.get("/api/browserstack/devices")
+async def browserstack_devices():
+    if not browserstack.configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Add your BrowserStack username and access key in Settings first.",
+        )
+    try:
+        return {"devices": await browserstack.list_devices()}
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"BrowserStack: {exc}")
+
+
+@app.get("/api/browserstack/apps")
+async def browserstack_apps():
+    return {"apps": await _browserstack_apps()}
 
 
 class SessionRequest(BaseModel):
@@ -298,11 +373,27 @@ def _capabilities(req: SessionRequest) -> Dict[str, Any]:
 
 @app.post("/api/appium/session")
 async def create_appium_session(req: SessionRequest):
-    if not await appium.is_server_running():
+    # A cloud device is booked from BrowserStack's own hub, so the local Appium
+    # server is neither used nor required for one.
+    on_cloud = browserstack.is_cloud_device(req.udid)
+    if on_cloud and not browserstack.configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Add your BrowserStack username and access key in Settings first.",
+        )
+    if not on_cloud and not await appium.is_server_running():
         raise HTTPException(status_code=503, detail="Appium server is not running. Start it in Settings.")
 
+    if on_cloud:
+        capabilities = browserstack.capabilities(
+            udid=req.udid, platform=req.platform, app_id=req.appId, name=req.name,
+        )
+        hub = browserstack.hub_url()
+    else:
+        capabilities, hub = _capabilities(req), None
+
     try:
-        response = await appium.create_session(_capabilities(req))
+        response = await appium.create_session(capabilities, base_url=hub)
     except ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -312,12 +403,18 @@ async def create_appium_session(req: SessionRequest):
             detail = response.json().get("value", {}).get("message", detail)
         except Exception:
             pass
-        raise HTTPException(status_code=response.status_code, detail=f"Appium refused the session: {detail}")
+        where = "BrowserStack" if on_cloud else "Appium"
+        raise HTTPException(status_code=response.status_code, detail=f"{where} refused the session: {detail}")
 
     payload = response.json()
     session_id = payload.get("value", {}).get("sessionId")
     if not session_id:
         raise HTTPException(status_code=500, detail="Appium returned no sessionId.")
+
+    # Bound before anything else touches the session: every later call has to
+    # reach the hub the session was actually made on.
+    if hub:
+        appium.bind_session(session_id, hub)
 
     platform_cache[session_id] = req.platform
     device = {
@@ -326,6 +423,7 @@ async def create_appium_session(req: SessionRequest):
         "name": req.name or req.udid,
         "appId": req.appId,
         "kind": "mobile",
+        "source": "browserstack" if on_cloud else "local",
     }
     drivers.register(MobileTarget(session_id, device, platform_cache))
     return {"status": "success", "sessionId": session_id, "device": device}
@@ -368,8 +466,8 @@ def _looks_like_headless_block(exc: Exception) -> bool:
 _NAVIGATION_HINTS = (
     (
         _HEADLESS_BLOCK_SIGNATURES,
-        "Bağlantı kuruldu ama site hiçbir şey göndermedi — hem ekransız hem pencereli "
-        "tarayıcıda, birkaç kez denendi. Bunun iki yaygın sebebi var: sitenin otomatik "
+        "Bağlantı kuruldu ama site hiçbir şey göndermedi — ekransız (arka planda "
+        "çalışan) tarayıcıyla birkaç kez denendi. Bunun iki yaygın sebebi var: sitenin otomatik "
         "tarayıcıları engelleyen koruması, ya da HTTPS trafiğini tarayan bir antivirüs / "
         "kurumsal vekil sunucu (Avast, AVG, Kaspersky, ESET, Bitdefender hepsinde var) — "
         "sertifikayı kendi imzasıyla değiştirip trafiği aktaramıyor. Site normal "
@@ -420,33 +518,18 @@ async def create_web_session(req: WebSessionRequest):
 
     note = None
     try:
+        # Every site opens the same way: in the background, shown inside QAi.
+        # There used to be a fallback here that reopened a refusing site in a
+        # visible browser window. It is gone — a second window on the desktop
+        # is not what "open this page" should do, and the sites that refuse a
+        # background browser serve it a blank shell whether or not the window
+        # is visible, so the window bought nothing.
         target = await WebTarget.launch(
             url=url, viewport=req.viewport, headless=req.headless,
             browser_name=req.browser, width=req.width, height=req.height,
         )
     except Exception as exc:
-        # Bot protection on many large sites (airlines, banks, ticketing)
-        # fingerprints headless Chrome and kills the connection at the HTTP/2
-        # layer. The same browser, visible, is served normally — so retry once
-        # rather than making the user diagnose a protocol error.
-        if not (req.headless and _looks_like_headless_block(exc)):
-            raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
-        try:
-            target = await WebTarget.launch(
-                url=url, viewport=req.viewport, headless=False,
-                browser_name=req.browser, width=req.width, height=req.height,
-            )
-            # Written as "here is what happened", not "here is a problem":
-            # nothing is required of the reader, the fallback already worked,
-            # and leading with the word "headless" only prompts the question
-            # "how do I add a head?".
-            note = (
-                "Sayfa açıldı. Bu site ekransız (arka planda çalışan) tarayıcıları "
-                "kabul etmiyor, bu yüzden QAi pencereli tam bir tarayıcıya geçti. "
-                "Pencere ekran dışında tutuluyor — sizin bir şey yapmanız gerekmiyor."
-            )
-        except Exception as retry_exc:
-            raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, retry_exc))
+        raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
 
     drivers.register(target)
     return {
@@ -557,7 +640,17 @@ async def get_session_screenshot(session_id: str):
     screenshot = await target.screenshot()
     if screenshot is None:
         raise HTTPException(status_code=502, detail="Could not read a screenshot from the target.")
-    return {"screenshot": screenshot}
+    return {"screenshot": await asyncio.to_thread(agent._shrink_for_mirror, screenshot)}
+
+
+# A real device's screenshot pipeline is not free — on a physical iPhone it
+# routinely costs 200-300ms per frame — so a "live" mirror is really a fast
+# poll, not video. The mobile UI never asks for more than 4; the web
+# workspace's own slider goes up to 15 for a Playwright page, which is cheap
+# enough to actually sustain that. This ceiling only guards against a runaway
+# client asking for more than either one would.
+_MIRROR_MAX_FPS = 15.0
+_MIRROR_DEFAULT_FPS = 2.0
 
 
 @app.websocket("/ws/session/{session_id}/screen")
@@ -566,9 +659,15 @@ async def stream_screen(websocket: WebSocket, session_id: str):
 
     The client sends {"fps": n} to retune; frames are only sent when the image
     actually changed, so a static screen costs nothing.
+
+    While an agent run is driving this session, this loop stops calling
+    target.screenshot() on its own timer — the run already grabs a frame right
+    before and right after every action, and polling on top of that only makes
+    both slower for a picture that would not have changed in between anyway.
+    It instead reads whatever the run last published.
     """
     await websocket.accept()
-    interval = 1 / 8
+    interval = 1 / _MIRROR_DEFAULT_FPS
     last_digest = None
 
     async def read_control():
@@ -577,8 +676,8 @@ async def stream_screen(websocket: WebSocket, session_id: str):
             while True:
                 message = await websocket.receive_text()
                 try:
-                    fps = float(json.loads(message).get("fps", 8))
-                    interval = 1 / max(1.0, min(fps, 30.0))
+                    fps = float(json.loads(message).get("fps", _MIRROR_DEFAULT_FPS))
+                    interval = 1 / max(1.0, min(fps, _MIRROR_MAX_FPS))
                 except Exception:
                     pass
         except Exception:
@@ -600,7 +699,19 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                 await asyncio.sleep(interval)
                 continue
 
-            screenshot = await target.screenshot()
+            if agent.is_running(session_id):
+                screenshot = agent.get_live_frame(session_id)
+                if screenshot:
+                    digest = hash(screenshot)
+                    if digest != last_digest:
+                        last_digest = digest
+                        await websocket.send_text(json.dumps({"screenshot": screenshot}))
+                    else:
+                        await websocket.send_text(json.dumps({"unchanged": True}))
+                await asyncio.sleep(max(interval, 0.5))
+                continue
+
+            screenshot = await asyncio.to_thread(agent._shrink_for_mirror, await target.screenshot())
             if screenshot:
                 digest = hash(screenshot)
                 if digest != last_digest:
@@ -801,8 +912,23 @@ async def perform_action(session_id: str, req: ActionRequest):
 # Agent
 # --------------------------------------------------------------------------- #
 
+class ScenarioStep(BaseModel):
+    """One written step: what to do, and what it should produce.
+
+    `expected` is what makes the step checkable rather than merely performed —
+    a run reports each step against it, so a step without one can only ever be
+    reported as "carried out".
+    """
+    action: str
+    expected: Optional[str] = None
+
+
 class AgentRunRequest(BaseModel):
     goal: str
+    # A scenario written as steps is run and judged one step at a time. Sent
+    # from the workspace so a saved scenario can be tried against the connected
+    # browser or device without going through a whole Test Set run.
+    steps: Optional[List[ScenarioStep]] = None
     maxSteps: Optional[int] = None
     useVision: bool = True
     tags: List[str] = []
@@ -823,6 +949,7 @@ async def agent_run(session_id: str, req: AgentRunRequest):
     stream = agent.run_agent(
         target=target,
         goal=req.goal.strip(),
+        steps=[step.model_dump() for step in req.steps] if req.steps else None,
         max_steps=req.maxSteps,
         use_vision=req.useVision,
         model=req.model,
@@ -1134,6 +1261,7 @@ class CaseBody(BaseModel):
     enabled: Optional[bool] = None
     priority: Optional[str] = None
     layer: Optional[str] = None
+    steps: Optional[List[ScenarioStep]] = None
 
 
 class ScenarioGenerateBody(BaseModel):
@@ -1209,6 +1337,7 @@ async def post_case(suite_id: str, body: CaseBody):
         suite_id, body.name, body.goal, url=body.url, tags=body.tags,
         dataset=body.dataset, auth_profile=body.authProfile,
         source_run_id=body.sourceRunId, priority=body.priority, layer=body.layer,
+        steps=[step.model_dump() for step in body.steps] if body.steps else None,
     )
     return storage.get_case(case_id)
 
@@ -1222,6 +1351,7 @@ async def post_cases_bulk(suite_id: str, body: BulkCaseBody):
             suite_id, case.name, case.goal, url=case.url, tags=case.tags,
             dataset=case.dataset, auth_profile=case.authProfile,
             source_run_id=case.sourceRunId, priority=case.priority, layer=case.layer,
+            steps=[step.model_dump() for step in case.steps] if case.steps else None,
         ))
         for case in body.cases
     ]
@@ -1286,18 +1416,11 @@ async def generate_scenarios(body: ScenarioGenerateBody):
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         try:
-            # The same headless fallback the workspace uses: the airline and
-            # banking sites this is aimed at fingerprint headless Chrome.
+            # In the background, like the workspace: reading a page to write
+            # scenarios from should never put a browser window on the desktop.
             target = await WebTarget.launch(url=url, viewport="desktop", headless=True)
         except Exception as exc:
-            if not _looks_like_headless_block(exc):
-                raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
-            try:
-                target = await WebTarget.launch(url=url, viewport="desktop", headless=False)
-            except Exception as retry_exc:
-                raise HTTPException(
-                    status_code=502, detail=_explain_navigation_failure(url, retry_exc)
-                )
+            raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
         try:
             snapshot = await target.snapshot()
             if snapshot is not None:
@@ -1351,11 +1474,14 @@ async def patch_case(case_id: str, body: CaseBody):
     fields: Dict[str, Any] = {
         "name": body.name, "goal": body.goal, "url": body.url,
         "tags": body.tags, "auth_profile": body.authProfile,
+        "priority": body.priority, "layer": body.layer,
     }
     if body.dataset is not None:
         fields["dataset"] = body.dataset
     if body.enabled is not None:
         fields["enabled"] = body.enabled
+    if body.steps is not None:
+        fields["steps"] = [step.model_dump() for step in body.steps]
     if not storage.update_case(case_id, **fields):
         raise HTTPException(status_code=404, detail="Case not found.")
     return storage.get_case(case_id)

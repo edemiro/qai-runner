@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
 import {
-  ChevronLeft, Circle, CornerDownLeft, KeyboardOff, MousePointerClick,
-  RefreshCw, Smartphone, Square,
+  ChevronLeft, Circle, CornerDownLeft, KeyboardOff, Maximize2, Minimize2,
+  MousePointerClick, RefreshCw, Smartphone, Square,
 } from 'lucide-react';
 import { api } from '../api';
+import { useFullscreen } from '../hooks/useFullscreen';
 import { useToast } from '../hooks/useToast';
 
 const DRAG_THRESHOLD_PX = 8;
@@ -25,6 +26,9 @@ export function DeviceMirror({
   const toast = useToast();
   const imgRef = useRef(null);
   const pressRef = useRef(null);
+  const mirrorRef = useRef(null);
+  const { isFullscreen, toggle: toggleFullscreen, supported: canFullscreen } =
+    useFullscreen(mirrorRef);
   const [typedText, setTypedText] = useState('');
   const [pickMode, setPickMode] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -129,7 +133,7 @@ export function DeviceMirror({
   };
 
   return (
-    <aside className="mirror">
+    <aside className={`mirror ${isFullscreen ? 'fullscreen' : ''}`} ref={mirrorRef}>
       <header className="mirror-header">
         <div>
           <h2 className="mirror-title">{isWeb ? 'Page' : 'Device'}</h2>
@@ -142,6 +146,16 @@ export function DeviceMirror({
             <span className="status-dot" />
             {connection === 'live' ? 'socket' : connection === 'polling' ? 'polling' : connection}
           </span>
+        )}
+        {sessionId && canFullscreen && (
+          <button
+            className="btn-icon"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Leave fullscreen (Esc)' : 'Fullscreen'}
+            aria-label={isFullscreen ? 'Leave fullscreen' : 'Show the screen fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
         )}
       </header>
 
@@ -268,7 +282,7 @@ export function DeviceMirror({
               id="fps-slider"
               type="range"
               min="1"
-              max="20"
+              max="4"
               value={fps}
               onChange={(event) => onFpsChange(Number(event.target.value))}
             />

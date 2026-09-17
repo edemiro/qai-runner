@@ -102,6 +102,7 @@ async def write_scenarios(
         storage.add_case(
             suite["id"], scenario["title"], scenario["goal"], url=url,
             priority=scenario["priority"], layer=scenario["layer"],
+            steps=scenario.get("steps") or None,
         )
 
     written = len(result["scenarios"])

@@ -6,9 +6,11 @@ import { api } from '../api';
  *
  * The socket only pushes a frame when the image actually changed, so a static
  * screen costs nothing — unlike the old loop that re-fetched a full base64 PNG
- * over HTTP `fps` times a second regardless.
+ * over HTTP `fps` times a second regardless. A real device's screenshot
+ * pipeline costs a couple hundred ms per frame, so 2 (up to 4) is the rate
+ * this can actually sustain — higher just queues requests behind each other.
  */
-export function useScreenStream(sessionId, fps = 8, enabled = true) {
+export function useScreenStream(sessionId, fps = 2, enabled = true) {
   const [screenshot, setScreenshot] = useState(null);
   // idle | live | polling | error | lost
   const [connection, setConnection] = useState('idle');

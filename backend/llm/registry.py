@@ -1,7 +1,8 @@
 """The provider catalogue and the active-provider selection.
 
-Keys are stored per provider, so switching between them does not discard the
-key you already saved for the other two.
+QAi drives the agent on Claude only. Other providers were dropped from here
+rather than left toggleable, so there is exactly one code path to reason
+about and no second key sitting around half-configured.
 """
 
 import os
@@ -11,32 +12,14 @@ from typing import Any, Dict, Iterator, List, Optional
 from config import ENV_PATH, write_env
 from .base import LLMProvider, ProviderError
 from .claude import ClaudeProvider
-from .gemini import GeminiProvider
-from .openai_provider import OpenAIProvider
 
 _PROVIDERS: Dict[str, LLMProvider] = {
-    p.id: p for p in (GeminiProvider(), ClaudeProvider(), OpenAIProvider())
+    p.id: p for p in (ClaudeProvider(),)
 }
 
-# Suggested models per provider. These are starting points, not a whitelist —
-# the UI lets you type any model id, because every provider's lineup moves
-# faster than a hardcoded list can follow.
+# Suggested models. Not a whitelist — the UI lets you type any model id,
+# because a provider's lineup moves faster than a hardcoded list can follow.
 CATALOG: List[Dict[str, Any]] = [
-    {
-        "id": "gemini",
-        "label": "Gemini (Google)",
-        "envKey": "GEMINI_API_KEY",
-        "keyHint": "AIzaSy…",
-        "consoleUrl": "https://aistudio.google.com/apikey",
-        # Google retires model ids for new keys, so the defaults are the
-        # rolling aliases rather than a pinned version that goes stale.
-        "defaultModel": "gemini-flash-latest",
-        "models": [
-            {"id": "gemini-flash-latest", "note": "Fast and cheap — a good default for step-by-step driving"},
-            {"id": "gemini-pro-latest", "note": "Slower, stronger reasoning for tangled flows"},
-            {"id": "gemini-flash-lite-latest", "note": "Cheapest; fine for simple flows"},
-        ],
-    },
     {
         "id": "claude",
         "label": "Claude (Anthropic)",
@@ -60,24 +43,10 @@ CATALOG: List[Dict[str, Any]] = [
             {"id": "claude-haiku-4-5", "note": "Fastest and cheapest, for simple flows"},
         ],
     },
-    {
-        "id": "openai",
-        "label": "ChatGPT (OpenAI)",
-        "envKey": "OPENAI_API_KEY",
-        "keyHint": "sk-…",
-        "consoleUrl": "https://platform.openai.com/api-keys",
-        "defaultModel": "gpt-4o",
-        "models": [
-            {"id": "gpt-4o", "note": "Vision-capable general model"},
-            {"id": "gpt-4o-mini", "note": "Cheaper and faster"},
-            {"id": "gpt-4.1", "note": "Stronger reasoning"},
-            {"id": "gpt-4.1-mini", "note": "Balanced cost and capability"},
-        ],
-    },
 ]
 
 _BY_ID = {entry["id"]: entry for entry in CATALOG}
-DEFAULT_PROVIDER = "gemini"
+DEFAULT_PROVIDER = "claude"
 
 
 def catalog() -> List[Dict[str, Any]]:
@@ -148,10 +117,6 @@ def active_model() -> str:
     model = os.environ.get("LLM_MODEL", "").strip()
     if model:
         return model
-    # Migration path: earlier versions stored a bare Gemini model here.
-    legacy = os.environ.get("DEFAULT_MODEL", "").strip()
-    if legacy and active_provider_id() == "gemini":
-        return legacy
     return default_model(active_provider_id())
 
 

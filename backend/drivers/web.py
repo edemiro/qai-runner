@@ -65,6 +65,40 @@ def run_artifact_dir(run_id: str) -> str:
 # visible monitor.
 OFFSCREEN_POSITION = "-32000,-32000"
 
+# Asked for far outside any display. Every platform clamps this to what it will
+# allow; the point is to end up as close to the corner as the window manager
+# permits, not to land on these exact coordinates.
+PARK_BOUNDS = {"left": 30000, "top": 30000, "width": 100, "height": 100}
+
+
+async def park_window(page: Any) -> None:
+    """Get a headed browser window out of the user's way, after it exists.
+
+    The page is watched inside QAi, which is fed by screenshots, so the window
+    itself has nothing to show anyone — it is a by-product of sites that refuse
+    a headless browser. macOS clamps a window back onto the screen no matter
+    what --window-position asked for, so the window has to be moved once it is
+    open, over CDP, where the clamp only applies at the edges.
+
+    Two things this deliberately does not do. It does not minimise the window:
+    a minimised window stops painting and the frames the panel needs stop with
+    it. And it does not shrink the viewport — the page keeps rendering at the
+    size the panel shows it at, because the viewport is an emulation override
+    and has nothing to do with how big the window is.
+
+    Best effort by design: a window that cannot be moved is untidy, not broken,
+    and is never worth failing a launch over.
+    """
+    try:
+        cdp = await page.context.new_cdp_session(page)
+        window = await cdp.send("Browser.getWindowForTarget")
+        await cdp.send(
+            "Browser.setWindowBounds",
+            {"windowId": window["windowId"], "bounds": dict(PARK_BOUNDS)},
+        )
+    except Exception as exc:
+        print(f"[web] could not move the browser window aside: {exc}")
+
 
 def _launch_args(headless: bool, offscreen: bool, browser_name: str) -> List[str]:
     """Extra Chromium flags for this launch.
@@ -79,6 +113,12 @@ def _launch_args(headless: bool, offscreen: bool, browser_name: str) -> List[str
 
     Only Chromium takes these flags, and only a headed launch has a window to
     move.
+
+    macOS ignores the position flag — it clamps a new window back onto the
+    screen, so on a Mac this alone leaves a full browser window sitting on top
+    of the user's work. `park_window` does the actual moving there; the flag is
+    kept because it is what works on Windows and Linux, before any window has
+    been painted.
     """
     if headless or not offscreen or browser_name != "chromium":
         return []
@@ -481,6 +521,11 @@ class WebTarget:
             page = await context.new_page()
             page.set_default_timeout(15000)
 
+            # Before the first navigation, so the window is already aside by
+            # the time the site paints anything.
+            if not headless and offscreen and browser_name == "chromium":
+                await park_window(page)
+
             # Subscribe before navigating: a page that throws while loading —
             # which is most of them — would otherwise report a clean console.
             events: List[Dict[str, Any]] = []
@@ -682,7 +727,7 @@ class WebTarget:
 
     # --- acting ---------------------------------------------------------- #
 
-    async def scroll(self, direction: str) -> ActionResult:
+    async def scroll(self, direction: str, element_id: Optional[str] = None) -> ActionResult:
         direction = (direction or "down").lower()
         deltas = {
             "down": (0, 0.8), "up": (0, -0.8),
@@ -690,11 +735,32 @@ class WebTarget:
         }
         if direction not in deltas:
             return ActionResult(False, f"Unknown scroll direction '{direction}'")
-
         dx, dy = deltas[direction]
+
+        box = None
+        if element_id:
+            snapshot = self._find_snapshot(None)
+            element = snapshot.elements_by_id.get(element_id) if snapshot else None
+            if element is None:
+                return ActionResult(False, f"Could not find the scroll container '{element_id}'")
+            try:
+                box = await self.page.locator(element.selector).first.bounding_box()
+            except Exception:
+                box = None
+            if box is None:
+                return ActionResult(False, f'"{element.describe()}" is not visible to scroll within')
+
         try:
-            size = self.page.viewport_size or {"width": 1440, "height": 900}
-            await self.page.mouse.wheel(dx * size["width"], dy * size["height"])
+            if box:
+                # The wheel scrolls whatever is under the pointer, so hovering
+                # the container first is what keeps a dropdown or a picker off
+                # the page behind it, which a page-wide scroll would hit instead.
+                await self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                width, height = box["width"], box["height"]
+            else:
+                size = self.page.viewport_size or {"width": 1440, "height": 900}
+                width, height = size["width"], size["height"]
+            await self.page.mouse.wheel(dx * width, dy * height)
             await asyncio.sleep(0.4)
         except Exception as exc:
             return ActionResult(False, f"Scroll {direction} failed: {exc}")

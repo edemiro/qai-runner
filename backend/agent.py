@@ -38,6 +38,7 @@ AVAILABLE ACTIONS
 {"type":"action","action":"type","elementId":"el_4","value":"text","reason":"why"}
 {"type":"action","action":"clear","elementId":"el_4","reason":"why"}
 {"type":"action","action":"scroll","value":"down","reason":"why"}
+{"type":"action","action":"scroll","value":"down","elementId":"el_7","reason":"why"}
 {"type":"action","action":"swipe","value":"left","reason":"why"}
 {"type":"action","action":"key","value":"back","reason":"why"}
 {"type":"action","action":"wait","value":"2","reason":"why"}
@@ -50,7 +51,11 @@ AVAILABLE ACTIONS
 {"type":"action","action":"done","value":"pass","reason":"one-line summary of the outcome"}
 ```
 
-`scroll` and `swipe` take one of: up, down, left, right.
+`scroll` and `swipe` take one of: up, down, left, right. Add `elementId` to
+  scroll within one specific container — a dropdown, a picker wheel, a
+  sub-list — instead of the whole screen. Use it whenever that container is
+  smaller than the screen: a full-screen swipe can miss it entirely or scroll
+  the screen behind it instead, leaving the container looking unchanged.
 `key` takes one of: {keys}.
 `wait` takes a number of seconds (max 10).
 `assert_visual` compares the screen against a stored baseline named by `value`.
@@ -331,8 +336,14 @@ def _event(kind: str, **payload) -> str:
 # is taken separately and stays full resolution, so reports do not degrade.
 _LLM_IMAGE_MAX_EDGE = 1568
 
+# The live device mirror is a preview, not evidence — nobody reads pixel detail
+# off it, they read it for "did the screen change". Capped much smaller than
+# the LLM copy so streaming it costs almost nothing on the wire or on a real
+# device's screenshot pipeline.
+_MIRROR_IMAGE_MAX_EDGE = 480
 
-def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
+
+def _shrink_to(screenshot: Optional[str], max_edge: int) -> Optional[str]:
     if not screenshot:
         return screenshot
     try:
@@ -342,22 +353,58 @@ def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
 
         raw = base64.b64decode(screenshot)
         image = Image.open(io.BytesIO(raw))
-        if max(image.size) <= _LLM_IMAGE_MAX_EDGE:
+        if max(image.size) <= max_edge:
             return screenshot
-        image.thumbnail((_LLM_IMAGE_MAX_EDGE, _LLM_IMAGE_MAX_EDGE))
+        image.thumbnail((max_edge, max_edge))
         buffer = io.BytesIO()
         image.save(buffer, format="PNG", optimize=True)
         return base64.b64encode(buffer.getvalue()).decode("ascii")
     except Exception:
-        # A frame the model can still read beats no frame at all: on any
-        # decoding trouble, send what the device gave us.
+        # A frame the model (or the mirror) can still read beats no frame at
+        # all: on any decoding trouble, send what the device gave us.
         return screenshot
 
 
-async def _screen_context(target: UITarget):
-    """Snapshot the target and return (snapshot, llm json, screenshot base64)."""
+def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
+    return _shrink_to(screenshot, _LLM_IMAGE_MAX_EDGE)
+
+
+def _shrink_for_mirror(screenshot: Optional[str]) -> Optional[str]:
+    return _shrink_to(screenshot, _MIRROR_IMAGE_MAX_EDGE)
+
+
+# The live mirror's only source while a run is in progress. An agent run
+# already pulls a screenshot before and after every action; having the mirror
+# poll the device on its own timer on top of that just makes both slower, so it
+# reads this instead of calling target.screenshot() itself during a run.
+_live_frames: Dict[str, str] = {}
+
+
+def publish_live_frame(session_id: str, screenshot: Optional[str]) -> None:
+    if screenshot:
+        _live_frames[session_id] = _shrink_for_mirror(screenshot)
+
+
+def get_live_frame(session_id: str) -> Optional[str]:
+    return _live_frames.get(session_id)
+
+
+async def _screen_context(target: UITarget, use_vision: bool = True):
+    """Snapshot the target and return (snapshot, llm json, screenshot base64).
+
+    Fetched one after another, not concurrently: a real device's automation
+    driver (WDA on iOS in particular) serialises commands against the same
+    session anyway, so two requests in flight just queue behind each other
+    with extra overhead on top — measured slower end-to-end than sequential.
+    When vision is off the screenshot is never shown to the model, so it is
+    not fetched at all: capturing it just to throw it away was a full device
+    round trip for nothing on every single step.
+    """
     snapshot = await target.snapshot()
-    screenshot = await asyncio.to_thread(_shrink_for_llm, await target.screenshot())
+    if use_vision:
+        screenshot = await asyncio.to_thread(_shrink_for_llm, await target.screenshot())
+    else:
+        screenshot = None
     if snapshot is None:
         return None, '{"error": "Could not read the current screen."}', screenshot
     tree = snapshot.get_optimized_tree_for_llm()
@@ -456,7 +503,7 @@ async def _execute_action(
         return {"ok": True, "message": f"Waited {seconds:g}s", "element": None}
 
     if kind in ("scroll", "swipe"):
-        return as_dict(await target.scroll((value or "down").lower()))
+        return as_dict(await target.scroll((value or "down").lower(), element_id))
 
     if kind == "key":
         key = (value or action.get("key") or "back").lower()
@@ -559,7 +606,7 @@ async def run_agent(
     # A written scenario needs room for every step, so the ceiling is scaled to
     # the number of steps rather than capped at the free-roaming limit — 20
     # steps cannot possibly fit in the 40 actions an open-ended run gets.
-    planned_steps = storage._clean_steps(steps) if steps else []
+    planned_steps = storage.clean_steps(steps) if steps else []
     if planned_steps:
         ceiling = max_steps or (len(planned_steps) * 12 + 10)
     else:
@@ -684,7 +731,8 @@ async def run_agent(
                 )
                 continue
 
-            snapshot, screen_json, screenshot = await _screen_context(target)
+            snapshot, screen_json, screenshot = await _screen_context(target, use_vision)
+            publish_live_frame(target.session_id, screenshot)
             if snapshot is not None:
                 yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
 
@@ -890,6 +938,7 @@ async def run_agent(
             else:
                 result = await _execute_action(target, action, snapshot)
             after_shot = await target.screenshot()
+            publish_live_frame(target.session_id, after_shot)
             duration_ms = int((time.monotonic() - started) * 1000)
 
             if kind in ASSERTION_ACTIONS and result["ok"]:
@@ -936,7 +985,10 @@ async def run_agent(
             if len(state.history) > 24:
                 state.history = state.history[-24:]
 
-            await asyncio.sleep(0.6)
+            # A brief settle window for whatever the action just triggered
+            # (a transition, a keyboard animation) before the next snapshot.
+            # Longer than this only added dead time between steps.
+            await asyncio.sleep(0.3)
         else:
             final_status = "failed"
             final_error = f"Reached the {ceiling} step ceiling without finishing."

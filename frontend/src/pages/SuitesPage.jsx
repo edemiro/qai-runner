@@ -16,10 +16,11 @@ import {
 import { EmptyState } from '../components/EmptyState';
 import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
 import { ScenarioGenerator } from '../components/ScenarioGenerator';
+import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
 
-const EMPTY_CASE = { name: '', goal: '', url: '', tags: '', dataset: '' };
+const EMPTY_CASE = { name: '', goal: '', url: '', tags: '', dataset: '', steps: [] };
 
 /** Parse the tag input the same way everywhere: comma or space separated. */
 function parseTags(raw) {
@@ -81,7 +82,7 @@ function PriorityStrip({ cases }) {
   );
 }
 
-export function SuitesPage({ onOpenRun }) {
+export function SuitesPage({ onOpenRun, onRunHere }) {
   const toast = useToast();
 
   const [suites, setSuites] = useState([]);
@@ -229,6 +230,9 @@ export function SuitesPage({ onOpenRun }) {
         url: draft.url.trim() || null,
         tags: parseTags(draft.tags),
         dataset: rows,
+        // Blank rows are dropped rather than sent: an empty step is one the
+        // runner would skip and the report would have to explain.
+        steps: draft.steps.filter((step) => step.action.trim()),
       });
       setDraft(EMPTY_CASE);
       setDatasetError(null);
@@ -585,6 +589,11 @@ export function SuitesPage({ onOpenRun }) {
                     </span>
                   </label>
 
+                  <StepEditor
+                    steps={draft.steps}
+                    onChange={(steps) => setDraft({ ...draft, steps })}
+                  />
+
                   <div className="field-row">
                     <label>
                       Tags
@@ -637,8 +646,28 @@ export function SuitesPage({ onOpenRun }) {
                       <div className="case-main">
                         <span className="case-name">{item.name}</span>
                         <span className="case-goal">{item.goal}</span>
+                        {/* Steps change how the scenario is judged, not just
+                            how it reads, so the list says which scenarios have
+                            them rather than making you open each one. */}
+                        {item.steps?.length > 0 && (
+                          <ol className="case-steps">
+                            {item.steps.map((step, i) => (
+                              <li key={i}>
+                                <span className="case-step-action">{step.action}</span>
+                                {step.expected && (
+                                  <span className="case-step-expected">→ {step.expected}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
                       </div>
                       <div className="case-meta">
+                        {item.steps?.length > 0 && (
+                          <span className="pill steps-pill" title="Run and reported step by step">
+                            {item.steps.length} steps
+                          </span>
+                        )}
                         {item.layer && <span className="layer-tag">{item.layer}</span>}
                         {item.priority && (
                           <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
@@ -650,6 +679,22 @@ export function SuitesPage({ onOpenRun }) {
                           <span key={tag} className="tag">{tag}</span>
                         ))}
                       </div>
+                      {/* Trying one scenario against the browser or device
+                          already open, without waiting for a whole Test Set
+                          run — this is how a scenario gets debugged while it
+                          is being written. */}
+                      {onRunHere && (
+                        <button
+                          className="btn-icon"
+                          onClick={() => onRunHere(item)}
+                          title={item.steps?.length
+                            ? 'Run here, step by step, on the connected session'
+                            : 'Run here on the connected session'}
+                          aria-label={`Run ${item.name} on the connected session`}
+                        >
+                          <Play size={14} />
+                        </button>
+                      )}
                       {/* Picking and enabling are different decisions: one is
                           "run this now", the other is "this scenario is out of
                           service". They get separate controls. */}

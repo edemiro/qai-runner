@@ -14,6 +14,8 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   const [runId, setRunId] = useState(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [maxSteps, setMaxSteps] = useState(0);
+  // Only set while running a scenario that was written as steps.
+  const [scenarioProgress, setScenarioProgress] = useState(null);
   const abortRef = useRef(null);
   // Held in a ref so a changing callback identity never restarts a live run.
   const finishedRef = useRef(onFinished);
@@ -45,10 +47,11 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
     setStatus('idle');
     setRunId(null);
     setCurrentStep(0);
+    setScenarioProgress(null);
   }, []);
 
   const start = useCallback(
-    async (goal, { useVision = true, model = '', effort = '' } = {}) => {
+    async (goal, { useVision = true, model = '', effort = '', steps = null } = {}) => {
       if (!sessionId || status === 'running') return;
 
       const controller = new AbortController();
@@ -57,6 +60,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
       setTimeline([{ key: 'goal', type: 'goal', text: goal }]);
       setStatus('running');
       setCurrentStep(0);
+      setScenarioProgress(null);
       // The real ceiling is the server's MAX_AGENT_STEPS and it comes back on
       // run_started; showing a guessed number until then would be a lie.
       setMaxSteps(0);
@@ -69,6 +73,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
           {
             goal,
             useVision,
+            ...(steps?.length ? { steps } : {}),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
           },
@@ -86,6 +91,35 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
                 break;
               case 'message':
                 append({ type: 'thought', step: event.step, text: event.text });
+                break;
+              // A scenario run as written steps: each one opens, is judged and
+              // closes on its own, so the timeline shows where the run is in
+              // the scenario rather than only what the agent last clicked.
+              case 'scenario_step_started':
+                setScenarioProgress({ index: event.index, total: event.total });
+                append({
+                  type: 'scenario-step',
+                  index: event.index,
+                  total: event.total,
+                  action: event.action,
+                  expected: event.expected,
+                  status: 'running',
+                });
+                break;
+              case 'scenario_step_finished':
+                setTimeline((current) => {
+                  const at = current.findLastIndex(
+                    (entry) => entry.type === 'scenario-step' && entry.index === event.index,
+                  );
+                  if (at === -1) return current;
+                  const updated = [...current];
+                  updated[at] = {
+                    ...updated[at],
+                    status: event.status,
+                    message: event.message,
+                  };
+                  return updated;
+                });
                 break;
               case 'step_started':
                 append({
@@ -162,5 +196,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
     setStatus((current) => (current === 'running' ? 'cancelled' : current));
   }, [sessionId]);
 
-  return { timeline, status, runId, currentStep, maxSteps, start, stop, reset };
+  return {
+    timeline, status, runId, currentStep, maxSteps, scenarioProgress, start, stop, reset,
+  };
 }

@@ -20,6 +20,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+import storage
 from llm import Turn
 from llm import registry as providers
 
@@ -112,11 +113,27 @@ OTHERWISE — reply with one JSON array and nothing else:
    "layer": "E2E" | "Component",
    "priority": "Critical" | "High" | "Medium" | "Low",
    "goal": "<what the agent should actually do, plain instruction, one or two sentences>",
+   "steps": [
+     {"action": "<one thing to do on the screen>",
+      "expected": "<what must be true afterwards>"}
+   ],
    "rationale": "<why this priority — one sentence, Turkish>"}
 ]
 
-`goal` is what QAi executes, so write it as a direct instruction against the
-screen, ending in the check to perform. `title` is what the team reads.
+`goal` is what the team reads as the summary; `steps` is what QAi executes, one
+step at a time, and each step is reported pass or fail on its own.
+
+WRITING STEPS:
+- One action per step. "Fill the passenger form and continue" is two steps.
+- `expected` is a control point that can be seen on the screen — "the passenger
+  form opens with 2 ADT rows", not "it works". This is what the step is judged
+  against, so a vague expected result produces a vague report.
+- A step whose result cannot be checked on screen may leave `expected` empty; it
+  is then reported as carried out rather than verified. Use this sparingly, for
+  pure navigation.
+- Between 2 and 12 steps. If a scenario needs more, it is two scenarios.
+- Write the steps in the order they must run, starting from the screen the
+  scenario begins on, and end on the check the title promises.
 """
 
 
@@ -237,6 +254,11 @@ def parse(text: str) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
             # A scenario with no runnable instruction still has a usable title;
             # falling back to it beats dropping the scenario entirely.
             "goal": goal or title,
+            # Same cleaning the editor and the API go through, so a generated
+            # scenario and a hand-written one are the same kind of thing.
+            # A scenario that comes back without usable steps is still worth
+            # keeping — it runs open-ended, judged as a whole, as before.
+            "steps": storage.clean_steps(entry.get("steps")),
             "rationale": str(entry.get("rationale") or "").strip()[:300],
         })
 

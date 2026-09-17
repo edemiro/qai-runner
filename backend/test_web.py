@@ -369,9 +369,9 @@ class TestNavigationErrors(unittest.TestCase):
         return _explain_navigation_failure("https://example.test/", Exception(message))
 
     def test_protocol_error_names_both_real_causes(self):
-        """By the time this message is shown the windowed-browser retry has
-        already failed, so it must cover both bot protection and TLS scanning
-        rather than blaming one of them."""
+        """The two causes are indistinguishable from the error alone, so the
+        message must cover both bot protection and TLS scanning rather than
+        blaming one of them."""
         text = self._explain("Page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://example.test/")
         self.assertIn("otomatik tarayıcıları engelleyen", text)
         self.assertIn("antivirüs", text)
@@ -724,3 +724,41 @@ class PointerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoBrowserWindowEverOpens(unittest.IsolatedAsyncioTestCase):
+    """Opening a page must never put a browser window on the desktop.
+
+    QAi shows the page inside its own panel. A site that refuses a background
+    browser used to be reopened in a visible one, which meant a second window
+    appearing over whatever the tester was doing — and those sites serve the
+    same empty shell either way, so the window bought nothing.
+    """
+
+    async def _launch_kwargs_for(self, side_effect):
+        from unittest.mock import AsyncMock, patch
+        import main
+
+        calls = []
+
+        async def record(**kwargs):
+            calls.append(kwargs)
+            raise side_effect
+
+        with patch.object(main.WebTarget, "launch", AsyncMock(side_effect=record)):
+            with self.assertRaises(Exception):
+                await main.create_web_session(
+                    main.WebSessionRequest(url="https://example.test/")
+                )
+        return calls
+
+    async def test_a_refusing_site_is_not_retried_with_a_window(self):
+        calls = await self._launch_kwargs_for(
+            Exception("Page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://example.test/")
+        )
+        self.assertEqual(len(calls), 1, "the page was opened more than once")
+        self.assertTrue(calls[0]["headless"], "a visible browser window was launched")
+
+    async def test_an_ordinary_failure_is_also_tried_only_once(self):
+        calls = await self._launch_kwargs_for(Exception("net::ERR_NAME_NOT_RESOLVED"))
+        self.assertEqual(len(calls), 1)

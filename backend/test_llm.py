@@ -156,30 +156,24 @@ class TestRegistry(unittest.TestCase):
         from llm import registry
         return registry
 
-    def test_keys_are_stored_per_provider(self):
-        """Switching providers must not discard the other providers' keys."""
+    def test_keys_are_stored(self):
         registry = self._registry()
         registry.save("claude", "claude-opus-5", "sk-ant-test")
-        registry.save("openai", "gpt-4o", "sk-openai-test")
-
         self.assertEqual(registry.api_key_for("claude"), "sk-ant-test")
-        self.assertEqual(registry.api_key_for("openai"), "sk-openai-test")
-        self.assertEqual(registry.active_provider_id(), "openai")
+        self.assertEqual(registry.active_provider_id(), "claude")
 
-    def test_switching_back_needs_no_retyped_key(self):
+    def test_switching_models_needs_no_retyped_key(self):
         registry = self._registry()
         registry.save("claude", "claude-opus-5", "sk-ant-test")
-        registry.save("openai", "gpt-4o", "sk-openai-test")
         registry.save("claude", "claude-sonnet-5", None)  # no key re-entered
 
-        self.assertEqual(registry.active_provider_id(), "claude")
         self.assertEqual(registry.active_model(), "claude-sonnet-5")
         self.assertEqual(registry.api_key_for("claude"), "sk-ant-test")
 
-    def test_selecting_a_provider_with_no_key_is_refused(self):
+    def test_selecting_with_no_key_is_refused(self):
         registry = self._registry()
         with self.assertRaises(ProviderError):
-            registry.save("openai", "gpt-4o", None)
+            registry.save("claude", "claude-opus-5", None)
 
     def test_blank_model_falls_back_to_the_provider_default(self):
         registry = self._registry()
@@ -191,21 +185,15 @@ class TestRegistry(unittest.TestCase):
         with self.assertRaises(ProviderError):
             registry.save("llama", "whatever", "key")
 
-    def test_legacy_gemini_model_is_migrated(self):
-        """Configs written before multi-provider support stored a bare model in
-        DEFAULT_MODEL; that must keep working rather than silently reset."""
-        registry = self._registry()
-        os.environ["GEMINI_API_KEY"] = "AIza-test"
-        os.environ["DEFAULT_MODEL"] = "gemini-2.5-pro"
-        self.assertEqual(registry.active_provider_id(), "gemini")
-        self.assertEqual(registry.active_model(), "gemini-2.5-pro")
-
     def test_catalog_reports_which_keys_are_saved(self):
         registry = self._registry()
         registry.save("claude", "claude-opus-5", "sk-ant-test")
         by_id = {entry["id"]: entry for entry in registry.catalog()}
         self.assertTrue(by_id["claude"]["configured"])
-        self.assertFalse(by_id["openai"]["configured"])
+
+    def test_catalog_only_offers_claude(self):
+        registry = self._registry()
+        self.assertEqual([entry["id"] for entry in registry.catalog()], ["claude"])
 
     def test_env_write_preserves_unrelated_lines(self):
         with open(self.env_path, "w", encoding="utf-8") as f:

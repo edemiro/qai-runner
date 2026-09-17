@@ -1,8 +1,11 @@
 """Device discovery for Android (adb) and iOS (libimobiledevice or devicectl)."""
 
 import asyncio
+import json
+import os
 import shutil
-from typing import Dict, List
+import tempfile
+from typing import Dict, List, Optional
 
 
 async def _run(cmd: List[str], timeout: float = 10.0) -> str:
@@ -180,6 +183,36 @@ async def list_devices() -> List[Dict]:
     return [*android, *ios]
 
 
+# The three builds of the Turkish Airlines app the team tests against. They are
+# the same app pointed at development, test and regression back ends, so which
+# one a session opens is the single most common decision made on this screen —
+# it gets named buttons rather than a hunt through an alphabetical app list.
+#
+# Matched by the name the device itself reports, not by a hardcoded bundle id:
+# the ids differ per build and change, the names do not, and a wrong id would
+# fail at session start with nothing useful to say.
+TEST_ENVIRONMENTS = ("ThyDev", "ThyTest", "ThyReg")
+
+
+def match_environments(apps: List[Dict]) -> List[Dict]:
+    """Pair each known environment with the installed app that is it, if any.
+
+    An environment that is not installed is still returned, marked absent, so
+    the picker can show all three and say which are missing — an option that
+    quietly disappears looks like the feature is broken.
+    """
+    by_name = {str(app.get("name", "")).strip().lower(): app for app in apps}
+    matched = []
+    for label in TEST_ENVIRONMENTS:
+        app = by_name.get(label.lower())
+        matched.append({
+            "label": label,
+            "appId": app["id"] if app else None,
+            "installed": bool(app),
+        })
+    return matched
+
+
 async def list_installed_apps(udid: str, platform: str) -> List[Dict]:
     """Third-party packages/bundles, so a session can target a specific app."""
     if platform.lower() == "android":
@@ -191,6 +224,14 @@ async def list_installed_apps(udid: str, platform: str) -> List[Dict]:
         )
         return [{"id": pkg, "name": pkg.split(".")[-1]} for pkg in packages]
 
+    # devicectl first: it ships with Xcode, which is already required to drive
+    # an iPhone at all, whereas libimobiledevice is a separate install that is
+    # usually missing — and when it is missing this list came back empty, which
+    # reads as "this phone has no apps" rather than "the tool is not here".
+    apps = await _ios_apps_via_devicectl(udid)
+    if apps:
+        return apps
+
     out = await _run(["ideviceinstaller", "-u", udid, "-l"], timeout=20.0)
     apps = []
     for line in out.splitlines()[1:]:
@@ -199,4 +240,36 @@ async def list_installed_apps(udid: str, platform: str) -> List[Dict]:
             bundle_id = parts[0]
             name = parts[-1].strip('"') if len(parts) > 2 else bundle_id
             apps.append({"id": bundle_id, "name": name})
+    return sorted(apps, key=lambda a: a["name"].lower())
+
+
+async def _ios_apps_via_devicectl(udid: str) -> List[Dict]:
+    """Installed apps as Xcode's own device tool reports them.
+
+    Written to a temporary file rather than parsed from the printed table,
+    because the table is aligned for reading and an app whose name contains
+    spaces cannot be split out of it reliably.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        report = os.path.join(directory, "apps.json")
+        await _run(
+            ["xcrun", "devicectl", "device", "info", "apps",
+             "--device", udid, "--json-output", report],
+            timeout=60.0,
+        )
+        try:
+            with open(report, encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return []
+
+    apps = []
+    for entry in payload.get("result", {}).get("apps", []):
+        bundle_id = entry.get("bundleIdentifier")
+        if not bundle_id or entry.get("appClip"):
+            continue
+        # WebDriverAgent is how QAi drives the phone, not something to test.
+        if "WebDriverAgent" in bundle_id:
+            continue
+        apps.append({"id": bundle_id, "name": entry.get("name") or bundle_id})
     return sorted(apps, key=lambda a: a["name"].lower())

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, CircleSlash, Clock, Code2, Copy,
-  Download, FileArchive, FileCode2, Film, Image as ImageIcon, Loader2, Play,
-  RefreshCw, Search, Trash2, Wrench, XCircle,
+  Download, FileArchive, FileCode2, Film, Image as ImageIcon, ListChecks,
+  Loader2, Play, RefreshCw, Search, Trash2, Wrench, XCircle,
 } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -170,7 +170,11 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
   const toast = useToast();
   const [run, setRun] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('steps');
+  /* Null until the reader picks one, so a run with written steps opens on
+     them: those are the scenario, and the agent's own actions are the
+     drill-down rather than the headline. Derived instead of set in an effect,
+     which would fight the reader's own choice on every re-render. */
+  const [tab, setTab] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +197,7 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
   if (loading && !run) return <div className="pane-empty">Loading run…</div>;
   if (!run) return <div className="pane-empty">This run no longer exists.</div>;
 
+  const activeTab = tab ?? (run.scenarioSteps?.length ? 'scenario' : 'steps');
   const passed = run.steps.filter((s) => s.status === 'passed').length;
   const assertions = run.steps.filter((s) => s.action?.startsWith('assert')).length;
   const allEvents = run.pageEvents || [];
@@ -304,16 +309,26 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
       )}
 
       <div className="detail-tabs">
-        <button className={`detail-tab ${tab === 'steps' ? 'active' : ''}`} onClick={() => setTab('steps')}>
-          Steps
+        {run.scenarioSteps?.length > 0 && (
+          <button
+            className={`detail-tab ${activeTab === 'scenario' ? 'active' : ''}`}
+            onClick={() => setTab('scenario')}
+          >
+            <ListChecks size={13} />
+            Scenario steps
+            <span className="tab-count">{run.scenarioSteps.length}</span>
+          </button>
+        )}
+        <button className={`detail-tab ${activeTab === 'steps' ? 'active' : ''}`} onClick={() => setTab('steps')}>
+          {run.scenarioSteps?.length > 0 ? 'Agent actions' : 'Steps'}
         </button>
-        <button className={`detail-tab ${tab === 'export' ? 'active' : ''}`} onClick={() => setTab('export')}>
+        <button className={`detail-tab ${activeTab === 'export' ? 'active' : ''}`} onClick={() => setTab('export')}>
           <Code2 size={13} />
           Export script
         </button>
         {allEvents.length > 0 && (
           <button
-            className={`detail-tab ${tab === 'errors' ? 'active' : ''}`}
+            className={`detail-tab ${activeTab === 'errors' ? 'active' : ''}`}
             onClick={() => setTab('errors')}
           >
             <AlertTriangle size={13} />
@@ -323,7 +338,7 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
         )}
         {run.artifacts?.length > 0 && (
           <button
-            className={`detail-tab ${tab === 'artifacts' ? 'active' : ''}`}
+            className={`detail-tab ${activeTab === 'artifacts' ? 'active' : ''}`}
             onClick={() => setTab('artifacts')}
           >
             <Film size={13} />
@@ -333,7 +348,41 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
         )}
       </div>
 
-      {tab === 'steps' && (
+      {activeTab === 'scenario' && (
+        /* The scenario as the tester wrote it, judged step by step. The other
+           tab holds what the agent did to get there — one step can be several
+           clicks, and mixing the two is what made a report hard to read. */
+        <ol className="scenario-report">
+          {run.scenarioSteps.map((step) => (
+            <li key={step.id} className={`scenario-report-step ${step.status}`}>
+              <span className="scenario-report-idx">{step.idx}</span>
+              <div className="scenario-report-body">
+                <span className="scenario-report-action">{step.action}</span>
+                {step.expected && (
+                  <span className="scenario-report-expected">
+                    Expected: {step.expected}
+                  </span>
+                )}
+                {step.message && (
+                  <span className="scenario-report-message">{step.message}</span>
+                )}
+              </div>
+              <span className="scenario-report-meta">
+                {step.actions_used != null && (
+                  <span className="muted small">
+                    {step.actions_used} action{step.actions_used === 1 ? '' : 's'}
+                  </span>
+                )}
+                <span className={`verdict verdict-${step.status === 'passed' ? 'pass' : step.status === 'failed' ? 'fail' : 'other'}`}>
+                  {step.status === 'passed' ? 'Pass' : step.status === 'failed' ? 'Fail' : step.status}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {activeTab === 'steps' && (
         <ol className="report-steps">
           {run.steps.map((step) => (
             <li key={step.id} className={`report-step ${step.status}`}>
@@ -363,9 +412,9 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
         </ol>
       )}
 
-      {tab === 'export' && <ExportPanel run={run} />}
+      {activeTab === 'export' && <ExportPanel run={run} />}
 
-      {tab === 'errors' && (
+      {activeTab === 'errors' && (
         <div className="page-errors">
           <p className="muted small">
             What the browser itself reported while this run was in flight.
@@ -401,7 +450,7 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
         </div>
       )}
 
-      {tab === 'artifacts' && (
+      {activeTab === 'artifacts' && (
         <ul className="artifact-list">
           {run.artifacts.map((artifact) => (
             <li key={artifact.id} className="artifact-row">

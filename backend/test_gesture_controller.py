@@ -114,3 +114,93 @@ class TestGestureController(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScreenSize(unittest.IsolatedAsyncioTestCase):
+    """The screen is what every gesture is measured against.
+
+    XCUITest answers /window/rect and returns 404 for /window/size, which is
+    the old JSONWP endpoint. Reading only the old one meant an iPhone fell
+    through to the Android-shaped default of 1080x2400 while really being
+    430x932 — so a scroll was computed to start at y=1800, far below a screen
+    that ends at 932, and nothing moved. Measured on a real iPhone: 0% of the
+    screen changed with the wrong size, 8% with the right one.
+    """
+
+    import appium_client as appium
+
+    @staticmethod
+    def _response(status, payload=None):
+        response = MagicMock()
+        response.status_code = status
+        response.json.return_value = {"value": payload or {}}
+        return response
+
+    async def _size_from(self, answers):
+        """`answers` maps the path suffix to what the device replies."""
+        async def fake_get(path, timeout=10.0, base_url=None):
+            for suffix, response in answers.items():
+                if path.endswith(suffix):
+                    return response
+            return None
+
+        with patch.object(self.appium, "get", fake_get):
+            return await self.appium.get_window_size("s1")
+
+    async def test_an_iphone_is_read_from_window_rect(self):
+        size = await self._size_from({
+            "window/rect": self._response(200, {"x": 0, "y": 0, "width": 430, "height": 932}),
+            "window/size": self._response(404),
+        })
+        self.assertEqual(size, {"width": 430, "height": 932})
+
+    async def test_a_device_that_only_serves_the_old_endpoint_still_works(self):
+        size = await self._size_from({
+            "window/rect": self._response(404),
+            "window/size": self._response(200, {"width": 1440, "height": 3120}),
+        })
+        self.assertEqual(size, {"width": 1440, "height": 3120})
+
+    async def test_a_silent_device_falls_back_rather_than_crashing(self):
+        # The session is already in trouble here; a plausible size keeps the
+        # caller from dividing by nothing.
+        self.assertEqual(
+            await self._size_from({}), {"width": 1080, "height": 2400},
+        )
+
+    async def test_a_rect_missing_its_dimensions_is_not_trusted(self):
+        size = await self._size_from({
+            "window/rect": self._response(200, {"x": 0, "y": 0}),
+            "window/size": self._response(200, {"width": 430, "height": 932}),
+        })
+        self.assertEqual(size, {"width": 430, "height": 932})
+
+
+class ScrollGeometry(unittest.IsolatedAsyncioTestCase):
+    """A scroll has to land inside the screen it was measured against."""
+
+    async def _swipe_for(self, width, height, direction="down"):
+        sent = {}
+
+        async def capture(session_id, x1, y1, x2, y2, duration_ms=500):
+            sent.update(start=(x1, y1), end=(x2, y2), duration=duration_ms)
+            return True
+
+        with patch.object(MobileGestureController, "perform_swipe", capture):
+            await MobileGestureController.perform_scroll("s1", direction, width, height)
+        return sent
+
+    async def test_a_scroll_stays_within_the_screen(self):
+        swipe = await self._swipe_for(430, 932)
+        for x, y in (swipe["start"], swipe["end"]):
+            self.assertTrue(0 <= x <= 430, f"x={x} is off the screen")
+            self.assertTrue(0 <= y <= 932, f"y={y} is off the screen")
+
+    async def test_scrolling_down_drags_upwards(self):
+        # Content moves up to reveal what is below it.
+        swipe = await self._swipe_for(430, 932, "down")
+        self.assertGreater(swipe["start"][1], swipe["end"][1])
+
+    async def test_scrolling_up_drags_downwards(self):
+        swipe = await self._swipe_for(430, 932, "up")
+        self.assertLess(swipe["start"][1], swipe["end"][1])
