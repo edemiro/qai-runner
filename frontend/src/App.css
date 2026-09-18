@@ -2832,7 +2832,17 @@ select:disabled {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
+  flex: 1 1 auto;
   min-height: 0;
+}
+
+/* An empty detail panel should read as an intentional area, centred in the
+   space, rather than a thin band floating at the top of the page. */
+.suite-detail > .card:has(> .empty-panel:not(.compact)) {
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .suite-list {
@@ -2927,11 +2937,26 @@ select:disabled {
 
 .case-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: nowrap;
   gap: 12px;
-  padding: 10px 8px;
+  padding: 12px 10px;
   border-radius: var(--radius-sm);
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.case-row > input[type='checkbox'],
+.case-row .case-idx {
+  margin-top: 2px;
+}
+
+/* Actions stay a fixed cluster on the right, never wrapping under the row. */
+.case-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
 }
 
 .case-row:last-child {
@@ -4246,7 +4271,18 @@ a.scan-row-url {
    text the space and let the badges sit tight on the right. */
 .case-row .case-main { flex: 1 1 auto; min-width: 0; }
 .case-row .case-name { overflow-wrap: anywhere; line-height: 1.5; }
-.case-row .case-meta { flex: none; display: flex; align-items: center; gap: 6px; }
+/* Chips get a bounded lane on the right and wrap within it, so a scenario with
+   several tags never shoves the action buttons onto a second line. */
+.case-row .case-meta {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 45%;
+  margin-top: 2px;
+}
 
 .scenario-result .scenario-title { overflow-wrap: anywhere; }
 

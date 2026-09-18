@@ -668,53 +668,61 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
                             {item.steps.length} steps
                           </span>
                         )}
-                        {item.layer && <span className="layer-tag">{item.layer}</span>}
                         {item.priority && (
                           <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
                             {item.priority}
                           </span>
                         )}
+                        {item.layer && <span className="layer-tag">{item.layer}</span>}
                         {item.dataset && <span className="pill">×{item.dataset.length}</span>}
-                        {item.tags.map((tag) => (
-                          <span key={tag} className="tag">{tag}</span>
-                        ))}
+                        {/* A tag that just repeats the layer is noise — the layer
+                            chip already says it, so it is dropped here. */}
+                        {item.tags
+                          .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
+                          .map((tag) => (
+                            <span key={tag} className="tag">{tag}</span>
+                          ))}
                       </div>
-                      {/* Trying one scenario against the browser or device
-                          already open, without waiting for a whole Test Set
-                          run — this is how a scenario gets debugged while it
-                          is being written. */}
-                      {onRunHere && (
+                      {/* Actions stay grouped on the right so a long title or a
+                          stack of chips never pushes them onto their own line. */}
+                      <div className="case-actions">
+                        {/* Trying one scenario against the browser or device
+                            already open, without waiting for a whole Test Set
+                            run — this is how a scenario gets debugged while it
+                            is being written. */}
+                        {onRunHere && (
+                          <button
+                            className="btn-icon"
+                            onClick={() => onRunHere(item)}
+                            title={item.steps?.length
+                              ? 'Run here, step by step, on the connected session'
+                              : 'Run here on the connected session'}
+                            aria-label={`Run ${item.name} on the connected session`}
+                          >
+                            <Play size={14} />
+                          </button>
+                        )}
+                        {/* Picking and enabling are different decisions: one is
+                            "run this now", the other is "this scenario is out of
+                            service". They get separate controls. */}
                         <button
                           className="btn-icon"
-                          onClick={() => onRunHere(item)}
-                          title={item.steps?.length
-                            ? 'Run here, step by step, on the connected session'
-                            : 'Run here on the connected session'}
-                          aria-label={`Run ${item.name} on the connected session`}
+                          onClick={() => toggleCase(item)}
+                          title={item.enabled
+                            ? 'Disable — leave it out of runs'
+                            : 'Enable — include it in runs'}
+                          aria-label={item.enabled ? `Disable ${item.name}` : `Enable ${item.name}`}
                         >
-                          <Play size={14} />
+                          {item.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
                         </button>
-                      )}
-                      {/* Picking and enabling are different decisions: one is
-                          "run this now", the other is "this scenario is out of
-                          service". They get separate controls. */}
-                      <button
-                        className="btn-icon"
-                        onClick={() => toggleCase(item)}
-                        title={item.enabled
-                          ? 'Disable — leave it out of runs'
-                          : 'Enable — include it in runs'}
-                        aria-label={item.enabled ? `Disable ${item.name}` : `Enable ${item.name}`}
-                      >
-                        {item.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
-                      </button>
-                      <button
-                        className="btn-icon danger"
-                        onClick={() => removeCase(item.id)}
-                        aria-label={`Delete ${item.name}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                        <button
+                          className="btn-icon danger"
+                          onClick={() => removeCase(item.id)}
+                          aria-label={`Delete ${item.name}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
