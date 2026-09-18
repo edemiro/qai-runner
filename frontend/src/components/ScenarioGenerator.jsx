@@ -1,21 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Check, Globe, HelpCircle, Loader2, Sparkles, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Globe, HelpCircle, Loader2, Play, Save, Sparkles, X } from 'lucide-react';
 
 import { api } from '../api';
+import { StepEditor } from './StepEditor';
 import { useToast } from '../hooks/useToast';
 
 /**
- * Scenarios written to the Digital Channels standard, reviewed before they land.
+ * Scenarios written to the Digital Channels standard, reviewed and edited before
+ * they land.
  *
- * Three things shape this screen. Nothing saves automatically — generated
- * scenarios are proposals, and a wrong one that lands unreviewed gets copied by
- * the next person. There is no "how many" field, because the right number is a
- * property of the screen, not of the request. And when the brief is too vague
- * to write against, the model asks rather than inventing scenarios the team
- * would have to rewrite.
+ * Nothing saves automatically — generated scenarios are proposals. The reviewer
+ * (who knows the app better than the model) can rewrite the title, the goal and
+ * every step and its expected result, tick the ones to keep, name the set they
+ * go into, and — if they want it run now — name the execution and start it.
  */
 
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low'];
+const NEW_SET = '__new__';
 
 export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBrief = '', onAdded }) {
   const toast = useToast();
@@ -28,17 +29,17 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
   const [answers, setAnswers] = useState('');
   const [readFrom, setReadFrom] = useState(null);
   const [chosen, setChosen] = useState(() => new Set());
+  const [expanded, setExpanded] = useState(() => new Set());
 
-  // Where to look. A device or page that is already open is the best source
-  // there is — it is the real app in its current state — and for a mobile app
-  // it is the only one, since there is no URL to re-open.
   const [sessions, setSessions] = useState([]);
   const [source, setSource] = useState(sessionId ? 'session' : 'url');
 
   // Generating from a workspace means no Test Set is in scope yet, so one has
-  // to be chosen before the scenarios have anywhere to go.
+  // to be chosen — or named and created — before the scenarios have anywhere to go.
   const [suites, setSuites] = useState([]);
-  const [targetSuite, setTargetSuite] = useState(suiteId);
+  const [targetSuite, setTargetSuite] = useState(suiteId || NEW_SET);
+  const [newSetName, setNewSetName] = useState('');
+  const [execName, setExecName] = useState('');
   const needsTarget = !suiteId;
 
   useEffect(() => {
@@ -49,8 +50,6 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
         const data = await api.sessions();
         if (cancelled) return;
         setSessions(data.sessions || []);
-        // Default to whatever is open: if the tester has the app in front of
-        // them, that is what "look at the app" means.
         if ((data.sessions || []).length) setSource(data.sessions[0].sessionId);
       } catch {
         if (!cancelled) setSessions([]);
@@ -67,7 +66,9 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
         const data = await api.suites();
         if (cancelled) return;
         setSuites(data.suites);
-        setTargetSuite((current) => current || data.suites[0]?.id || null);
+        // Default to the first existing set if there is one, else "new".
+        setTargetSuite((current) =>
+          current && current !== NEW_SET ? current : (data.suites[0]?.id || NEW_SET));
       } catch {
         if (!cancelled) setSuites([]);
       }
@@ -93,9 +94,8 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
       setScenarios(data.scenarios);
       setRejected(data.rejected || []);
       setReadFrom(data.readFrom || null);
-      // Everything that passed the format check starts ticked: the common case
-      // is keeping them all, and unticking two is less work than ticking six.
       setChosen(new Set(data.scenarios.map((_, index) => index)));
+      setExpanded(new Set());
       if (!data.scenarios.length && !(data.questions || []).length) {
         toast.error('No scenario came back in the required format.');
       }
@@ -112,8 +112,8 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
     generate(answers);
   };
 
-  const setPriority = (index, priority) => {
-    setScenarios((list) => list.map((s, i) => (i === index ? { ...s, priority } : s)));
+  const patchScenario = (index, patch) => {
+    setScenarios((list) => list.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   };
 
   const toggle = (index) => {
@@ -124,28 +124,93 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
     });
   };
 
-  const save = async () => {
+  const toggleExpanded = (index) => {
+    setExpanded((set) => {
+      const next = new Set(set);
+      if (next.has(index)) next.delete(index); else next.add(index);
+      return next;
+    });
+  };
+
+  /** Persist the ticked scenarios; returns the created cases (with ids) so the
+   *  caller can run them, or null if nothing was saved. */
+  const persist = async () => {
     const picked = scenarios.filter((_, index) => chosen.has(index));
-    if (!picked.length) return;
-    if (!suiteId && !targetSuite) {
-      toast.warning('Create a Test Set first — the scenarios need somewhere to go.');
-      return;
+    if (!picked.length) {
+      toast.warning('Tick at least one scenario to save.');
+      return null;
     }
+
+    let destId = suiteId || targetSuite;
+    if (!suiteId && targetSuite === NEW_SET) {
+      if (!newSetName.trim()) {
+        toast.warning('Name the Test Set the scenarios go into.');
+        return null;
+      }
+      const kind = readFrom || source === 'url' ? 'web' : 'web';
+      const created = await api.createSuite({ name: newSetName.trim(), kind });
+      destId = created.id;
+    }
+    if (!destId) {
+      toast.warning('Pick or name a Test Set first.');
+      return null;
+    }
+
+    const result = await api.addCases(destId, picked.map((s) => ({
+      name: s.title,
+      goal: s.goal,
+      url: readFrom || null,
+      priority: s.priority,
+      layer: s.layer,
+      steps: s.steps || [],
+      tags: [],
+    })));
+    return { suiteId: destId, cases: result.cases || [], count: picked.length };
+  };
+
+  const clearAfterSave = () => {
+    setScenarios([]);
+    setChosen(new Set());
+    setExpanded(new Set());
+    setNewSetName('');
+    setExecName('');
+    onAdded?.();
+  };
+
+  const save = async () => {
     setBusy(true);
     try {
-      await api.addCases(suiteId || targetSuite, picked.map((s) => ({
-        name: s.title,
-        goal: s.goal,
-        url: readFrom || null,
-        priority: s.priority,
-        layer: s.layer,
-        steps: s.steps || [],
-        tags: [],
-      })));
-      toast.success(`${picked.length} scenario${picked.length > 1 ? 's' : ''} added.`);
-      setScenarios([]);
-      setChosen(new Set());
-      onAdded?.();
+      const saved = await persist();
+      if (!saved) return;
+      toast.success(`${saved.count} scenario${saved.count > 1 ? 's' : ''} saved.`);
+      clearAfterSave();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveAndRun = async () => {
+    setBusy(true);
+    try {
+      const saved = await persist();
+      if (!saved) return;
+      const caseIds = saved.cases.map((c) => c.id).filter(Boolean);
+      if (!caseIds.length) {
+        toast.error('Scenarios saved, but no ids came back to run them.');
+        clearAfterSave();
+        return;
+      }
+      const name = execName.trim() || null;
+      toast.success(`Execution started${name ? ` — ${name}` : ''}. See Test Executions.`);
+      // Fire the run and let it stream in the background; the Executions page is
+      // where progress and the report are read.
+      api.createExecution(
+        { caseIds, name, workers: 1, headless: true },
+        () => {},
+      ).catch((err) => toast.error(`Execution: ${err.message}`));
+      clearAfterSave();
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -195,20 +260,6 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
             />
           </div>
         )}
-        {needsTarget && (
-          <select
-            className="generator-suite"
-            value={targetSuite || ''}
-            onChange={(e) => setTargetSuite(e.target.value)}
-            disabled={busy}
-            aria-label="Test Set to file the scenarios into"
-          >
-            {suites.length === 0 && <option value="">No Test Set yet</option>}
-            {suites.map((suite) => (
-              <option key={suite.id} value={suite.id}>{suite.name}</option>
-            ))}
-          </select>
-        )}
         <button className="btn btn-primary" onClick={() => generate()} disabled={busy}>
           {busy ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
           {busy ? 'Writing…' : 'Generate'}
@@ -221,7 +272,7 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
           : source === 'url'
             ? 'The page is opened and read, so scenarios name real fields and buttons.'
             : 'Written from the brief alone. Point it at a device or page for real fields.'}
-        {' '}As many as the screen warrants — format and priority follow the standard.
+        {' '}Every scenario comes back with steps to review and edit before it is saved.
       </p>
 
       {questions.length > 0 && (
@@ -264,54 +315,117 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
       {scenarios.length > 0 && (
         <>
           <div className="generator-summary">
-            <strong>{scenarios.length}</strong> scenarios · {chosen.size} selected
+            <strong>{scenarios.length}</strong> scenarios · {chosen.size} selected · review and edit before saving
           </div>
           <ul className="generated-list">
-            {scenarios.map((scenario, index) => (
-              <li key={index} className={chosen.has(index) ? 'picked' : ''}>
-                <button
-                  className="pick-box"
-                  onClick={() => toggle(index)}
-                  aria-label={chosen.has(index) ? 'Do not add this scenario' : 'Add this scenario'}
-                >
-                  {chosen.has(index) ? <Check size={13} /> : <X size={13} />}
-                </button>
-                <div className="generated-body">
-                  <div className="generated-title">{scenario.title}</div>
-                  {scenario.rationale && (
-                    <div className="generated-why">{scenario.rationale}</div>
-                  )}
-                  {/* The steps are what actually gets run and reported, so they
-                      are worth reading before the scenario is saved. */}
-                  {scenario.steps?.length > 0 && (
-                    <ol className="generated-steps">
-                      {scenario.steps.map((step, i) => (
-                        <li key={i}>
-                          <span>{step.action}</span>
-                          {step.expected && (
-                            <em className="generated-step-expected">{step.expected}</em>
-                          )}
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-                <span className="layer-tag">{scenario.layer}</span>
-                <select
-                  className={`priority-select p-${scenario.priority.toLowerCase()}`}
-                  value={scenario.priority}
-                  onChange={(event) => setPriority(index, event.target.value)}
-                  title="The generator proposes a priority from the standard; you have the last word."
-                >
-                  {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </li>
-            ))}
+            {scenarios.map((scenario, index) => {
+              const isOpen = expanded.has(index);
+              const stepCount = scenario.steps?.length || 0;
+              return (
+                <li key={index} className={chosen.has(index) ? 'picked' : ''}>
+                  <div className="generated-row">
+                    <button
+                      className="pick-box"
+                      onClick={() => toggle(index)}
+                      aria-label={chosen.has(index) ? 'Do not add this scenario' : 'Add this scenario'}
+                    >
+                      {chosen.has(index) ? <Check size={13} /> : <X size={13} />}
+                    </button>
+                    <div className="generated-body">
+                      <input
+                        className="generated-title-input"
+                        value={scenario.title}
+                        onChange={(e) => patchScenario(index, { title: e.target.value })}
+                        placeholder="Scenario title"
+                        disabled={busy}
+                      />
+                      <input
+                        className="generated-goal-input"
+                        value={scenario.goal}
+                        onChange={(e) => patchScenario(index, { goal: e.target.value })}
+                        placeholder="Goal — what the agent should do"
+                        disabled={busy}
+                      />
+                      {scenario.rationale && (
+                        <div className="generated-why">{scenario.rationale}</div>
+                      )}
+                      <button
+                        type="button"
+                        className="steps-toggle"
+                        onClick={() => toggleExpanded(index)}
+                      >
+                        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        {stepCount ? `${stepCount} step${stepCount > 1 ? 's' : ''}` : 'No steps yet'} — {isOpen ? 'hide' : 'review & edit'}
+                      </button>
+                      {isOpen && (
+                        <div className="generated-steps-editor">
+                          <StepEditor
+                            steps={scenario.steps || []}
+                            onChange={(steps) => patchScenario(index, { steps })}
+                            disabled={busy}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <span className="layer-tag">{scenario.layer}</span>
+                    <select
+                      className={`priority-select p-${scenario.priority.toLowerCase()}`}
+                      value={scenario.priority}
+                      onChange={(event) => patchScenario(index, { priority: event.target.value })}
+                      title="The generator proposes a priority from the standard; you have the last word."
+                    >
+                      {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
+
+          {needsTarget && (
+            <div className="generator-target">
+              <label>Save into</label>
+              <select
+                value={targetSuite || NEW_SET}
+                onChange={(e) => setTargetSuite(e.target.value)}
+                disabled={busy}
+                aria-label="Test Set to file the scenarios into"
+              >
+                {suites.map((suite) => (
+                  <option key={suite.id} value={suite.id}>{suite.name}</option>
+                ))}
+                <option value={NEW_SET}>＋ New Test Set…</option>
+              </select>
+              {targetSuite === NEW_SET && (
+                <input
+                  type="text"
+                  className="generator-newset"
+                  value={newSetName}
+                  onChange={(e) => setNewSetName(e.target.value)}
+                  placeholder="New Test Set name"
+                  disabled={busy}
+                />
+              )}
+            </div>
+          )}
+
           <div className="generator-actions">
             <button className="btn btn-primary" onClick={save} disabled={busy || !chosen.size}>
-              Add {chosen.size} to Test Set
+              <Save size={14} /> Save {chosen.size} to Test Set
             </button>
+            <div className="generator-run">
+              <input
+                type="text"
+                className="generator-execname"
+                value={execName}
+                onChange={(e) => setExecName(e.target.value)}
+                placeholder="Execution name (optional)"
+                disabled={busy}
+              />
+              <button className="btn btn-accent" onClick={saveAndRun} disabled={busy || !chosen.size}>
+                <Play size={14} /> Save & run
+              </button>
+            </div>
             <button className="btn btn-ghost" onClick={() => setScenarios([])} disabled={busy}>
               Discard
             </button>

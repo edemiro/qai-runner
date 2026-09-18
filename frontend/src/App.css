@@ -4106,7 +4106,104 @@ a.scan-row-url {
 
 .generated-step-expected::before { content: '→ '; }
 
-.generator-actions { display: flex; gap: 8px; margin-top: 12px; }
+.generator-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+
+/* --- editable review of a generated scenario ------------------------------- */
+.generated-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.generated-title-input,
+.generated-goal-input {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.generated-title-input { font-weight: 600; }
+.generated-goal-input { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+
+.generated-title-input:hover,
+.generated-goal-input:hover { border-color: var(--border-subtle); }
+
+.generated-title-input:focus,
+.generated-goal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-raised);
+}
+
+.steps-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.steps-toggle:hover { text-decoration: underline; }
+
+.generated-steps-editor {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.generator-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.generator-target label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.generator-newset,
+.generator-execname {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.generator-newset:focus,
+.generator-execname:focus { outline: none; border-color: var(--accent); }
+
+.generator-run { display: flex; align-items: center; gap: 6px; }
+.generator-execname { min-width: 190px; }
+
+.btn-accent {
+  background: #2f9e6f;
+  border: 1px solid #2f9e6f;
+  color: #fff;
+}
+
+.btn-accent:hover:not(:disabled) { background: #34b07c; border-color: #34b07c; }
+.btn-accent:disabled { opacity: 0.5; }
 
 .case-idx {
   flex: none;
