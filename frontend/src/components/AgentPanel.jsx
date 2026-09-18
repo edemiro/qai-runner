@@ -32,15 +32,13 @@ const MODES = [
   },
   {
     id: 'write',
-    label: 'Write scenarios',
+    label: 'Create Test Scenarios',
     icon: FileText,
-    hint: 'Write scenarios for this screen into a Test Set, in the company standard. The screen is not touched.',
-  },
-  {
-    id: 'write-run',
-    label: 'Write & run',
-    icon: PlayCircle,
-    hint: 'Write the scenarios into a Test Set, then create an execution and run it.',
+    // Naming the set, and running what was written, both happen in the review
+    // dialog this opens — so there is no separate "write & run" mode, and no
+    // Test Set or execution field to fill in before the scenarios exist.
+    hint: 'Write scenarios for this screen in the company standard, then review, '
+      + 'edit and name them before they are saved — and run them from there if you want.',
   },
   {
     id: 'run',
@@ -144,7 +142,7 @@ export function AgentPanel({
   const [goal, setGoal] = useState('');
   const [mode, setMode] = useState('drive');
   const [testSet, setTestSet] = useState('');
-  // Only meaningful once a Test Set is being run (write-run or run): a set can
+  // Only meaningful when running an existing Test Set: a set can
   // be executed many times, and "Regression" beats reading the Test Set's own
   // name back in the Test Executions list on every single run.
   const [executionName, setExecutionName] = useState('');
@@ -236,12 +234,6 @@ export function AgentPanel({
         ...testSetLine, ...descriptionLine,
       ].join('\n');
     }
-    if (mode === 'write-run') {
-      return [
-        "Bu ekranın test senaryolarını çıkar, bir test sete ekle, sonra o test setin execution'ını oluşturup koştur.",
-        ...testSetLine, ...executionLine, ...descriptionLine,
-      ].join('\n');
-    }
     if (mode === 'run') {
       return [
         `"${where}" adlı test setin execution'ını oluştur ve koştur.`,
@@ -256,9 +248,9 @@ export function AgentPanel({
     if (mode === 'drive' && !goal.trim()) return;
     if (mode === 'run' && (!testSet.trim() || !knownSet)) return;
     // Writing scenarios opens a review dialog instead of saving straight away:
-    // the tester ticks, edits and names before anything lands. Running is then
-    // a button in that dialog, so write-run goes the same way.
-    if ((mode === 'write' || mode === 'write-run') && onWriteScenarios) {
+    // the tester ticks, edits and names before anything lands, and runs them
+    // from there — which is why there is no separate write-and-run mode.
+    if (mode === 'write' && onWriteScenarios) {
       onWriteScenarios(goal.trim());
       setGoal('');
       return;
@@ -451,26 +443,22 @@ export function AgentPanel({
             ))}
           </div>
 
-          {/* Everything past "test the screen" writes to, or runs, a named
-              Test Set / Execution — so those names are asked for as their own
-              labeled fields rather than left for the tester to spell out in a
-              sentence the model then has to parse back apart. */}
-          {mode !== 'drive' && (
+          {/* Only running asks for these up front. Writing scenarios names its
+              Test Set and its execution in the review dialog, once the
+              scenarios exist and there is something to name them after. */}
+          {mode === 'run' && (
             <div className="guided-fields">
               <label className="field-group">
                 <span className="field-label">Test Set</span>
-                {/* A datalist rather than a select: running needs one of
-                    these, but writing may well be into a Test Set that does
-                    not exist yet, and both want the list filtered as you type. */}
+                {/* A datalist rather than a select, so the list filters as you
+                    type on an account with many sets. */}
                 <input
                   className="composer-target"
                   type="text"
                   list="agent-test-sets"
                   value={testSet}
                   onChange={(event) => setTestSet(event.target.value)}
-                  placeholder={mode === 'run'
-                    ? 'Which Test Set to run'
-                    : 'Pick one, or type a new name'}
+                  placeholder="Which Test Set to run"
                   disabled={running}
                 />
               </label>
@@ -482,21 +470,19 @@ export function AgentPanel({
                 ))}
               </datalist>
 
-              {(mode === 'write-run' || mode === 'run') && (
-                <label className="field-group">
-                  <span className="field-label">Execution name</span>
-                  <input
-                    className="composer-target"
-                    type="text"
-                    value={executionName}
-                    onChange={(event) => setExecutionName(event.target.value)}
-                    placeholder="Optional — auto-named otherwise"
-                    disabled={running}
-                  />
-                </label>
-              )}
+              <label className="field-group">
+                <span className="field-label">Execution name</span>
+                <input
+                  className="composer-target"
+                  type="text"
+                  value={executionName}
+                  onChange={(event) => setExecutionName(event.target.value)}
+                  placeholder="Optional — auto-named otherwise"
+                  disabled={running}
+                />
+              </label>
 
-              {mode === 'run' && testSet.trim() && !knownSet && (
+              {testSet.trim() && !knownSet && (
                 <span className="composer-target-note">
                   No Test Set by that name{suites.length ? ` — ${suites.map((s) => s.name).join(', ')}` : ' yet'}
                 </span>

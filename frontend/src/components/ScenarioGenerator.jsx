@@ -174,7 +174,7 @@ export function ScenarioGenerator({
     let destId = suiteId || targetSuite;
     if (!suiteId && targetSuite === NEW_SET) {
       if (!newSetName.trim()) {
-        toast.warning('Name the Test Set the scenarios go into.');
+        toast.warning('A Test Set name is required — name the set these go into.');
         return null;
       }
       const created = await api.createSuite({
@@ -226,6 +226,12 @@ export function ScenarioGenerator({
   };
 
   const saveAndRun = async () => {
+    // Named before anything is saved: an execution with no name is one more
+    // "Test Set" in the list that nobody can tell from the others.
+    if (!execName.trim()) {
+      toast.warning('An execution name is required to run these.');
+      return;
+    }
     setBusy(true);
     try {
       const saved = await persist();
@@ -236,17 +242,19 @@ export function ScenarioGenerator({
         clearAfterSave();
         return;
       }
-      const name = execName.trim() || null;
-      toast.success(`Execution started${name ? ` — ${name}` : ''}. See Test Executions.`);
-      // Fire the run and let it stream in the background; the Executions page is
-      // where progress and the report are read.
-      api.createExecution(
-        { caseIds, name, workers: 1, headless: true },
-        () => {},
-      ).catch((err) => toast.error(`Execution: ${err.message}`));
+      // Started on the server, not streamed: this dialog closes straight after,
+      // and a streamed run dies with the connection — which is what left
+      // executions sitting at "running" with nothing in them. Headed, because
+      // the sites these scenarios are written against refuse a headless browser.
+      const { suiteRunId } = await api.startExecution({
+        caseIds, name: execName.trim(), workers: 1, headless: false,
+      });
+      toast.success(
+        `“${execName.trim()}” started${suiteRunId ? '' : ''} — follow it in Test Executions.`,
+      );
       clearAfterSave();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(`Execution could not start: ${err.message}`);
     } finally {
       setBusy(false);
     }
@@ -437,7 +445,7 @@ export function ScenarioGenerator({
                     className="generator-newset"
                     value={newSetName}
                     onChange={(e) => setNewSetName(e.target.value)}
-                    placeholder="New Test Set name — e.g. Tek yön uçuş ara"
+                    placeholder="Test Set name (required) — e.g. Tek yön uçuş ara"
                     disabled={busy}
                   />
                   <input
@@ -464,7 +472,7 @@ export function ScenarioGenerator({
                 className="generator-execname"
                 value={execName}
                 onChange={(e) => setExecName(e.target.value)}
-                placeholder="Execution name (optional)"
+                placeholder="Execution name (required to run)"
                 disabled={busy}
               />
               <button className="btn btn-accent" onClick={saveAndRun} disabled={busy || !chosen.size}>

@@ -257,6 +257,10 @@ export const api = {
   // An execution from hand-picked scenarios, from one Test Set or several.
   createExecution: (body, onEvent, signal) =>
     streamNdjson('/api/executions', { body, onEvent, signal }),
+  // Starts the execution on the server and returns its id. Use this when the
+  // caller is about to close: a streamed run dies with the connection.
+  startExecution: (body) =>
+    request('/api/executions/start', { method: 'POST', body, timeoutMs: 90000 }),
 
   runSuite: (suiteId, body, onEvent, signal) =>
     streamNdjson(`/api/suites/${suiteId}/run`, { body, onEvent, signal }),

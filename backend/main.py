@@ -1422,8 +1422,13 @@ class ExecutionBody(BaseModel):
     failOnPageError: bool = True
 
 
-@app.post("/api/executions")
-async def post_execution(body: ExecutionBody):
+# Executions started server-side. Held only so a running task is not collected
+# while it works; it removes itself when it finishes.
+_background_runs: set = set()
+
+
+def _execution_stream(body: ExecutionBody):
+    """The run for a hand-picked set of scenarios, ready to be consumed."""
     cases = storage.cases_by_id(body.caseIds)
     if not cases:
         raise HTTPException(
@@ -1434,7 +1439,7 @@ async def post_execution(body: ExecutionBody):
     sources = list({
         (case.get("suite_id"), case.get("suite_name")) for case in cases
     })
-    stream = suite_runner.run_suite(
+    return suite_runner.run_suite(
         suite_id=cases[0].get("suite_id") if len(sources) == 1 else None,
         workers=body.workers,
         cases=cases,
@@ -1445,7 +1450,58 @@ async def post_execution(body: ExecutionBody):
         record_video=body.recordVideo,
         fail_on_page_error=body.failOnPageError,
     )
-    return StreamingResponse(stream, media_type="application/x-ndjson")
+
+
+@app.post("/api/executions")
+async def post_execution(body: ExecutionBody):
+    return StreamingResponse(_execution_stream(body), media_type="application/x-ndjson")
+
+
+@app.post("/api/executions/start")
+async def post_execution_start(body: ExecutionBody):
+    """Start an execution and return as soon as it has an id.
+
+    The streaming endpoint above ties the run to the caller's connection: a
+    caller that starts a run and then closes — the review dialog does exactly
+    that — drops the stream, and the run dies after its first event with the
+    execution left sitting at "running" and no scenarios in it. This runs it on
+    the server instead, so the answer is an id to watch in Test Executions.
+    """
+    stream = _execution_stream(body)
+    started: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    async def drain() -> None:
+        try:
+            async for line in stream:
+                if started.done():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if event.get("event") == "suite_started":
+                    started.set_result(event.get("suiteRunId"))
+                elif event.get("event") == "error":
+                    started.set_exception(RuntimeError(event.get("message") or "Execution failed to start."))
+        except Exception as exc:
+            if not started.done():
+                started.set_exception(exc)
+        finally:
+            if not started.done():
+                started.set_exception(RuntimeError("The execution ended before it started."))
+
+    # Held so the task is not garbage-collected mid-run.
+    task = asyncio.create_task(drain())
+    _background_runs.add(task)
+    task.add_done_callback(_background_runs.discard)
+
+    try:
+        suite_run_id = await asyncio.wait_for(asyncio.shield(started), timeout=60)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="The execution did not start within 60s.")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"suiteRunId": suite_run_id, "started": True}
 
 
 @app.post("/api/scenarios/generate")
