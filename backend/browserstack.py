@@ -176,7 +176,9 @@ async def _fetch_apps() -> List[Dict[str, Any]]:
 
     seen: set = set()
     apps: List[Dict[str, Any]] = []
-    for path in ("/recent_group_apps", "/recent_apps"):
+    # The default page is the ten newest uploads; a team that pushes several
+    # builds a day buries last month's REG package well below that.
+    for path in ("/recent_group_apps?limit=100", "/recent_apps?limit=100"):
         try:
             raw = await _get(path)
         except httpx.HTTPStatusError as exc:

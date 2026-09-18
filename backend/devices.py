@@ -198,25 +198,36 @@ TEST_ENVIRONMENTS = ("ThyDev", "ThyTest", "ThyReg")
 # appear in the file name — "26.9.17.0_Android_Test.apk", "26.9.17.0_IOS_Test.ipa",
 # "AND_REG_1.50.0.973.apk". Matching on those tokens is what lets the ThyReg
 # button on a cloud iPhone find the iOS REG build and on a Pixel the Android one.
-_ENV_TOKENS = {"thydev": "dev", "thytest": "test", "thyreg": "reg"}
+# Several spellings name one environment: the redesign track ships under the
+# Test environment, so "…_Redesign_…" is a Test build.
+_ENV_TOKENS = {"thydev": ("dev",), "thytest": ("test", "redesign"), "thyreg": ("reg",)}
 _PLATFORM_TOKENS = {
     "android": (("android", "and_", "_and", ".apk", ".aab"), (".ipa", "ios")),
     "ios": (("ios", ".ipa"), (".apk", ".aab", "android")),
 }
+# The same account also holds other products' builds, and their names carry the
+# same words ("Ajet-Test", "BagGlobe…-DEV", "UP_TEST"). Matching on "test" alone
+# would hand the ThyTest button an Ajet package. These are not the app.
+_OTHER_PRODUCTS = (
+    "ajet", "bagglobe", "irrops", "atom", "crewapp", "tkfreight", "etechlog",
+    "cargolm", "up_test", "uptest", "sampleapp", "bws",
+)
 
 
 def _upload_for(label: str, platform: str, apps: List[Dict]) -> Optional[Dict]:
     """The newest uploaded build whose file name says this platform and env."""
-    env = _ENV_TOKENS.get(label.lower())
+    tokens = _ENV_TOKENS.get(label.lower(), ())
     wants, rejects = _PLATFORM_TOKENS.get(platform.lower(), ((), ()))
-    if not env or not wants:
+    if not tokens or not wants:
         return None
     candidates = []
     for app in apps:
         if not str(app.get("id", "")).startswith("bs://"):
             continue
         name = str(app.get("name", "")).lower()
-        if env not in name:
+        if not any(tok in name for tok in tokens):
+            continue
+        if any(other in name for other in _OTHER_PRODUCTS):
             continue
         if any(bad in name for bad in rejects) or not any(ok in name for ok in wants):
             continue
