@@ -47,6 +47,9 @@ export function ScenarioGenerator({
   const [suites, setSuites] = useState([]);
   const [targetSuite, setTargetSuite] = useState(suiteId || NEW_SET);
   const [newSetName, setNewSetName] = useState(defaultSetName || '');
+  // The module a new set files under ("Uçuş Arama"), so sets for one-way,
+  // round-trip and so on group together instead of piling up in one list.
+  const [newSetModule, setNewSetModule] = useState('');
   const [execName, setExecName] = useState('');
   const needsTarget = !suiteId;
 
@@ -169,7 +172,11 @@ export function ScenarioGenerator({
         return null;
       }
       const kind = readFrom || source === 'url' ? 'web' : 'web';
-      const created = await api.createSuite({ name: newSetName.trim(), kind });
+      const created = await api.createSuite({
+        name: newSetName.trim(),
+        kind,
+        module: newSetModule.trim() || null,
+      });
       destId = created.id;
     }
     if (!destId) {
@@ -194,6 +201,7 @@ export function ScenarioGenerator({
     setChosen(new Set());
     setExpanded(new Set());
     setNewSetName('');
+    setNewSetModule('');
     setExecName('');
     onAdded?.();
   };
@@ -418,14 +426,25 @@ export function ScenarioGenerator({
                 <option value={NEW_SET}>＋ New Test Set…</option>
               </select>
               {targetSuite === NEW_SET && (
-                <input
-                  type="text"
-                  className="generator-newset"
-                  value={newSetName}
-                  onChange={(e) => setNewSetName(e.target.value)}
-                  placeholder="New Test Set name"
-                  disabled={busy}
-                />
+                <>
+                  <input
+                    type="text"
+                    className="generator-newset"
+                    value={newSetName}
+                    onChange={(e) => setNewSetName(e.target.value)}
+                    placeholder="New Test Set name — e.g. Tek yön uçuş ara"
+                    disabled={busy}
+                  />
+                  <input
+                    type="text"
+                    className="generator-newmodule"
+                    value={newSetModule}
+                    onChange={(e) => setNewSetModule(e.target.value)}
+                    placeholder="Module (optional) — e.g. Uçuş Arama"
+                    title="Sets sharing a module are grouped together in Test Sets"
+                    disabled={busy}
+                  />
+                </>
               )}
             </div>
           )}

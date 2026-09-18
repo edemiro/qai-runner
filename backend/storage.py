@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS suites (
     description TEXT,
     kind        TEXT NOT NULL DEFAULT 'web',
     tags        TEXT,
+    -- The module a set belongs to ("Uçuş Arama"), so several sets — one-way,
+    -- round-trip, multi-city — group under one heading instead of a flat list.
+    module      TEXT,
     created_at  REAL NOT NULL,
     updated_at  REAL
 );
@@ -156,6 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON page_events(run_id, step_idx);
 # Columns added after the first release. SQLite cannot express "add if missing"
 # in DDL, so they are applied one at a time against the live table.
 MIGRATIONS = [
+    ("suites", "module", "TEXT"),
     ("runs", "suite_run_id", "TEXT"),
     ("runs", "case_id", "TEXT"),
     ("runs", "tags", "TEXT"),
@@ -687,20 +691,21 @@ def get_artifact(artifact_id: int) -> Optional[Dict[str, Any]]:
 
 def create_suite(
     name: str, description: Optional[str] = None, kind: str = "web",
-    tags: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None, module: Optional[str] = None,
 ) -> str:
     suite_id = uuid.uuid4().hex[:16]
+    module = " ".join((module or "").split())[:80] or None
     with _connect() as conn:
         conn.execute(
-            """INSERT INTO suites (id, name, description, kind, tags, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (suite_id, name[:120], description, kind, _dump_tags(tags), time.time()),
+            """INSERT INTO suites (id, name, description, kind, tags, module, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (suite_id, name[:120], description, kind, _dump_tags(tags), module, time.time()),
         )
     return suite_id
 
 
 def update_suite(suite_id: str, **fields: Any) -> bool:
-    allowed = {"name", "description", "kind"}
+    allowed = {"name", "description", "kind", "module"}
     sets, values = [], []
     for key, value in fields.items():
         if key in allowed and value is not None:

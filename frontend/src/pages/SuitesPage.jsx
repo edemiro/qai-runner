@@ -93,6 +93,9 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
   const [loading, setLoading] = useState(true);
 
   const [newSuiteName, setNewSuiteName] = useState('');
+  // Optional module ("Uçuş Arama") the new set files under; sets sharing one
+  // are listed together under a heading.
+  const [newSuiteModule, setNewSuiteModule] = useState('');
   const [draft, setDraft] = useState(EMPTY_CASE);
   const [datasetError, setDatasetError] = useState(null);
   const [showCaseForm, setShowCaseForm] = useState(false);
@@ -199,8 +202,11 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
     const name = newSuiteName.trim();
     if (!name) return;
     try {
-      const created = await api.createSuite({ name, kind: newSuiteKind, tags: [] });
+      const created = await api.createSuite({
+        name, kind: newSuiteKind, tags: [], module: newSuiteModule.trim() || null,
+      });
       setNewSuiteName('');
+      setNewSuiteModule('');
       setSelectedId(created.id);
       await loadSuites();
       toast.success(`Test set “${name}” created.`);
@@ -433,6 +439,14 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
               placeholder="New test set name"
               aria-label="New test set name"
             />
+            <input
+              className="suite-create-module"
+              value={newSuiteModule}
+              onChange={(event) => setNewSuiteModule(event.target.value)}
+              placeholder="Module (optional) — e.g. Uçuş Arama"
+              aria-label="Module the new test set belongs to"
+              title="Sets sharing a module are listed together"
+            />
             {/* Chosen at creation, not later: the platform decides which
                 scenarios can go in and which device can run them, so a set
                 that changed platform afterwards would strand its own cases. */}
@@ -462,20 +476,43 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
             </EmptyState>
           ) : (
             <ul className="suite-items">
-              {visible.map((item) => (
-                <li key={item.id}>
-                  <button
-                    className={`suite-item ${item.id === shownId ? 'active' : ''}`}
-                    onClick={() => setSelectedId(item.id)}
-                  >
-                    <Layers size={15} />
-                    <span className="suite-item-name">{item.name}</span>
-                    <PlatformTag kind={item.kind} />
-                    <span className="pill">{item.case_count}</span>
-                    <ChevronRight size={14} className="suite-item-chevron" />
-                  </button>
-                </li>
-              ))}
+              {/* Sets file under a module ("Uçuş Arama" holding one-way,
+                  round-trip, multi-city…), so the list is drawn as groups with a
+                  heading each. Sets with no module come first, unheaded. */}
+              {Object.entries(
+                visible.reduce((groups, item) => {
+                  const key = (item.module || '').trim();
+                  (groups[key] ||= []).push(item);
+                  return groups;
+                }, {}),
+              )
+                .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)))
+                .map(([module, items]) => (
+                  <li key={module || '__none__'} className="suite-group">
+                    {module && (
+                      <div className="suite-group-label" title={`Module: ${module}`}>
+                        {module}
+                        <span className="suite-group-count">{items.length}</span>
+                      </div>
+                    )}
+                    <ul className="suite-items">
+                      {items.map((item) => (
+                        <li key={item.id}>
+                          <button
+                            className={`suite-item ${item.id === shownId ? 'active' : ''}`}
+                            onClick={() => setSelectedId(item.id)}
+                          >
+                            <Layers size={15} />
+                            <span className="suite-item-name">{item.name}</span>
+                            <PlatformTag kind={item.kind} />
+                            <span className="pill">{item.case_count}</span>
+                            <ChevronRight size={14} className="suite-item-chevron" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
             </ul>
           )}
         </aside>
@@ -494,6 +531,11 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
             <div className="card">
               <div className="card-head">
                 <div>
+                  {suite.module && (
+                    <div className="suite-module-label" title="Module this set belongs to">
+                      {suite.module}
+                    </div>
+                  )}
                   <h2 className="card-title">{suite.name}</h2>
                   <p className="muted small">
                     {suite.cases.filter((c) => c.enabled).length} enabled ·{' '}

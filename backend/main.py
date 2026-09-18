@@ -1268,6 +1268,9 @@ class SuiteBody(BaseModel):
     description: Optional[str] = None
     kind: str = "web"
     tags: List[str] = []
+    # The module this set sits under ("Uçuş Arama"); sets sharing one are shown
+    # grouped. Optional — a set can stand on its own.
+    module: Optional[str] = None
 
 
 class CaseBody(BaseModel):
@@ -1320,7 +1323,9 @@ async def get_suites():
 
 @app.post("/api/suites")
 async def post_suite(body: SuiteBody):
-    suite_id = storage.create_suite(body.name, body.description, body.kind, body.tags)
+    suite_id = storage.create_suite(
+        body.name, body.description, body.kind, body.tags, module=body.module,
+    )
     return storage.get_suite(suite_id)
 
 
@@ -1336,7 +1341,7 @@ async def get_suite(suite_id: str):
 async def patch_suite(suite_id: str, body: SuiteBody):
     if not storage.update_suite(
         suite_id, name=body.name, description=body.description,
-        kind=body.kind, tags=body.tags,
+        kind=body.kind, tags=body.tags, module=body.module,
     ):
         raise HTTPException(status_code=404, detail="Suite not found.")
     return storage.get_suite(suite_id)

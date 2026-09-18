@@ -2920,8 +2920,56 @@ select:disabled {
 
 .suite-create {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+/* Third control in the create form: takes the full row under name + platform. */
+.suite-create-module {
+  flex: 1 1 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.suite-create-module:focus { outline: none; border-color: var(--accent); }
+
+/* Sets grouped under a module: a small heading per group, and the nested
+   list draws with no extra indent so rows align with unheaded sets. */
+.suite-group { display: flex; flex-direction: column; gap: 3px; }
+.suite-group + .suite-group { margin-top: 10px; }
+.suite-group > .suite-items { margin: 0; padding: 0; }
+
+.suite-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.suite-group-count {
+  font-weight: 600;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+/* On the selected set's header, the module it belongs to, above the name. */
+.suite-module-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 2px;
 }
 
 .suite-empty {
@@ -4181,6 +4229,7 @@ a.scan-row-url {
 }
 
 .generator-newset,
+.generator-newmodule,
 .generator-execname {
   padding: 7px 10px;
   border-radius: var(--radius-sm);
@@ -4191,6 +4240,7 @@ a.scan-row-url {
 }
 
 .generator-newset:focus,
+.generator-newmodule:focus,
 .generator-execname:focus { outline: none; border-color: var(--accent); }
 
 .generator-run { display: flex; align-items: center; gap: 6px; }
