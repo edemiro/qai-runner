@@ -164,27 +164,37 @@ async def list_apps() -> List[Dict[str, Any]]:
 
 
 async def _fetch_apps() -> List[Dict[str, Any]]:
+    """Every app the account can install, newest first.
+
+    Uploads belong to the team (group), not to whoever is logged in: a build
+    the release engineer pushed is exactly the one a tester wants to run, and
+    the per-user list does not show it. So the group list is read first and
+    the user's own list merged in behind it. Either may answer "no results"
+    (a 422, or a message object) rather than an empty list.
+    """
     import time
-    try:
-        raw = await _get("/recent_apps")
-    except httpx.HTTPStatusError as exc:
-        # An account that has never uploaded an app answers 422 rather than an
-        # empty list, which is not an error worth showing anyone.
-        if exc.response.status_code == 422:
-            _apps_cache.update(at=time.monotonic(), value=[])
-            return []
-        raise
-    apps = []
-    for entry in raw if isinstance(raw, list) else []:
-        app_url = entry.get("app_url")
-        if not app_url:
-            continue
-        apps.append({
-            "id": app_url,
-            "name": entry.get("app_name") or app_url,
-            "version": entry.get("app_version") or "",
-            "uploadedAt": entry.get("uploaded_at") or "",
-        })
+
+    seen: set = set()
+    apps: List[Dict[str, Any]] = []
+    for path in ("/recent_group_apps", "/recent_apps"):
+        try:
+            raw = await _get(path)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 422:
+                continue
+            raise
+        for entry in raw if isinstance(raw, list) else []:
+            app_url = entry.get("app_url")
+            if not app_url or app_url in seen:
+                continue
+            seen.add(app_url)
+            apps.append({
+                "id": app_url,
+                "name": entry.get("app_name") or app_url,
+                "version": entry.get("app_version") or "",
+                "uploadedAt": entry.get("uploaded_at") or "",
+            })
+    apps.sort(key=lambda a: a["uploadedAt"], reverse=True)
     _apps_cache.update(at=time.monotonic(), value=apps)
     return apps
 

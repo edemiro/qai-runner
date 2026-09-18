@@ -79,8 +79,12 @@ function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
                 onClick={() => setAppId(appId === env.appId ? '' : env.appId)}
                 disabled={connected || !env.installed}
                 title={env.installed
-                  ? `Open ${env.label} when the session starts`
-                  : `${env.label} is not installed on this device`}
+                  ? (env.source && env.source !== 'installed' && env.source !== 'configured'
+                    ? `Installs ${env.source} on the device and opens it`
+                    : `Open ${env.label} when the session starts`)
+                  : (device.source === 'browserstack'
+                    ? `No ${env.label} build uploaded to BrowserStack App Automate for ${device.platform}`
+                    : `${env.label} is not installed on this device`)}
               >
                 {env.label}
               </button>

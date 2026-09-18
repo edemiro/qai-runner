@@ -265,7 +265,7 @@ async def get_device_apps(udid: str, platform: str = "Android"):
         apps = await device_discovery.list_installed_apps(udid, platform)
     # The TK builds are called out separately so the common choice is one tap
     # rather than a search through every app on the phone.
-    return {"apps": apps, "environments": device_discovery.match_environments(apps)}
+    return {"apps": apps, "environments": device_discovery.match_environments(apps, platform)}
 
 
 # --------------------------------------------------------------------------- #

@@ -194,15 +194,48 @@ async def list_devices() -> List[Dict]:
 TEST_ENVIRONMENTS = ("ThyDev", "ThyTest", "ThyReg")
 
 
-def match_environments(apps: List[Dict]) -> List[Dict]:
+# How the team names an uploaded build: the platform and the environment both
+# appear in the file name — "26.9.17.0_Android_Test.apk", "26.9.17.0_IOS_Test.ipa",
+# "AND_REG_1.50.0.973.apk". Matching on those tokens is what lets the ThyReg
+# button on a cloud iPhone find the iOS REG build and on a Pixel the Android one.
+_ENV_TOKENS = {"thydev": "dev", "thytest": "test", "thyreg": "reg"}
+_PLATFORM_TOKENS = {
+    "android": (("android", "and_", "_and", ".apk", ".aab"), (".ipa", "ios")),
+    "ios": (("ios", ".ipa"), (".apk", ".aab", "android")),
+}
+
+
+def _upload_for(label: str, platform: str, apps: List[Dict]) -> Optional[Dict]:
+    """The newest uploaded build whose file name says this platform and env."""
+    env = _ENV_TOKENS.get(label.lower())
+    wants, rejects = _PLATFORM_TOKENS.get(platform.lower(), ((), ()))
+    if not env or not wants:
+        return None
+    candidates = []
+    for app in apps:
+        if not str(app.get("id", "")).startswith("bs://"):
+            continue
+        name = str(app.get("name", "")).lower()
+        if env not in name:
+            continue
+        if any(bad in name for bad in rejects) or not any(ok in name for ok in wants):
+            continue
+        candidates.append(app)
+    candidates.sort(key=lambda a: str(a.get("uploadedAt", "")), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def match_environments(apps: List[Dict], platform: str = "Android") -> List[Dict]:
     """Pair each known environment with the app that is it, if any.
 
-    An environment resolves to an app id one of two ways: a bundle id / package
-    configured for it (THY_ENV_BUNDLE_IDS), which works even on a cloud device
-    where nothing is listed to match by name; or, failing that, an installed app
-    whose name is the environment. An environment with neither is still returned,
-    marked absent, so the picker shows all three and says which are missing —
-    an option that quietly disappears looks like the feature is broken.
+    An environment resolves to an app id three ways, in order: a bundle id /
+    package configured for it (THY_ENV_BUNDLE_IDS); an uploaded cloud build
+    whose file name carries this platform and environment ("…_IOS_Test.ipa"),
+    which BrowserStack then installs and launches for the session; or an
+    installed app whose name is the environment. An environment with none is
+    still returned, marked absent, so the picker shows all three and says which
+    are missing — an option that quietly disappears looks like the feature is
+    broken.
     """
     import config
 
@@ -211,13 +244,21 @@ def match_environments(apps: List[Dict]) -> List[Dict]:
     matched = []
     for label in TEST_ENVIRONMENTS:
         app_id = configured.get(label.lower())
+        source = "configured" if app_id else None
+        if not app_id:
+            upload = _upload_for(label, platform, apps)
+            if upload:
+                app_id, source = upload["id"], upload.get("name")
         if not app_id:
             app = by_name.get(label.lower())
-            app_id = app["id"] if app else None
+            if app:
+                app_id, source = app["id"], "installed"
         matched.append({
             "label": label,
             "appId": app_id,
             "installed": bool(app_id),
+            # Which build the button will actually launch, for the tooltip.
+            "source": source,
         })
     return matched
 
