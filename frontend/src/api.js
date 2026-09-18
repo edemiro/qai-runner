@@ -27,7 +27,15 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     let detail = `Request failed (${response.status})`;
     try {
       const data = await response.json();
-      detail = data.detail || detail;
+      if (typeof data.detail === 'string') {
+        detail = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI validation errors (422) come as a list of {loc, msg, ...};
+        // join the messages so the toast reads text, not "[object Object]".
+        detail = data.detail.map((e) => e.msg || JSON.stringify(e)).join('; ');
+      } else if (data.detail) {
+        detail = JSON.stringify(data.detail);
+      }
     } catch {
       /* non-JSON error body */
     }
@@ -133,7 +141,7 @@ export const api = {
   saveBrowserstackCredentials: (username, accessKey) =>
     request('/api/browserstack/credentials', {
       method: 'POST',
-      body: JSON.stringify({ username, accessKey }),
+      body: { username, accessKey },
     }),
 
   createSession: (device, appId) =>

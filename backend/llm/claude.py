@@ -30,10 +30,26 @@ def _client(anthropic, api_key: str):
     Identity-linked API keys are not bound to a single workspace, so Anthropic
     rejects them unless the request says which workspace it acts in. Classic
     workspace-scoped keys need no header, so this stays optional.
+
+    ANTHROPIC_BASE_URL points the SDK at a corporate gateway (an Azure-fronted
+    proxy, say) that speaks the Anthropic API but lives behind the company
+    network — the key is that gateway's, not Anthropic's, so a direct call to
+    api.anthropic.com is what gets rejected. Empty means talk to Anthropic.
     """
     workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
     headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
-    return anthropic.AsyncAnthropic(api_key=api_key, default_headers=headers)
+    kwargs: Dict[str, Any] = {"default_headers": headers}
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if base_url:
+        # A gateway authenticates with a bearer token, not Anthropic's x-api-key.
+        # Passing auth_token (not api_key) sends `Authorization: Bearer <key>` and
+        # stops the SDK from also reading ANTHROPIC_API_KEY and adding x-api-key,
+        # which the gateway would reject.
+        kwargs["base_url"] = base_url
+        kwargs["auth_token"] = api_key
+    else:
+        kwargs["api_key"] = api_key
+    return anthropic.AsyncAnthropic(**kwargs)
 
 
 def _explain(anthropic, exc) -> ProviderError:
@@ -120,7 +136,15 @@ def _request(system: str, turns: List[Turn], model: str, effort: str = "medium")
     return payload
 
 
+def _gateway_mode() -> bool:
+    return bool(os.environ.get("ANTHROPIC_BASE_URL", "").strip())
+
+
 def _wants_fallback(model: str) -> bool:
+    # A corporate gateway generally does not carry Anthropic's beta features, so
+    # the server-side-fallback beta is skipped there — it would just be rejected.
+    if _gateway_mode():
+        return False
     return any(model.startswith(prefix) for prefix in _FALLBACK_MODELS)
 
 
