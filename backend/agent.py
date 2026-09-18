@@ -336,14 +336,14 @@ def _event(kind: str, **payload) -> str:
 # is taken separately and stays full resolution, so reports do not degrade.
 _LLM_IMAGE_MAX_EDGE = 1568
 
-# The live device mirror is a preview, not evidence — nobody reads pixel detail
-# off it, they read it for "did the screen change". Capped much smaller than
-# the LLM copy so streaming it costs almost nothing on the wire or on a real
-# device's screenshot pipeline.
-_MIRROR_IMAGE_MAX_EDGE = 480
+# The live mirror is scaled to fit the panel, so a frame capped at 480px was
+# being blown up several times over and looked soft. A desktop-width cap keeps a
+# 1440-wide page sharp; on localhost the extra bytes are free, and the resize
+# itself is cheap next to the device round trip that produced the frame.
+_MIRROR_IMAGE_MAX_EDGE = 1600
 
 
-def _shrink_to(screenshot: Optional[str], max_edge: int) -> Optional[str]:
+def _shrink_to(screenshot: Optional[str], max_edge: int, fmt: str = "png") -> Optional[str]:
     if not screenshot:
         return screenshot
     try:
@@ -353,11 +353,17 @@ def _shrink_to(screenshot: Optional[str], max_edge: int) -> Optional[str]:
 
         raw = base64.b64decode(screenshot)
         image = Image.open(io.BytesIO(raw))
-        if max(image.size) <= max_edge:
+        if fmt == "png" and max(image.size) <= max_edge:
             return screenshot
-        image.thumbnail((max_edge, max_edge))
+        if max(image.size) > max_edge:
+            image.thumbnail((max_edge, max_edge))
         buffer = io.BytesIO()
-        image.save(buffer, format="PNG", optimize=True)
+        if fmt == "jpeg":
+            # JPEG is what the live mirror wants: a fraction of the encode cost
+            # of an optimized PNG, and small on the wire.
+            image.convert("RGB").save(buffer, format="JPEG", quality=72)
+        else:
+            image.save(buffer, format="PNG", optimize=True)
         return base64.b64encode(buffer.getvalue()).decode("ascii")
     except Exception:
         # A frame the model (or the mirror) can still read beats no frame at
@@ -370,7 +376,7 @@ def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
 
 
 def _shrink_for_mirror(screenshot: Optional[str]) -> Optional[str]:
-    return _shrink_to(screenshot, _MIRROR_IMAGE_MAX_EDGE)
+    return _shrink_to(screenshot, _MIRROR_IMAGE_MAX_EDGE, fmt="jpeg")
 
 
 # The live mirror's only source while a run is in progress. An agent run

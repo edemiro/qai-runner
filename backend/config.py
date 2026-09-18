@@ -1,6 +1,7 @@
 """Central configuration. Every path is absolute so the process can be started
 from any working directory without silently reading or writing the wrong .env."""
 
+import json
 import os
 from typing import Dict, List
 
@@ -41,6 +42,17 @@ BROWSERSTACK_ACCESS_KEY = os.environ.get("BROWSERSTACK_ACCESS_KEY", "").strip()
 # The agent loop is bounded server-side as well as in the UI so a runaway model
 # cannot keep driving the device (and burning API quota) indefinitely.
 MAX_AGENT_STEPS = int(os.environ.get("MAX_AGENT_STEPS", "40"))
+
+# Headers added to web requests whose URL contains the key — the same shape as a
+# browser header extension's per-domain rule. Used for the QA access header an
+# environment grants test traffic (e.g. a UAT host that only answers requests
+# carrying it). Matching on the URL rather than sending them to everything is
+# the point: a header scoped to one host must not leak to the third-party
+# domains a page pulls in.
+# Example: {"turkishairlines.com": {"akamai_access": "allowed"}}
+WEB_EXTRA_HEADERS: Dict[str, Dict[str, str]] = json.loads(
+    os.environ.get("WEB_EXTRA_HEADERS", "").strip() or "{}"
+)
 
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.

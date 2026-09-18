@@ -34,7 +34,9 @@ const DRAG_PX = 6;
 function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
   const [url, setUrl] = useState('');
   const [viewport, setViewport] = useState('desktop');
-  const [visible, setVisible] = useState(false);
+  // Headed by default: the sites people point QAi at tend to refuse a headless
+  // browser, and the window is kept off-screen so headed costs nothing visible.
+  const [visible, setVisible] = useState(true);
 
   const submit = () => {
     if (!url.trim() || busy) return;
@@ -110,6 +112,10 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   const [tree, setTree] = useState(null);
   const [snapshotId, setSnapshotId] = useState(null);
   const [screen, setScreen] = useState({ width: 1440, height: 900 });
+  // How much the rendered frame is scaled to fit the panel. The page renders at
+  // its real size and is scaled down to fit, so the whole page is visible
+  // instead of a wide layout being cut off at the panel edge.
+  const [fit, setFit] = useState(1);
   const [treeLoading, setTreeLoading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [hovered, setHovered] = useState(null);
@@ -121,11 +127,14 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   // The mouse is currently held down on the page. Shown, because a hold has no
   // other feedback until the page itself reacts.
   const [holding, setHolding] = useState(false);
+  // True briefly after wheel activity, to speed the stream up while scrolling.
+  const [wheeling, setWheeling] = useState(false);
 
   const imgRef = useRef(null);
   const pressRef = useRef(null);
   const stageRef = useRef(null);
   const shellRef = useRef(null);
+  const wheelRef = useRef({ dx: 0, dy: 0, raf: 0 });
 
   // While the mouse is held the page is usually animating something in
   // response, so the stream is temporarily sped up — at 4 fps a filling
@@ -133,8 +142,11 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   const { isFullscreen, toggle: toggleFullscreen, supported: canFullscreen } =
     useFullscreen(shellRef);
 
+  // Holding or scrolling means the page is changing under the user's hand, so
+  // the stream is temporarily sped up — otherwise the mirror lags a step behind
+  // and the interaction feels unresponsive.
   const { screenshot, connection, lostReason } = useScreenStream(
-    sessionId, holding ? Math.max(fps, 12) : fps, Boolean(sessionId),
+    sessionId, holding || wheeling ? Math.max(fps, 15) : fps, Boolean(sessionId),
   );
   const pageLost = connection === 'lost';
 
@@ -199,46 +211,27 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
     }
   };
 
-  /** Render the page at exactly the size of the panel showing it, so it fills
-   *  the panel with no letterboxing and nothing scaled down. */
-  const measureStage = useCallback(() => {
-    const node = stageRef.current;
-    if (!node) return null;
-    const box = node.getBoundingClientRect();
-    if (box.width < 200 || box.height < 200) return null;
-    return { width: Math.round(box.width), height: Math.round(box.height) };
-  }, []);
-
-  // Keep the page matched to the panel as the window resizes.
+  // Scale the rendered frame down so the whole page fits the panel, instead of
+  // resizing the page to the panel — a real desktop layout is wider than this
+  // panel and would otherwise have its right edge cut off. Ratio-based click
+  // mapping is unaffected: the image rect scales, the proportions do not.
   useEffect(() => {
-    if (!sessionId || !stageRef.current) return undefined;
+    const node = stageRef.current;
+    if (!node) return undefined;
 
-    let timer = null;
-    let last = '';
-    const observer = new ResizeObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const size = measureStage();
-        if (!size) return;
-        const key = `${size.width}x${size.height}`;
-        if (key === last) return;
-        last = key;
-        try {
-          const data = await api.setViewport(sessionId, size.width, size.height);
-          setScreen(data.screen);
-          setTree(null);
-        } catch {
-          /* a resize failing is not worth interrupting the run for */
-        }
-      }, 350);
-    });
-
-    observer.observe(stageRef.current);
-    return () => {
-      clearTimeout(timer);
-      observer.disconnect();
+    const recompute = () => {
+      const box = node.getBoundingClientRect();
+      if (box.width < 40 || box.height < 40) return;
+      const scale = Math.min(box.width / screen.width, box.height / screen.height);
+      // Never blow the frame up past its captured resolution.
+      setFit(Math.min(scale, 1));
     };
-  }, [sessionId, measureStage]);
+
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [screen.width, screen.height]);
 
   const refreshTree = useCallback(async () => {
     if (!sessionId) return;
@@ -291,9 +284,13 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   const handleOpen = async (url, viewport, headless) => {
     setBusy(true);
     try {
-      // "desktop" means "the size of the panel"; the tablet and mobile presets
-      // keep their real device dimensions, because that is the point of them.
-      await onOpen(url, viewport, headless, viewport === 'desktop' ? measureStage() : null);
+      // Every preset renders at its real dimensions — desktop at a true desktop
+      // width, not the panel's — and the frame is then scaled to fit the panel.
+      await onOpen(url, viewport, headless, null);
+      // Seed the frame size from the preset so the fit scale is right from the
+      // first frame; source() later replaces it with the exact reported size.
+      const preset = VIEWPORTS.find((v) => v.id === viewport);
+      if (preset) setScreen({ width: preset.w, height: preset.h });
       setTree(null);
       setSelected(null);
       agent.reset();
@@ -406,9 +403,33 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
     };
   }, [holding, sessionId, send]);
 
+  // The wheel is forwarded as raw pixel deltas, coalesced to one request per
+  // animation frame. Sending each tick's `send` (which also re-reads the tree)
+  // is what made scrolling lag and overshoot to the bottom.
+  const flushWheel = useCallback(() => {
+    const w = wheelRef.current;
+    w.raf = 0;
+    const { dx, dy } = w;
+    w.dx = 0;
+    w.dy = 0;
+    if (!sessionId || (!dx && !dy)) return;
+    api.gesture(sessionId, { type: 'wheel', dx, dy }).catch(() => {});
+  }, [sessionId]);
+
   const onWheel = (event) => {
     if (!sessionId || agent.status === 'running' || pageLost) return;
-    send({ type: 'scroll', direction: event.deltaY > 0 ? 'down' : 'up' });
+    event.preventDefault();
+    // Display pixels → page pixels: the page is rendered larger and scaled down
+    // by `fit`, so a wheel move on screen covers 1/fit as much of the page.
+    const scale = fit > 0 ? 1 / fit : 1;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? screen.height : 1;
+    const w = wheelRef.current;
+    w.dx += event.deltaX * unit * scale;
+    w.dy += event.deltaY * unit * scale;
+    if (!w.raf) w.raf = requestAnimationFrame(flushWheel);
+    if (!wheeling) setWheeling(true);
+    clearTimeout(w.stop);
+    w.stop = setTimeout(() => setWheeling(false), 500);
   };
 
   const highlight = useMemo(() => {
@@ -600,12 +621,21 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
 
             <div className={`browser-viewport ${pageLost ? 'stale' : ''}`} ref={stageRef}>
               {screenshot ? (
-                // The page is rendered at this panel's exact size, so the image
-                // fills it edge to edge and the overlay maps 1:1 onto it.
-                <div className="browser-canvas">
+                // The page renders at its real size and the whole frame is
+                // scaled to fit the panel, so nothing is cropped. The image and
+                // its overlay live in one scaled box, keeping them aligned and
+                // preserving the ratios the click mapping relies on.
+                <div
+                  className="browser-canvas"
+                  style={{
+                    width: screen.width,
+                    height: screen.height,
+                    transform: `scale(${fit})`,
+                  }}
+                >
                   <img
                     ref={imgRef}
-                    src={`data:image/png;base64,${screenshot}`}
+                    src={`data:image/jpeg;base64,${screenshot}`}
                     alt="Live page"
                     className="browser-image"
                     draggable={false}

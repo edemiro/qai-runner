@@ -637,6 +637,12 @@ async def delete_session(session_id: str):
 @app.get("/api/appium/session/{session_id}/screenshot")
 async def get_session_screenshot(session_id: str):
     target = require_target(session_id)
+    # Same JPEG frame the socket uses, so the polling fallback is as cheap.
+    if target.kind == "web":
+        frame = await target.mirror_frame()
+        if frame is None:
+            raise HTTPException(status_code=502, detail="Could not read a screenshot from the target.")
+        return {"screenshot": frame}
     screenshot = await target.screenshot()
     if screenshot is None:
         raise HTTPException(status_code=502, detail="Could not read a screenshot from the target.")
@@ -711,7 +717,13 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                 await asyncio.sleep(max(interval, 0.5))
                 continue
 
-            screenshot = await asyncio.to_thread(agent._shrink_for_mirror, await target.screenshot())
+            # A web page captures a JPEG straight from Chromium at display size,
+            # which needs no re-encoding and keeps the mirror responsive. A real
+            # device hands back a large PNG, so that path still shrinks off-thread.
+            if target.kind == "web":
+                screenshot = await target.mirror_frame()
+            else:
+                screenshot = await asyncio.to_thread(agent._shrink_for_mirror, await target.screenshot())
             if screenshot:
                 digest = hash(screenshot)
                 if digest != last_digest:
@@ -773,6 +785,8 @@ class GestureRequest(BaseModel):
     key: Optional[str] = None
     text: Optional[str] = None
     direction: Optional[str] = None
+    dx: Optional[float] = None
+    dy: Optional[float] = None
 
 
 @app.post("/api/session/{session_id}/gesture")
@@ -864,6 +878,12 @@ async def _web_gesture(target, req: GestureRequest):
             result = await target.scroll(req.direction or "down")
             if not result.ok:
                 raise HTTPException(status_code=502, detail=result.message)
+        elif kind == "wheel":
+            # The user's own wheel, forwarded as raw pixel deltas so a small
+            # nudge scrolls a little and a big spin scrolls a lot — unlike the
+            # agent's "scroll" which always moves most of a screen. No settle
+            # sleep and no snapshot: this fires many times a second by hand.
+            await page.mouse.wheel(req.dx or 0, req.dy or 0)
         elif kind == "key":
             if not req.key:
                 raise HTTPException(status_code=400, detail="key is required for a key action")

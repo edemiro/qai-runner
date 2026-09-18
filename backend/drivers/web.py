@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from config import ARTIFACT_DIR, AUTH_DIR
+from config import ARTIFACT_DIR, AUTH_DIR, WEB_EXTRA_HEADERS
 from web_dom import EXTRACT_JS, WebSnapshot
 
 from .base import ActionResult, Snapshot
@@ -24,6 +24,42 @@ from .base import ActionResult, Snapshot
 # Kept per session so a step can report what the page complained about while it
 # ran. Bounded: a chatty page would otherwise grow this without limit.
 MAX_PAGE_EVENTS = 200
+
+
+# Runs before any page script. Chromium still leaves navigator.webdriver
+# readable as false even with the launch flag; some bot-protection layers key on
+# it, so it is hidden outright to match a plain browser.
+_STEALTH_INIT = "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+
+
+async def apply_stealth(context) -> None:
+    try:
+        await context.add_init_script(_STEALTH_INIT)
+    except Exception as exc:
+        print(f"[web] could not install stealth init script: {exc}")
+
+
+async def apply_extra_headers(context) -> None:
+    """Install the configured per-domain request headers on a fresh context.
+
+    Registered as a catch-all route so the match can be made on the request URL;
+    Playwright's own extra-headers option is context-wide and would send a
+    header meant for one host to every host the page touches.
+    """
+    if not WEB_EXTRA_HEADERS:
+        return
+
+    async def inject(route, request):
+        extra: Dict[str, str] = {}
+        for needle, headers in WEB_EXTRA_HEADERS.items():
+            if needle in request.url:
+                extra.update(headers)
+        if extra:
+            await route.continue_(headers={**request.headers, **extra})
+        else:
+            await route.continue_()
+
+    await context.route("**/*", inject)
 
 
 def auth_path(profile: str) -> str:
@@ -120,15 +156,24 @@ def _launch_args(headless: bool, offscreen: bool, browser_name: str) -> List[str
     kept because it is what works on Windows and Linux, before any window has
     been painted.
     """
-    if headless or not offscreen or browser_name != "chromium":
+    if browser_name != "chromium":
         return []
-    return [
-        f"--window-position={OFFSCREEN_POSITION}",
-        # An off-screen window is "occluded" as far as Chromium is concerned,
-        # and it throttles or stops painting one — which would freeze the
-        # screenshot stream the panel depends on.
-        "--disable-features=CalculateNativeWinOcclusion",
+    args = [
+        # Drops the "controlled by automated test software" banner and the
+        # navigator.webdriver=true flag, so a headed window looks like a plain
+        # browser and bot-protection layers (PerimeterX on some sites) stop
+        # failing the app's own API calls behind an error dialog.
+        "--disable-blink-features=AutomationControlled",
     ]
+    if not headless and offscreen:
+        args += [
+            f"--window-position={OFFSCREEN_POSITION}",
+            # An off-screen window is "occluded" as far as Chromium is concerned,
+            # and it throttles or stops painting one — which would freeze the
+            # screenshot stream the panel depends on.
+            "--disable-features=CalculateNativeWinOcclusion",
+        ]
+    return args
 
 
 def _append_event(sink: List[Dict[str, Any]], event: Dict[str, Any]) -> None:
@@ -387,6 +432,9 @@ class WebTarget:
         """
         await self._context.unroute_all(behavior="ignoreErrors")
         self._routes = []
+        # Cleared along with the mock rules, and re-installed first so the rules
+        # below — registered later, therefore matched first — still win.
+        await apply_extra_headers(self._context)
 
         for rule in rules or []:
             pattern = rule.get("url")
@@ -518,6 +566,8 @@ class WebTarget:
                 context_options["record_video_size"] = size
 
             context = await browser.new_context(**context_options)
+            await apply_stealth(context)
+            await apply_extra_headers(context)
             page = await context.new_page()
             page.set_default_timeout(15000)
 
@@ -607,6 +657,8 @@ class WebTarget:
             options["storage_state"] = auth_path(profile)
 
         context = await browser.new_context(**options)
+        await apply_stealth(context)
+        await apply_extra_headers(context)
         page = await context.new_page()
         page.set_default_timeout(15000)
 
@@ -704,6 +756,19 @@ class WebTarget:
             return base64.b64encode(data).decode()
         except Exception as exc:
             print(f"[web] screenshot failed: {exc}")
+            return None
+
+    async def mirror_frame(self) -> Optional[str]:
+        """A fast frame for the live panel: JPEG straight from Chromium, no
+        re-encoding. A PNG capture plus a Pillow re-shrink cost ~1.7s per frame
+        and capped the mirror near 1fps; this is ~15x cheaper, which is what
+        lets the panel keep up with the page under the user's hand.
+        """
+        try:
+            data = await self.page.screenshot(type="jpeg", quality=72)
+            return base64.b64encode(data).decode()
+        except Exception as exc:
+            print(f"[web] mirror frame failed: {exc}")
             return None
 
     async def element_at(self, x: int, y: int) -> Optional[Dict[str, Any]]:

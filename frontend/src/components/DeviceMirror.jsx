@@ -179,7 +179,7 @@ export function DeviceMirror({
               <>
                 <img
                   ref={imgRef}
-                  src={`data:image/png;base64,${screenshot}`}
+                  src={`data:image/jpeg;base64,${screenshot}`}
                   alt="Live device screen"
                   className="phone-image"
                   draggable={false}
