@@ -134,6 +134,26 @@ WRITING STEPS:
 - Between 2 and 12 steps. If a scenario needs more, it is two scenarios.
 - Write the steps in the order they must run, starting from the screen the
   scenario begins on, and end on the check the title promises.
+
+STANDARDISE RECURRING STEPS — this matters as much as the format. Across the
+whole set you return, a step that does the same thing must be written the same
+way, word for word, in both `action` and `expected`. Only the parts that genuinely
+differ between scenarios change; the sentence structure does not. A reader should
+be able to scan the set and see the shared preamble is identical everywhere.
+
+Use these canonical openers verbatim whenever they apply, filling only the
+bracketed parts:
+- "Open the application and wait for the home screen to load."
+  expected: "The home screen is displayed."
+- "Close the cookie consent banner by tapping Accept."
+  expected: "The cookie banner is dismissed and no longer covers the page."
+- "Log in with <account>."  expected: "The account/home screen for <account> is shown."
+- "From the home screen, open <module>."  expected: "The <module> screen is displayed."
+
+Do not paraphrase these ("dismiss cookies" in one scenario and "close the cookie
+popup" in another is wrong). If a scenario does not need one of them, omit it —
+but when two scenarios both need it, the wording is identical. Invent a canonical
+phrasing the same way for any other step that recurs across the set, and reuse it.
 """
 
 

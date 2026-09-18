@@ -131,6 +131,7 @@ function normaliseSuggestions(examples) {
 
 export function AgentPanel({
   timeline, status, currentStep, maxSteps, onStart, onStop, onReset, onOpenRun, runId,
+  onWriteScenarios = null,
   placeholder = 'What should QAi test? e.g. “Search for headphones and verify results appear”',
   examples = DEFAULT_EXAMPLES,
   pageSummary = null,
@@ -254,6 +255,14 @@ export function AgentPanel({
     if (running) return;
     if (mode === 'drive' && !goal.trim()) return;
     if (mode === 'run' && (!testSet.trim() || !knownSet)) return;
+    // Writing scenarios opens a review dialog instead of saving straight away:
+    // the tester ticks, edits and names before anything lands. Running is then
+    // a button in that dialog, so write-run goes the same way.
+    if ((mode === 'write' || mode === 'write-run') && onWriteScenarios) {
+      onWriteScenarios(goal.trim());
+      setGoal('');
+      return;
+    }
     // No step ceiling from here: the server enforces MAX_AGENT_STEPS, and a
     // number the tester has to guess before the run is a worse guard than one.
     onStart(instruction(), { useVision, model, effort });

@@ -6,6 +6,7 @@ import {
 
 import { api } from '../api';
 import { AgentPanel } from '../components/AgentPanel';
+import { ScenarioReviewModal } from '../components/ScenarioReviewModal';
 import { Inspector } from '../components/Inspector';
 import { ScanPanel } from '../components/ScanPanel';
 import { WebTools } from '../components/WebTools';
@@ -129,6 +130,9 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
   const [holding, setHolding] = useState(false);
   // True briefly after wheel activity, to speed the stream up while scrolling.
   const [wheeling, setWheeling] = useState(false);
+  // A brief typed into the composer's "write scenarios" mode, awaiting review in
+  // a dialog. null = closed; '' or text = open.
+  const [writeBrief, setWriteBrief] = useState(null);
 
   const imgRef = useRef(null);
   const pressRef = useRef(null);
@@ -557,6 +561,7 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
               maxSteps={agent.maxSteps}
               runId={agent.runId}
               onStart={startAgent}
+              onWriteScenarios={(b) => setWriteBrief(b || '')}
               onStop={agent.stop}
               onReset={agent.reset}
               onOpenRun={onOpenRun}
@@ -706,6 +711,14 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
           </aside>
         )}
       </div>
+
+      {writeBrief !== null && (
+        <ScenarioReviewModal
+          sessionId={sessionId}
+          brief={writeBrief}
+          onClose={() => setWriteBrief(null)}
+        />
+      )}
     </main>
   );
 }

@@ -4,6 +4,7 @@ import { api } from './api';
 import { AgentPanel } from './components/AgentPanel';
 import { DeviceMirror } from './components/DeviceMirror';
 import { Inspector } from './components/Inspector';
+import { ScenarioReviewModal } from './components/ScenarioReviewModal';
 import { Sidebar } from './components/Sidebar';
 import { useAgentRun } from './hooks/useAgentRun';
 import { useScreenStream } from './hooks/useScreenStream';
@@ -46,6 +47,9 @@ export default function App() {
 
   const [fps, setFps] = useState(2);
   const [selectedRunId, setSelectedRunId] = useState(null);
+  // A brief from the composer's "write scenarios" mode, awaiting review in a
+  // dialog. null = closed.
+  const [writeBrief, setWriteBrief] = useState(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.sessionId === activeSessionId) || null,
@@ -486,6 +490,7 @@ export default function App() {
             maxSteps={agent.maxSteps}
             runId={agent.runId}
             onStart={startAgent}
+            onWriteScenarios={(b) => setWriteBrief(b || '')}
             onStop={agent.stop}
             onReset={agent.reset}
             onOpenRun={openRunReport}
@@ -541,6 +546,14 @@ export default function App() {
           onElementPicked={handleElementPicked}
           onScreenChanged={refreshTree}
           interactive={agent.status !== 'running'}
+        />
+      )}
+
+      {writeBrief !== null && (
+        <ScenarioReviewModal
+          sessionId={activeSessionId}
+          brief={writeBrief}
+          onClose={() => setWriteBrief(null)}
         />
       )}
     </div>

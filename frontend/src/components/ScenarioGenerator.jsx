@@ -18,7 +18,9 @@ import { useToast } from '../hooks/useToast';
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low'];
 const NEW_SET = '__new__';
 
-export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBrief = '', onAdded }) {
+export function ScenarioGenerator({
+  suiteId = null, sessionId = null, defaultBrief = '', autoGenerate = false, onAdded,
+}) {
   const toast = useToast();
   const [brief, setBrief] = useState(defaultBrief);
   const [url, setUrl] = useState('');
@@ -111,6 +113,16 @@ export function ScenarioGenerator({ suiteId = null, sessionId = null, defaultBri
     setQuestions([]);
     generate(answers);
   };
+
+  // Opened from the chat with a brief already typed: generate straight away so
+  // the reviewer lands on scenarios to check, not an empty form. Deferred out of
+  // the commit so the first setState does not run inside the effect.
+  useEffect(() => {
+    if (!autoGenerate) return undefined;
+    const t = setTimeout(() => generate(), 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const patchScenario = (index, patch) => {
     setScenarios((list) => list.map((s, i) => (i === index ? { ...s, ...patch } : s)));
