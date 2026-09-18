@@ -23,6 +23,9 @@ export function ScenarioGenerator({
   // Scenarios already written elsewhere (the agent, from a chat request) and
   // handed here for review — shown at once, all ticked, no generation needed.
   initialScenarios = null, initialReadFrom = null, defaultSetName = '',
+  // Platform of the session the scenarios were read from; a new set created
+  // here is filed under it, so a mobile session never produces a "web" set.
+  kind = 'web',
 }) {
   const toast = useToast();
   const seeded = Array.isArray(initialScenarios) && initialScenarios.length > 0;
@@ -77,18 +80,17 @@ export function ScenarioGenerator({
         const data = await api.suites();
         if (cancelled) return;
         setSuites(data.suites);
-        // A proposed name means "a new set called this": stay on "new" so the
-        // name shows. Otherwise default to the first existing set, else "new".
-        setTargetSuite((current) => {
-          if (defaultSetName) return NEW_SET;
-          return current && current !== NEW_SET ? current : (data.suites[0]?.id || NEW_SET);
-        });
+        // A fresh request means a fresh set: stay on "new" so each batch gets
+        // its own set (named from the brief) instead of quietly landing in
+        // whichever existing set is listed first. The tester can still pick an
+        // existing set from the dropdown.
+        setTargetSuite((current) => current || NEW_SET);
       } catch {
         if (!cancelled) setSuites([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [needsTarget, defaultSetName]);
+  }, [needsTarget]);
 
   const generate = async (withAnswers = '') => {
     setBusy(true);
@@ -108,6 +110,10 @@ export function ScenarioGenerator({
       setScenarios(data.scenarios);
       setRejected(data.rejected || []);
       setReadFrom(data.readFrom || null);
+      // Name the new set from the brief unless the tester already typed one.
+      if (data.suggestedName) {
+        setNewSetName((current) => current.trim() || data.suggestedName);
+      }
       setChosen(new Set(data.scenarios.map((_, index) => index)));
       setExpanded(new Set());
       if (!data.scenarios.length && !(data.questions || []).length) {
@@ -171,7 +177,6 @@ export function ScenarioGenerator({
         toast.warning('Name the Test Set the scenarios go into.');
         return null;
       }
-      const kind = readFrom || source === 'url' ? 'web' : 'web';
       const created = await api.createSuite({
         name: newSetName.trim(),
         kind,

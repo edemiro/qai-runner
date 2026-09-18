@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 import agent
 import appium_client as appium
+import authoring
 import browserstack
 import config
 import devices as device_discovery
@@ -1476,11 +1477,16 @@ async def generate_scenarios(body: ScenarioGenerateBody):
             await target.close()
 
     try:
-        return await scenario_writer.generate(
+        result = await scenario_writer.generate(
             kind=body.kind, brief=body.brief, tree=tree, url=body.url,
             screenshot=screenshot, answers=body.answers,
             model=body.model, effort=body.effort,
         )
+        # The set these are for, read off the tester's own words, so the review
+        # opens on a new set with its name filled in rather than on whichever
+        # existing set happens to be first.
+        result["suggestedName"] = authoring._name_from_brief(body.brief)
+        return result
     except (RuntimeError, ProviderError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1501,13 +1507,15 @@ async def generate_scenarios_from_screen(session_id: str, body: ScenarioGenerate
     screenshot = await target.screenshot() if body.useVision else None
     info = target.describe()
     try:
-        return await scenario_writer.generate(
+        result = await scenario_writer.generate(
             kind=target.kind, brief=body.brief,
             tree=snapshot.get_optimized_tree_for_llm(),
             url=body.url or info.get("appId") or info.get("name"),
             screenshot=agent._shrink_for_llm(screenshot),
             answers=body.answers, model=body.model, effort=body.effort,
         )
+        result["suggestedName"] = authoring._name_from_brief(body.brief)
+        return result
     except (RuntimeError, ProviderError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

@@ -16,6 +16,8 @@ export function ScenarioReviewModal({
   // Already-written scenarios (from the agent) to review, with the set name
   // and page they came from. When given, nothing is generated on open.
   scenarios = null, readFrom = null, suggestedName = '',
+  // Platform of the session being reviewed, so a new set is filed under it.
+  kind = 'web',
 }) {
   const seeded = Array.isArray(scenarios) && scenarios.length > 0;
   useEffect(() => {
@@ -45,6 +47,7 @@ export function ScenarioReviewModal({
             initialScenarios={seeded ? scenarios : null}
             initialReadFrom={readFrom}
             defaultSetName={suggestedName}
+            kind={kind}
             onAdded={onClose}
           />
         </div>

@@ -553,6 +553,7 @@ export default function App() {
         <ScenarioReviewModal
           sessionId={activeSessionId}
           brief={writeBrief}
+          kind="mobile"
           onClose={() => setWriteBrief(null)}
         />
       )}
@@ -565,6 +566,7 @@ export default function App() {
           scenarios={agent.proposed.scenarios}
           readFrom={agent.proposed.readFrom}
           suggestedName={agent.proposed.suggestedName}
+          kind={agent.proposed.kind || 'mobile'}
           onClose={agent.clearProposed}
         />
       )}
