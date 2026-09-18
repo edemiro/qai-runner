@@ -556,6 +556,18 @@ export default function App() {
           onClose={() => setWriteBrief(null)}
         />
       )}
+
+      {/* Scenarios the agent wrote from a plain chat request arrive here for
+          review instead of being filed on their own. */}
+      {agent.proposed && (
+        <ScenarioReviewModal
+          sessionId={activeSessionId}
+          scenarios={agent.proposed.scenarios}
+          readFrom={agent.proposed.readFrom}
+          suggestedName={agent.proposed.suggestedName}
+          onClose={agent.clearProposed}
+        />
+      )}
     </div>
   );
 }

@@ -20,17 +20,23 @@ const NEW_SET = '__new__';
 
 export function ScenarioGenerator({
   suiteId = null, sessionId = null, defaultBrief = '', autoGenerate = false, onAdded,
+  // Scenarios already written elsewhere (the agent, from a chat request) and
+  // handed here for review — shown at once, all ticked, no generation needed.
+  initialScenarios = null, initialReadFrom = null, defaultSetName = '',
 }) {
   const toast = useToast();
+  const seeded = Array.isArray(initialScenarios) && initialScenarios.length > 0;
   const [brief, setBrief] = useState(defaultBrief);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
-  const [scenarios, setScenarios] = useState([]);
+  const [scenarios, setScenarios] = useState(() => (seeded ? initialScenarios : []));
   const [rejected, setRejected] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState('');
-  const [readFrom, setReadFrom] = useState(null);
-  const [chosen, setChosen] = useState(() => new Set());
+  const [readFrom, setReadFrom] = useState(seeded ? initialReadFrom : null);
+  const [chosen, setChosen] = useState(
+    () => new Set(seeded ? initialScenarios.map((_, i) => i) : []),
+  );
   const [expanded, setExpanded] = useState(() => new Set());
 
   const [sessions, setSessions] = useState([]);
@@ -40,7 +46,7 @@ export function ScenarioGenerator({
   // to be chosen — or named and created — before the scenarios have anywhere to go.
   const [suites, setSuites] = useState([]);
   const [targetSuite, setTargetSuite] = useState(suiteId || NEW_SET);
-  const [newSetName, setNewSetName] = useState('');
+  const [newSetName, setNewSetName] = useState(defaultSetName || '');
   const [execName, setExecName] = useState('');
   const needsTarget = !suiteId;
 
@@ -68,15 +74,18 @@ export function ScenarioGenerator({
         const data = await api.suites();
         if (cancelled) return;
         setSuites(data.suites);
-        // Default to the first existing set if there is one, else "new".
-        setTargetSuite((current) =>
-          current && current !== NEW_SET ? current : (data.suites[0]?.id || NEW_SET));
+        // A proposed name means "a new set called this": stay on "new" so the
+        // name shows. Otherwise default to the first existing set, else "new".
+        setTargetSuite((current) => {
+          if (defaultSetName) return NEW_SET;
+          return current && current !== NEW_SET ? current : (data.suites[0]?.id || NEW_SET);
+        });
       } catch {
         if (!cancelled) setSuites([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [needsTarget]);
+  }, [needsTarget, defaultSetName]);
 
   const generate = async (withAnswers = '') => {
     setBusy(true);
@@ -118,7 +127,7 @@ export function ScenarioGenerator({
   // the reviewer lands on scenarios to check, not an empty form. Deferred out of
   // the commit so the first setState does not run inside the effect.
   useEffect(() => {
-    if (!autoGenerate) return undefined;
+    if (!autoGenerate || seeded) return undefined;
     const t = setTimeout(() => generate(), 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

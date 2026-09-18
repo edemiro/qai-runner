@@ -16,6 +16,9 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   const [maxSteps, setMaxSteps] = useState(0);
   // Only set while running a scenario that was written as steps.
   const [scenarioProgress, setScenarioProgress] = useState(null);
+  // Scenarios the agent wrote from a chat request, waiting for the tester to
+  // review before anything is saved: {scenarios, suggestedName, readFrom, kind}.
+  const [proposed, setProposed] = useState(null);
   const abortRef = useRef(null);
   // Held in a ref so a changing callback identity never restarts a live run.
   const finishedRef = useRef(onFinished);
@@ -48,7 +51,10 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
     setRunId(null);
     setCurrentStep(0);
     setScenarioProgress(null);
+    setProposed(null);
   }, []);
+
+  const clearProposed = useCallback(() => setProposed(null), []);
 
   const start = useCallback(
     async (goal, { useVision = true, model = '', effort = '', steps = null } = {}) => {
@@ -61,6 +67,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
       setStatus('running');
       setCurrentStep(0);
       setScenarioProgress(null);
+      setProposed(null);
       // The real ceiling is the server's MAX_AGENT_STEPS and it comes back on
       // run_started; showing a guessed number until then would be a lie.
       setMaxSteps(0);
@@ -150,6 +157,17 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
                   return updated;
                 });
                 break;
+              // The agent wrote scenarios from a chat request. They are not
+              // saved: they are handed up for review, and the workspace opens
+              // the review dialog on this.
+              case 'scenarios_proposed':
+                setProposed({
+                  scenarios: event.scenarios || [],
+                  suggestedName: event.suggestedName || '',
+                  readFrom: event.readFrom || null,
+                  kind: event.targetKind || null,
+                });
+                break;
               case 'finished':
                 setStatus(event.status);
                 append({ type: 'verdict', status: event.status, text: event.summary });
@@ -198,5 +216,6 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
 
   return {
     timeline, status, runId, currentStep, maxSteps, scenarioProgress, start, stop, reset,
+    proposed, clearProposed,
   };
 }

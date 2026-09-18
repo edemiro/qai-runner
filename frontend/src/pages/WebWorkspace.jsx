@@ -719,6 +719,18 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
           onClose={() => setWriteBrief(null)}
         />
       )}
+
+      {/* Scenarios the agent wrote from a plain chat request ("…senaryolarını
+          yaz") arrive here for review instead of being filed on their own. */}
+      {agent.proposed && (
+        <ScenarioReviewModal
+          sessionId={sessionId}
+          scenarios={agent.proposed.scenarios}
+          readFrom={agent.proposed.readFrom}
+          suggestedName={agent.proposed.suggestedName}
+          onClose={agent.clearProposed}
+        />
+      )}
     </main>
   );
 }

@@ -476,12 +476,28 @@ async def _run_authoring_action(
             kind=target.kind,
             url=info.get("appId") or info.get("name"),
             brief=brief,
+            # The tester's own sentence, for naming the set: "tek yön uçuş ara
+            # ekranı" and "uçuş ara ekranı" are two sets, and only their words
+            # tell them apart — the model's rephrased brief would not.
+            asked=goal,
         )
     else:
         execution_name = (action.get("execution") or "").strip() or None
         outcome = await authoring.run_test_set(name=name, execution_name=execution_name)
 
-    return {"ok": outcome["ok"], "message": outcome["message"], "element": None}
+    result: Dict[str, Any] = {"ok": outcome["ok"], "message": outcome["message"], "element": None}
+    if outcome.get("proposed"):
+        # Carried through so the loop can hand the scenarios to the tester for
+        # review, rather than have them saved here sight unseen.
+        result["proposed"] = {
+            "scenarios": outcome["scenarios"],
+            "suggestedName": outcome.get("suggestedName") or "",
+            "readFrom": outcome.get("readFrom"),
+            # Not "kind": that is _event()'s own first parameter, and spreading
+            # this dict into it would pass the name twice.
+            "targetKind": outcome.get("kind") or target.kind,
+        }
+    return result
 
 
 async def _execute_action(
@@ -971,6 +987,10 @@ async def run_agent(
                 status=step_status, message=result["message"],
                 element=result.get("element"), durationMs=duration_ms,
             )
+            if result.get("proposed"):
+                # The scenarios go to the tester, not the database: the chat
+                # opens them for review, and saving is their call.
+                yield _event("scenarios_proposed", step=step_no, **result["proposed"])
 
             # A failed assertion ends the run; a failed interaction is reported
             # back to the model so it can try a different route.

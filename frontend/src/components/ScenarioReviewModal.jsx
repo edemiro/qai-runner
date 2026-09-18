@@ -11,7 +11,13 @@ import { ScenarioGenerator } from './ScenarioGenerator';
  * seeded with the brief and generating on open, so the scenarios are ticked,
  * edited and named before anything is saved or run.
  */
-export function ScenarioReviewModal({ sessionId, brief = '', onClose }) {
+export function ScenarioReviewModal({
+  sessionId, brief = '', onClose,
+  // Already-written scenarios (from the agent) to review, with the set name
+  // and page they came from. When given, nothing is generated on open.
+  scenarios = null, readFrom = null, suggestedName = '',
+}) {
+  const seeded = Array.isArray(scenarios) && scenarios.length > 0;
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -35,7 +41,10 @@ export function ScenarioReviewModal({ sessionId, brief = '', onClose }) {
           <ScenarioGenerator
             sessionId={sessionId}
             defaultBrief={brief}
-            autoGenerate={Boolean(brief)}
+            autoGenerate={!seeded && Boolean(brief)}
+            initialScenarios={seeded ? scenarios : null}
+            initialReadFrom={readFrom}
+            defaultSetName={suggestedName}
             onAdded={onClose}
           />
         </div>

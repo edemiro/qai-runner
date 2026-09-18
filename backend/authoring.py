@@ -51,6 +51,41 @@ def _name_from_screen(tree: Optional[Dict[str, Any]], url: Optional[str]) -> str
     return label or "Untitled Test Set"
 
 
+# The verbs a tester wraps around the thing they actually want scenarios for.
+# "tek yön uçuş ara ekranı senaryolarını yaz" names a set called "Tek yön uçuş
+# ara ekranı" — the instruction to write is not part of the name.
+_ASK_VERBS = re.compile(
+    r"\b(test\s+)?(senaryolar[ıi]n[ıi]|senaryolar[ıi]|senaryo(su)?|scenarios?)\s*"
+    r"(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?|olu[şs]tur|üret|write|generate|create)\b.*$"
+    r"|\b(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?|olu[şs]tur|üret)\s*$"
+    r"|^\s*(bu\s+ekran(ın|in)?|bu\s+sayfan[ıi]n|for\s+this\s+screen)\s*",
+    re.IGNORECASE,
+)
+
+
+def _name_from_brief(brief: Optional[str]) -> str:
+    """The set name a tester meant, read off what they asked for.
+
+    Preferred over the screen's own label: two requests about the same page
+    ("uçuş ara ekranı", then "tek yön uçuş ara ekranı") are two different sets,
+    and only the brief tells them apart.
+    """
+    text = " ".join((brief or "").split())
+    if not text:
+        return ""
+    # English puts the verb first ("write scenarios for the search screen");
+    # Turkish puts it last, which _ASK_VERBS handles. Strip both shapes.
+    text = re.sub(
+        r"^(please\s+)?(write|generate|create|produce)\s+(the\s+)?(test\s+)?scenarios?\s+(for\s+)?(this\s+|the\s+)?",
+        "", text, flags=re.IGNORECASE,
+    )
+    text = _ASK_VERBS.sub("", text).strip(" -–:,.")
+    # A connector left dangling once the verb is gone: "uçuş ara ekranı için".
+    text = re.sub(r"\s+(için|for|about|on)$", "", text, flags=re.IGNORECASE)
+    text = " ".join(text.split())[:60]
+    return text[:1].upper() + text[1:] if text else ""
+
+
 async def write_scenarios(
     *,
     name: str,
@@ -59,27 +94,17 @@ async def write_scenarios(
     kind: str,
     url: Optional[str] = None,
     brief: Optional[str] = None,
+    asked: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Write scenarios for the screen in front of the agent into a Test Set.
+    """Write scenarios for the screen in front of the agent — as a proposal.
 
-    The Test Set is created when it does not exist: the tester naming one that
-    is not there means "put them here", not "fail".
+    Nothing is saved here. The scenarios, and the Test Set name they seem to be
+    for, go back to the chat so the tester can tick, edit and name them before
+    they land; a set of scenarios that files itself gets copied by the next
+    person, mistakes included. Saving and running happen from that review.
     """
     if tree is None:
         return {"ok": False, "message": "The current screen could not be read, so there is nothing to write scenarios from."}
-
-    target_name = " ".join((name or "").split()) or _name_from_screen(tree, url)
-    suite = _match_suite(target_name)
-    created = False
-    if suite is None:
-        suite_id = storage.create_suite(
-            name=target_name,
-            description="Created from the agent chat.",
-            kind="web" if kind == "web" else "mobile",
-            tags=[],
-        )
-        suite = storage.get_suite(suite_id)
-        created = True
 
     result = await scenario_writer.generate(
         kind=kind, brief=brief, tree=tree, url=url, screenshot=screenshot,
@@ -98,22 +123,26 @@ async def write_scenarios(
     if not result["scenarios"]:
         return {"ok": False, "message": "No scenario came back in the required format."}
 
-    for scenario in result["scenarios"]:
-        storage.add_case(
-            suite["id"], scenario["title"], scenario["goal"], url=url,
-            priority=scenario["priority"], layer=scenario["layer"],
-            steps=scenario.get("steps") or None,
-        )
-
-    written = len(result["scenarios"])
+    # The tester's own words first, then whatever the model chose, then the
+    # screen — the last of these is the "Turkish Airlines" label that makes
+    # every set from the same site indistinguishable.
+    suggested = (
+        _name_from_brief(asked)
+        or _name_from_brief(brief)
+        or " ".join((name or "").split())
+        or _name_from_screen(tree, url)
+    )
+    count = len(result["scenarios"])
     return {
         "ok": True,
-        "suiteId": suite["id"],
-        "suiteName": suite["name"],
-        "written": written,
+        "proposed": True,
+        "scenarios": result["scenarios"],
+        "suggestedName": suggested,
+        "readFrom": url,
+        "kind": "web" if kind == "web" else "mobile",
         "message": (
-            f"Wrote {written} scenario{'s' if written != 1 else ''} to "
-            f"{'the new Test Set' if created else 'Test Set'} “{suite['name']}”."
+            f"{count} senaryo yazıldı ve incelemene açıldı — "
+            f"onayla, düzenle, set adını ver ve kaydet (veya kaydedip koştur)."
         ),
     }
 
