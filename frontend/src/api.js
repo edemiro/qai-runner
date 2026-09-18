@@ -9,18 +9,39 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, signal } = {}) {
+// A request that never answers must fail, not spin: the backend can be held
+// open by a stalled upstream (a gateway that accepts and then goes silent), and
+// without a deadline here the UI would show "Writing…" indefinitely. Callers
+// that legitimately take long (scenario writing) pass a larger `timeoutMs`.
+const DEFAULT_TIMEOUT_MS = 60000;
+
+async function request(path, { method = 'GET', body, signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  // Honour the caller's own abort as well as the deadline.
+  signal?.addEventListener('abort', () => controller.abort(), { once: true });
+
   let response;
   try {
     response = await fetch(`${BASE}${path}`, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
-      signal,
+      signal: controller.signal,
     });
   } catch (err) {
-    if (err.name === 'AbortError') throw err;
+    if (err.name === 'AbortError') {
+      if (!timedOut) throw err;
+      throw new ApiError(
+        `No answer from the backend within ${Math.round(timeoutMs / 1000)}s. `
+          + 'The model gateway may be stalling — try again.',
+        0,
+      );
+    }
     throw new ApiError('Backend is unreachable. Is it running on ' + BASE + '?', 0);
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {
@@ -214,9 +235,13 @@ export const api = {
   // --- scenario writing to the Digital Channels standard -------------------
   // From a written brief, or from whatever is on screen right now. The screen
   // version names real fields and buttons, so prefer it when a page is open.
-  generateScenarios: (body) => request('/api/scenarios/generate', { method: 'POST', body }),
+  // Writing a full scenario set is the one long call: give it the same 300s
+  // deadline the backend enforces on its side, so whichever side gives up
+  // first, the tester sees an error and a live Generate button, not a spinner.
+  generateScenarios: (body) =>
+    request('/api/scenarios/generate', { method: 'POST', body, timeoutMs: 300000 }),
   generateScenariosFromScreen: (sessionId, body) =>
-    request(`/api/session/${sessionId}/scenarios/generate`, { method: 'POST', body }),
+    request(`/api/session/${sessionId}/scenarios/generate`, { method: 'POST', body, timeoutMs: 300000 }),
   updateCase: (caseId, body) => request(`/api/cases/${caseId}`, { method: 'PATCH', body }),
   deleteCase: (caseId) => request(`/api/cases/${caseId}`, { method: 'DELETE' }),
   // Re-file picked scenarios into another Test Set (existing or just created).

@@ -70,6 +70,12 @@ THY_ENV_BUNDLE_IDS: Dict[str, str] = json.loads(
 # Set to "false" to test the permission prompts themselves.
 MOBILE_AUTO_PERMISSIONS = os.environ.get("MOBILE_AUTO_PERMISSIONS", "true").strip().lower() != "false"
 
+# How long one scenario-writing call may take end to end. A gateway that
+# accepts the request and then never answers must fail loudly, not hold the
+# tester's spinner open for half an hour. 300s matches the API timeout the
+# corporate Claude Code config uses.
+SCENARIO_TIMEOUT_S = int(os.environ.get("SCENARIO_TIMEOUT_S", "300"))
+
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.
 ALLOWED_ORIGINS = [

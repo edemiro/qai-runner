@@ -310,9 +310,22 @@ async def generate(
     )
     chosen = (model or "").strip() or providers.active_model()
 
+    import asyncio
+    from config import SCENARIO_TIMEOUT_S
+
     collected = []
-    async for token in provider.stream(SYSTEM_PROMPT, turns, chosen, api_key, effort):
-        collected.append(token)
+    try:
+        # A gateway that accepts the connection and then never sends a token
+        # would otherwise hold this — and the tester's "Writing…" spinner —
+        # open indefinitely. Bound the whole stream, then say what happened.
+        async with asyncio.timeout(SCENARIO_TIMEOUT_S):
+            async for token in provider.stream(SYSTEM_PROMPT, turns, chosen, api_key, effort):
+                collected.append(token)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"The model did not finish writing within {SCENARIO_TIMEOUT_S}s "
+            f"({len(collected)} tokens received). The gateway may be stalling — try again."
+        ) from exc
 
     scenarios, rejected, questions = parse("".join(collected))
     return {

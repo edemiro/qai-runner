@@ -3,6 +3,8 @@
 import os
 from typing import Any, AsyncIterator, Dict, List
 
+import httpx
+
 from .base import ProviderError, Turn
 
 # Models whose refusals can be rescued by the server-side fallback chain.
@@ -38,7 +40,13 @@ def _client(anthropic, api_key: str):
     """
     workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
     headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
-    kwargs: Dict[str, Any] = {"default_headers": headers}
+    kwargs: Dict[str, Any] = {
+        "default_headers": headers,
+        # A stalled gateway must surface as an error, not an open connection
+        # the SDK waits on for its default ten minutes. Generous enough for a
+        # long scenario set; connect is separate so a dead host fails fast.
+        "timeout": httpx.Timeout(300.0, connect=20.0),
+    }
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
     if base_url:
         # A gateway authenticates with a bearer token, not Anthropic's x-api-key.
