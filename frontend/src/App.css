@@ -875,6 +875,25 @@
   letter-spacing: 0.05em;
 }
 
+.device-app-custom {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.device-app-custom:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.device-app-custom:disabled {
+  opacity: 0.5;
+}
+
 select {
   width: 100%;
   padding: 7px 10px;

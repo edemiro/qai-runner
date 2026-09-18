@@ -192,11 +192,28 @@ def capabilities(
     if os_version:
         bstack["osVersion"] = os_version
 
+    is_ios = platform.lower() == "ios"
     always: Dict[str, Any] = {
-        "platformName": "iOS" if platform.lower() == "ios" else "Android",
-        "appium:automationName": "XCUITest" if platform.lower() == "ios" else "UiAutomator2",
+        "platformName": "iOS" if is_ios else "Android",
+        "appium:automationName": "XCUITest" if is_ios else "UiAutomator2",
         "bstack:options": bstack,
     }
     if app_id:
-        always["appium:app"] = app_id
+        # A bs:// handle is an app BrowserStack installs for the session; anything
+        # else is the id of an app already on the device — a bundle id on iOS
+        # (com.apple.Preferences, thy.mobile…), a package on Android — launched
+        # the same way a physical device would, without an upload.
+        if app_id.startswith("bs://"):
+            always["appium:app"] = app_id
+        elif is_ios:
+            always["appium:bundleId"] = app_id
+        else:
+            always["appium:appPackage"] = app_id
+            always["appium:appActivity"] = ""
+            always["appium:appWaitActivity"] = "*"
+    elif is_ios:
+        # No app chosen: attach to the home screen instead of letting the session
+        # fall back to launching Safari, so the device waits on springboard until
+        # an app id is given.
+        always["appium:bundleId"] = "com.apple.springboard"
     return {"capabilities": {"alwaysMatch": always}}

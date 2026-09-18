@@ -11,8 +11,12 @@ function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
   const [apps, setApps] = useState(null);
   const [environments, setEnvironments] = useState([]);
   const [appId, setAppId] = useState('');
+  // A bundle id / package typed by hand, for an app that is on the device but
+  // not in the list — a pre-installed enterprise build on a cloud device, say.
+  const [customId, setCustomId] = useState('');
   const [loadingApps, setLoadingApps] = useState(true);
   const connected = Boolean(session);
+  const targetId = customId.trim() || appId;
 
   /* Read as soon as the card is on screen rather than when the dropdown is
      focused: the TK build buttons below are the point of this card, and they
@@ -105,6 +109,20 @@ function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
             </option>
           ))}
         </select>
+        {/* An app that is on the device but not in the list — e.g. a THY build
+            pre-installed on a cloud device — is launched by typing its id. */}
+        <input
+          className="device-app-custom"
+          type="text"
+          value={customId}
+          onChange={(event) => setCustomId(event.target.value)}
+          disabled={connected}
+          placeholder={device.platform.toLowerCase() === 'ios'
+            ? 'or a bundle id — e.g. com.thy.thytest'
+            : 'or a package — e.g. com.thy.thytest'}
+          autoComplete="off"
+          spellCheck="false"
+        />
       </div>
 
       <div className="device-card-actions">
@@ -116,7 +134,7 @@ function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
         ) : (
           <button
             className="btn btn-primary btn-block"
-            onClick={() => onConnect(device, appId)}
+            onClick={() => onConnect(device, targetId)}
             disabled={connecting}
           >
             {connecting ? <Loader2 size={14} className="spin" /> : <Wifi size={14} />}
