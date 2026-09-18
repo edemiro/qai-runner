@@ -2444,6 +2444,54 @@ select:disabled {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   margin-left: 31px;
+  cursor: zoom-in;
+  transition: border-color 0.12s ease;
+}
+
+.step-shot:hover {
+  border-color: var(--accent);
+}
+
+/* Full-size screenshot viewer: a dimmed overlay with the image centred. */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) 24px calc(env(safe-area-inset-bottom, 0px) + 24px);
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.lightbox-close {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .report-step .btn {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, CircleSlash, Clock, Code2, Copy,
   Download, FileArchive, FileCode2, Film, Image as ImageIcon, ListChecks,
-  Loader2, Play, RefreshCw, Search, Trash2, Wrench, XCircle,
+  Loader2, Play, RefreshCw, Search, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -51,9 +51,27 @@ function StatusBadge({ status }) {
   );
 }
 
+function Lightbox({ src, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="lightbox" onClick={onClose} role="dialog" aria-label="Screenshot">
+      <img src={src} alt="Screenshot, full size" onClick={(e) => e.stopPropagation()} />
+      <button className="lightbox-close" onClick={onClose} aria-label="Close">
+        <X size={20} />
+      </button>
+    </div>
+  );
+}
+
 function StepScreenshot({ runId, stepId }) {
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
   const load = async () => {
     if (image || loading) return;
@@ -69,7 +87,19 @@ function StepScreenshot({ runId, stepId }) {
   };
 
   if (image) {
-    return <img className="step-shot" src={`data:image/png;base64,${image}`} alt="Screen after this step" />;
+    const src = `data:image/png;base64,${image}`;
+    return (
+      <>
+        <img
+          className="step-shot"
+          src={src}
+          alt="Screen after this step"
+          title="Click to view full size"
+          onClick={() => setZoomed(true)}
+        />
+        {zoomed && <Lightbox src={src} onClose={() => setZoomed(false)} />}
+      </>
+    );
   }
 
   return (
