@@ -643,6 +643,9 @@ async def run_agent(
         return
 
     info = target.describe()
+    # Every model call this run makes adds its token counts here, and the total
+    # is stored when the run ends — including a run that failed part way.
+    run_usage: Dict[str, Any] = {}
     scenario_steps = planned_steps
     stepwise = bool(scenario_steps)
     system_prompt = build_system_prompt(target.kind, stepwise=stepwise)
@@ -781,7 +784,9 @@ async def run_agent(
             yield _event("thinking", step=step_no)
             reply = ""
             try:
-                async for token in provider.stream(system_prompt, turns, model, api_key, effort):
+                async for token in provider.stream(
+                    system_prompt, turns, model, api_key, effort, usage=run_usage,
+                ):
                     reply += token
                     yield _event("token", text=token, step=step_no)
             except ProviderError as exc:
@@ -829,7 +834,9 @@ async def run_agent(
                 )
                 retry = ""
                 try:
-                    async for token in provider.stream(system_prompt, retry_turns, model, api_key, effort):
+                    async for token in provider.stream(
+                        system_prompt, retry_turns, model, api_key, effort, usage=run_usage,
+                    ):
                         retry += token
                         yield _event("token", text=token, step=step_no)
                 except (ProviderError, Exception) as exc:
@@ -1025,6 +1032,9 @@ async def run_agent(
         yield _event("error", message=str(exc))
     finally:
         storage.finish_run(run_id, final_status, final_error)
+        # Written here rather than per step: the total is what a run costs, and
+        # a run that failed or was stopped still spent what it spent.
+        storage.record_run_usage(run_id, run_usage)
         state.running = False
         state.cancel.clear()
         yield _event("run_closed", runId=run_id, status=final_status, steps=step_no)

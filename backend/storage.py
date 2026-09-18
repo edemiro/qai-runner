@@ -160,6 +160,14 @@ CREATE INDEX IF NOT EXISTS idx_events_run ON page_events(run_id, step_idx);
 # in DDL, so they are applied one at a time against the live table.
 MIGRATIONS = [
     ("suites", "module", "TEXT"),
+    # What the run actually cost the model quota. Cache reads and writes are
+    # kept apart from fresh input: a cached prompt is billed at a fraction, so
+    # one "input" figure would overstate a long run several times over.
+    ("runs", "input_tokens", "INTEGER"),
+    ("runs", "output_tokens", "INTEGER"),
+    ("runs", "cache_read_tokens", "INTEGER"),
+    ("runs", "cache_write_tokens", "INTEGER"),
+    ("runs", "llm_calls", "INTEGER"),
     ("runs", "suite_run_id", "TEXT"),
     ("runs", "case_id", "TEXT"),
     ("runs", "tags", "TEXT"),
@@ -358,6 +366,48 @@ def finish_run(
                WHERE id = ?""",
             (status, time.time(), error, verdict_note, run_id),
         )
+
+
+def record_run_usage(run_id: str, usage: Optional[Dict[str, Any]]) -> None:
+    """Store what this run spent at the model. Written once, when it ends."""
+    if not usage:
+        return
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE runs SET input_tokens = ?, output_tokens = ?,
+                               cache_read_tokens = ?, cache_write_tokens = ?,
+                               llm_calls = ?
+               WHERE id = ?""",
+            (
+                usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+                usage.get("cache_read_tokens", 0), usage.get("cache_write_tokens", 0),
+                usage.get("calls", 0), run_id,
+            ),
+        )
+
+
+def usage_totals(days: int = 14) -> Dict[str, Any]:
+    """What the model has been asked for lately, across every run."""
+    since = time.time() - days * 86400
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS runs,
+                      COALESCE(SUM(llm_calls), 0)          AS calls,
+                      COALESCE(SUM(input_tokens), 0)       AS input_tokens,
+                      COALESCE(SUM(output_tokens), 0)      AS output_tokens,
+                      COALESCE(SUM(cache_read_tokens), 0)  AS cache_read_tokens,
+                      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
+                 FROM runs
+                WHERE started_at >= ? AND llm_calls IS NOT NULL""",
+            (since,),
+        ).fetchone()
+    totals = dict(row) if row else {}
+    totals["days"] = days
+    totals["total_tokens"] = (
+        totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
+        + totals.get("cache_read_tokens", 0) + totals.get("cache_write_tokens", 0)
+    )
+    return totals
 
 
 def _dump_tags(tags: Optional[List[str]]) -> Optional[str]:

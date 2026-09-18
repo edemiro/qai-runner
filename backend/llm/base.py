@@ -6,7 +6,23 @@ package.
 """
 
 from dataclasses import dataclass
-from typing import AsyncIterator, List, Optional, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
+
+
+def add_usage(sink: Optional[Dict[str, Any]], **counts: int) -> None:
+    """Accumulate token counts into a caller-supplied dict.
+
+    A dict rather than a return value because a stream yields text and cannot
+    also return a total; a caller-supplied one rather than a module global
+    because a suite run has several agents streaming at once and their totals
+    must not land in the same place.
+    """
+    if sink is None:
+        return
+    for name, value in counts.items():
+        if value:
+            sink[name] = sink.get(name, 0) + int(value)
+    sink["calls"] = sink.get("calls", 0) + 1
 
 
 @dataclass
@@ -46,8 +62,13 @@ class LLMProvider(Protocol):
         model: str,
         api_key: str,
         effort: str = "medium",
+        usage: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         """Yield response text as it arrives.
+
+        `usage` is an optional dict the provider adds this call's token counts
+        to (see `add_usage`), so a run can report what it actually cost. A
+        provider whose SDK does not report usage simply leaves it alone.
 
         `effort` is how hard the model should think about a single step —
         "low", "medium" or "high". It is the one knob that reliably trades run

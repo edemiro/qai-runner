@@ -274,6 +274,9 @@ export const api = {
   trend: (days = 14) => request(`/api/insights/trend?days=${days}`),
   flaky: (limit = 20) => request(`/api/insights/flaky?limit=${limit}`),
   priorityBreakdown: (days = 14) => request(`/api/insights/priority?days=${days}`),
+  // What the runs asked of the model. Not the quota left on the key — that
+  // lives with whoever issues it — but what QAi itself spent.
+  usage: (days = 14) => request(`/api/insights/usage?days=${days}`),
 
   // --- saved sign-ins, mocking, baselines ---------------------------------
   authProfiles: () => request('/api/auth-profiles'),

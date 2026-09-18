@@ -1698,6 +1698,17 @@ async def get_priority_breakdown(days: int = 14):
     return {"breakdown": storage.priority_breakdown(days)}
 
 
+@app.get("/api/insights/usage")
+async def get_usage(days: int = 14):
+    """What the runs in this window asked of the model.
+
+    QAi cannot see the quota left on the key — that lives with whoever issues
+    it — but it can say what it spent, which is the half of the question it is
+    in a position to answer.
+    """
+    return {"usage": storage.usage_totals(days)}
+
+
 @app.get("/api/insights/flaky")
 async def get_flaky(limit: int = 20, window: int = 20):
     return {"flaky": storage.flakiness_report(limit, window)}

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, ShieldAlert, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, Coins, ShieldAlert, TrendingUp } from 'lucide-react';
 
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
+import { formatTokens } from '../lib/format';
 
 /**
  * A suite's history is only useful if it answers three questions: is it getting
@@ -14,6 +15,7 @@ export function InsightsPage() {
   const [trend, setTrend] = useState([]);
   const [flaky, setFlaky] = useState([]);
   const [breakdown, setBreakdown] = useState([]);
+  const [usage, setUsage] = useState(null);
   const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(true);
 
@@ -22,17 +24,19 @@ export function InsightsPage() {
     (async () => {
       // Awaited first so nothing sets state during the same commit that
       // scheduled this effect.
-      const [trendData, flakyData, priorityData] = await Promise.all([
+      const [trendData, flakyData, priorityData, usageData] = await Promise.all([
         api.trend(days).catch((err) => ({ error: err })),
         api.flaky(20).catch((err) => ({ error: err })),
         api.priorityBreakdown(days).catch((err) => ({ error: err })),
+        api.usage(days).catch((err) => ({ error: err })),
       ]);
       if (cancelled) return;
-      const failure = trendData.error || flakyData.error || priorityData.error;
+      const failure = trendData.error || flakyData.error || priorityData.error || usageData.error;
       if (failure) toast.error(failure.message);
       if (trendData.trend) setTrend(trendData.trend);
       if (flakyData.flaky) setFlaky(flakyData.flaky);
       if (priorityData.breakdown) setBreakdown(priorityData.breakdown);
+      if (usageData.usage) setUsage(usageData.usage);
       setLoading(false);
     })();
     return () => {
@@ -107,6 +111,51 @@ export function InsightsPage() {
               </span>
             </div>
           </div>
+
+          {/* What QAi spent at the model. The quota left on the key is not
+              QAi's to read — it belongs to whoever issues the key — but what
+              the runs consumed is, and that is the half worth watching. */}
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">
+                <Coins size={16} /> Model usage
+              </h2>
+              <span className="muted small">
+                {usage?.runs ? `${usage.runs} run${usage.runs === 1 ? '' : 's'} measured` : ''}
+              </span>
+            </div>
+
+            {!usage || !usage.calls ? (
+              <p className="muted small">
+                Nothing measured in this window yet. Runs from here on record what
+                they ask of the model; older runs predate the counter.
+              </p>
+            ) : (
+              <>
+                <div className="usage-row">
+                  <div className="usage-total">
+                    <span className="stat-label">Total tokens</span>
+                    <span className="stat-value">{formatTokens(usage.total_tokens)}</span>
+                    <span className="muted small">{usage.calls} model calls</span>
+                  </div>
+                  <ul className="usage-breakdown">
+                    <li><span>Input</span><strong>{formatTokens(usage.input_tokens)}</strong></li>
+                    <li><span>Output</span><strong>{formatTokens(usage.output_tokens)}</strong></li>
+                    <li>
+                      <span>Cache read</span>
+                      <strong className="ok">{formatTokens(usage.cache_read_tokens)}</strong>
+                    </li>
+                    <li><span>Cache write</span><strong>{formatTokens(usage.cache_write_tokens)}</strong></li>
+                  </ul>
+                </div>
+                <p className="muted small">
+                  Cache reads are billed at a fraction of fresh input, so they are
+                  counted apart — a high cache-read share means a cheap run, not a
+                  costly one.
+                </p>
+              </>
+            )}
+          </section>
 
           <section className="card">
             <div className="card-head">

@@ -3,7 +3,7 @@
 import asyncio
 import base64
 import re
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import ProviderError, Turn
 
@@ -132,6 +132,9 @@ class GeminiProvider:
         model: str,
         api_key: str,
         effort: str = "medium",
+        # Accepted for protocol compatibility; this provider is not wired to
+        # report token usage, so the sink is left untouched.
+        usage: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         # Accepted and ignored: this SDK exposes no equivalent dial here, and
         # refusing the run over a knob the provider lacks would be worse than

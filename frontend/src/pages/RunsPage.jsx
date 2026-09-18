@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
+import { formatTokens } from '../lib/format';
 
 const EXPORT_LABELS = {
   pytest: { label: 'pytest + Appium', hint: 'Python, Appium-Python-Client' },
@@ -312,6 +313,25 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
             {run.platform} {run.app_id ? `· ${run.app_id}` : ''}
           </span>
         </div>
+        {/* Runs from before the counter existed have no figure; showing a dash
+            there would read as "cost nothing", so the tile is left out. */}
+        {run.llm_calls != null && (
+          <div className="stat">
+            <span className="stat-value">
+              {formatTokens(
+                (run.input_tokens || 0) + (run.output_tokens || 0)
+                  + (run.cache_read_tokens || 0) + (run.cache_write_tokens || 0),
+              )}
+            </span>
+            <span
+              className="stat-label"
+              title={`${run.input_tokens || 0} input · ${run.output_tokens || 0} output · `
+                + `${run.cache_read_tokens || 0} cache read · ${run.cache_write_tokens || 0} cache write`}
+            >
+              tokens · {run.llm_calls} call{run.llm_calls === 1 ? '' : 's'}
+            </span>
+          </div>
+        )}
       </div>
 
       {run.error && (

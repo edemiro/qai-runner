@@ -1,6 +1,6 @@
 """OpenAI provider, on the official `openai` SDK."""
 
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import ProviderError, Turn
 
@@ -64,6 +64,9 @@ class OpenAIProvider:
         model: str,
         api_key: str,
         effort: str = "medium",
+        # Accepted for protocol compatibility; this provider is not wired to
+        # report token usage, so the sink is left untouched.
+        usage: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         # Accepted and ignored: chat completions take no reasoning-effort here,
         # and refusing the run over a knob the provider lacks would be worse

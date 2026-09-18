@@ -1,9 +1,9 @@
 """Anthropic Claude provider, on the official `anthropic` SDK."""
 
 import os
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
-from .base import ProviderError, Turn
+from .base import ProviderError, Turn, add_usage
 
 # Models whose refusals can be rescued by the server-side fallback chain.
 _FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
@@ -166,6 +166,7 @@ class ClaudeProvider:
         model: str,
         api_key: str,
         effort: str = "medium",
+        usage: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         anthropic = _import_sdk()
         client = _client(anthropic, api_key)
@@ -195,6 +196,19 @@ class ClaudeProvider:
             raise ProviderError("Could not reach the Anthropic API. Check the network.") from exc
         finally:
             await client.close()
+
+        # Cache reads and writes are counted apart from fresh input: a run whose
+        # prompt is mostly a cache hit costs a fraction of what the raw input
+        # figure suggests, and hiding that would make the totals unreadable.
+        counts = getattr(final, "usage", None)
+        if counts is not None:
+            add_usage(
+                usage,
+                input_tokens=getattr(counts, "input_tokens", 0) or 0,
+                output_tokens=getattr(counts, "output_tokens", 0) or 0,
+                cache_read_tokens=getattr(counts, "cache_read_input_tokens", 0) or 0,
+                cache_write_tokens=getattr(counts, "cache_creation_input_tokens", 0) or 0,
+            )
 
         if final.stop_reason == "refusal":
             detail = getattr(final, "stop_details", None)
