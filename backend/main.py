@@ -60,6 +60,10 @@ from drivers.web import (
     run_artifact_dir,
 )
 from gesture_controller import MobileGestureController
+from urllib.parse import urlparse
+
+import httpx
+
 from llm import ProviderError
 from llm import registry as providers
 
@@ -1696,6 +1700,54 @@ async def get_trend(days: int = 14):
 async def get_priority_breakdown(days: int = 14):
     """How the history looks through the priority standard, not just in total."""
     return {"breakdown": storage.priority_breakdown(days)}
+
+
+@app.get("/api/insights/budget")
+async def get_budget():
+    """Spend against the monthly limit, read from the gateway.
+
+    The gateway answers `POST /spend-summary` with `{items: [{label, value}]}`
+    — the same call the corporate `/spend` plugin makes, and the only place
+    this number exists: the key is the gateway's, not Anthropic's, so nothing
+    in an Anthropic console applies to it. Returned as-is: the labels are the
+    gateway's own wording and are not worth second-guessing here.
+    """
+    base = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    token = providers.api_key_for("claude")
+    if not base or not token:
+        return {"available": False, "reason": "No gateway base URL or key configured."}
+
+    origin = f"{urlparse(base).scheme}://{urlparse(base).netloc}"
+    try:
+        # The corporate proxy re-signs TLS with a CA that lives in the OS trust
+        # store, not in certifi — which is why the SDK (which goes through
+        # truststore) reaches this host and a plain client does not.
+        import ssl
+
+        import truststore
+
+        ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        async with httpx.AsyncClient(timeout=20.0, verify=ctx) as client:
+            response = await client.post(
+                f"{origin}/spend-summary",
+                headers={"Authorization": f"Bearer {token}", "content-type": "application/json"},
+            )
+    except Exception as exc:
+        return {"available": False, "reason": f"Could not reach the gateway: {exc}"}
+
+    if response.status_code >= 300:
+        return {"available": False, "reason": f"Gateway answered HTTP {response.status_code}."}
+    try:
+        items = response.json().get("items") or []
+    except Exception:
+        return {"available": False, "reason": "The gateway's answer was not JSON."}
+    return {
+        "available": bool(items),
+        "items": [
+            {"label": str(i.get("label", "")), "value": str(i.get("value", ""))}
+            for i in items
+        ],
+    }
 
 
 @app.get("/api/insights/usage")

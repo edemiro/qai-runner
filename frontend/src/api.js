@@ -277,6 +277,8 @@ export const api = {
   // What the runs asked of the model. Not the quota left on the key — that
   // lives with whoever issues it — but what QAi itself spent.
   usage: (days = 14) => request(`/api/insights/usage?days=${days}`),
+  // Spend against the monthly limit, straight from the gateway.
+  budget: () => request('/api/insights/budget'),
 
   // --- saved sign-ins, mocking, baselines ---------------------------------
   authProfiles: () => request('/api/auth-profiles'),

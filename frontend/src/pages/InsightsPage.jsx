@@ -16,6 +16,7 @@ export function InsightsPage() {
   const [flaky, setFlaky] = useState([]);
   const [breakdown, setBreakdown] = useState([]);
   const [usage, setUsage] = useState(null);
+  const [budget, setBudget] = useState(null);
   const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(true);
 
@@ -24,12 +25,16 @@ export function InsightsPage() {
     (async () => {
       // Awaited first so nothing sets state during the same commit that
       // scheduled this effect.
-      const [trendData, flakyData, priorityData, usageData] = await Promise.all([
+      const [trendData, flakyData, priorityData, usageData, budgetData] = await Promise.all([
         api.trend(days).catch((err) => ({ error: err })),
         api.flaky(20).catch((err) => ({ error: err })),
         api.priorityBreakdown(days).catch((err) => ({ error: err })),
         api.usage(days).catch((err) => ({ error: err })),
+        // The gateway may be unreachable or not offer this; the rest of the
+        // page must not fail with it, so its error stays local.
+        api.budget().catch(() => null),
       ]);
+      if (!cancelled) setBudget(budgetData);
       if (cancelled) return;
       const failure = trendData.error || flakyData.error || priorityData.error || usageData.error;
       if (failure) toast.error(failure.message);
@@ -124,6 +129,20 @@ export function InsightsPage() {
                 {usage?.runs ? `${usage.runs} run${usage.runs === 1 ? '' : 's'} measured` : ''}
               </span>
             </div>
+
+            {/* Straight from the gateway, which is the only place the figure
+                exists — the key is the gateway's, not Anthropic's. Its own
+                labels are shown verbatim rather than reworded here. */}
+            {budget?.available && (
+              <ul className="budget-row">
+                {budget.items.map((item) => (
+                  <li key={item.label}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </li>
+                ))}
+              </ul>
+            )}
 
             {!usage || !usage.calls ? (
               <p className="muted small">

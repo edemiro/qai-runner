@@ -5584,3 +5584,29 @@ textarea,
 
 .usage-breakdown strong { font-size: 15px; font-weight: 650; color: var(--text-primary); }
 .usage-breakdown strong.ok { color: #5cbb86; }
+
+/* Spend against the monthly limit, read from the gateway. Sits above the token
+   breakdown: it is the number with a ceiling, so it reads first. */
+.budget-row {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  margin: 2px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.budget-row li { display: flex; flex-direction: column; gap: 1px; }
+
+.budget-row span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.budget-row strong { font-size: 17px; font-weight: 650; color: var(--text-primary); }
