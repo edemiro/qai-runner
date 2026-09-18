@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 import httpx
 
-from config import BROWSERSTACK_ACCESS_KEY, BROWSERSTACK_USERNAME
+from config import BROWSERSTACK_ACCESS_KEY, BROWSERSTACK_USERNAME, MOBILE_AUTO_PERMISSIONS
 
 API_ROOT = "https://api-cloud.browserstack.com/app-automate"
 HUB_HOST = "hub-cloud.browserstack.com"
@@ -240,6 +240,14 @@ def capabilities(
         "appium:automationName": "XCUITest" if is_ios else "UiAutomator2",
         "bstack:options": bstack,
     }
+    if MOBILE_AUTO_PERMISSIONS:
+        # OS permission prompts are answered by the driver, not by the agent
+        # looking at the screen: iOS accepts each alert as it appears, Android
+        # grants the manifest permissions at install so no dialog ever shows.
+        if is_ios:
+            always["appium:autoAcceptAlerts"] = True
+        else:
+            always["appium:autoGrantPermissions"] = True
     if app_id:
         # A bs:// handle is an app BrowserStack installs for the session; anything
         # else is the id of an app already on the device — a bundle id on iOS

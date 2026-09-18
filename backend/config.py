@@ -63,6 +63,13 @@ THY_ENV_BUNDLE_IDS: Dict[str, str] = json.loads(
     os.environ.get("THY_ENV_BUNDLE_IDS", "").strip() or "{}"
 )
 
+# Answer the OS permission prompts (location, notifications, tracking) at the
+# driver level so a freshly launched app lands on its own first screen. On
+# Android the permissions are granted at install and the dialogs never appear;
+# on iOS WebDriverAgent accepts each alert as it comes. Costs no model tokens.
+# Set to "false" to test the permission prompts themselves.
+MOBILE_AUTO_PERMISSIONS = os.environ.get("MOBILE_AUTO_PERMISSIONS", "true").strip().lower() != "false"
+
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.
 ALLOWED_ORIGINS = [

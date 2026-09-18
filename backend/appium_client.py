@@ -84,6 +84,18 @@ async def is_server_running() -> bool:
     return res is not None and res.status_code == 200
 
 
+async def accept_alert(session_id: str) -> bool:
+    """Accept the system alert on screen, if there is one.
+
+    Permission prompts (location, notifications, tracking) are OS dialogs, not
+    the app's, and the driver can answer them without anyone — or any model —
+    looking at the screen. True means an alert was there and was accepted;
+    False means there was nothing to accept, which is the normal case.
+    """
+    res = await post(f"/session/{session_id}/alert/accept", {}, timeout=5.0)
+    return res is not None and res.status_code == 200
+
+
 async def create_session(
     capabilities: Dict[str, Any], base_url: Optional[str] = None,
 ) -> httpx.Response:

@@ -348,6 +348,9 @@ def _capabilities(req: SessionRequest) -> Dict[str, Any]:
             "appium:udid": req.udid,
             "appium:deviceName": req.name or "iPhone",
             "appium:noReset": True,
+            # WebDriverAgent answers the OS permission prompts itself, so the
+            # app opens onto its own first screen with no model involved.
+            "appium:autoAcceptAlerts": config.MOBILE_AUTO_PERMISSIONS,
         }
         # A re-signed WebDriverAgent carries a different bundle id, and Appium
         # would otherwise go looking for the stock one and not find it.
@@ -363,6 +366,9 @@ def _capabilities(req: SessionRequest) -> Dict[str, Any]:
             "appium:noReset": True,
             # Leaving the app running between sessions keeps inspection fast.
             "appium:dontStopAppOnReset": True,
+            # Runtime permissions are granted at install, so the location /
+            # notification dialogs never appear and cost no model tokens.
+            "appium:autoGrantPermissions": config.MOBILE_AUTO_PERMISSIONS,
         }
         if req.appId:
             always["appium:appPackage"] = req.appId
@@ -417,6 +423,18 @@ async def create_appium_session(req: SessionRequest):
         appium.bind_session(session_id, hub)
 
     platform_cache[session_id] = req.platform
+
+    # A prompt that was already up when the session attached — a first-launch
+    # location or notification dialog — is not covered by the auto-accept
+    # capability, which only handles alerts raised afterwards. Clear it here, a
+    # few times over for stacked prompts, so the first frame the tester (and the
+    # agent) sees is the app's own screen. Deterministic; no model call.
+    if config.MOBILE_AUTO_PERMISSIONS:
+        for _ in range(3):
+            if not await appium.accept_alert(session_id):
+                break
+            await asyncio.sleep(0.6)
+
     device = {
         "udid": req.udid,
         "platform": req.platform,
