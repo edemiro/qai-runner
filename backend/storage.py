@@ -873,6 +873,29 @@ def update_case(case_id: str, **fields: Any) -> bool:
         return cursor.rowcount > 0
 
 
+def move_cases(case_ids: List[str], suite_id: str) -> int:
+    """Re-file scenarios into another Test Set, appended in the order given.
+
+    This is how a set that grew from several different requests gets split
+    back into one set per request. Runs and executions keep pointing at the
+    same case ids, so history follows the scenario to its new set.
+    """
+    moved = 0
+    with _connect() as conn:
+        for case_id in case_ids:
+            cursor = conn.execute(
+                """UPDATE suite_cases
+                      SET suite_id = ?,
+                          idx = (SELECT COALESCE(MAX(idx), 0) + 1
+                                   FROM suite_cases WHERE suite_id = ?)
+                    WHERE id = ? AND suite_id != ?""",
+                (suite_id, suite_id, case_id, suite_id),
+            )
+            moved += cursor.rowcount
+        conn.execute("UPDATE suites SET updated_at = ? WHERE id = ?", (time.time(), suite_id))
+    return moved
+
+
 def delete_case(case_id: str) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM suite_cases WHERE id = ?", (case_id,))

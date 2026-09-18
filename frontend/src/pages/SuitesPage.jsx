@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowRight,
   ChevronRight,
   Download,
   Eye,
   EyeOff,
   FileCode2,
   Layers,
+  Loader2,
   Play,
   Plus,
   Sparkles,
@@ -16,6 +18,9 @@ import {
 import { EmptyState } from '../components/EmptyState';
 import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
 import { ScenarioGenerator } from '../components/ScenarioGenerator';
+
+// Sentinel for "a Test Set that does not exist yet" in the move-to picker.
+const MOVE_NEW = '__new__';
 import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -105,6 +110,12 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
      That is what makes "combine two sets into one execution" the same gesture
      as "pick four scenarios out of this one" — no separate mode for it. */
   const [picked, setPicked] = useState(() => new Map());
+  // Where picked scenarios go when moved: an existing set's id, or NEW_SET
+  // with a name (and optional module) for one created on the spot.
+  const [moveTarget, setMoveTarget] = useState('');
+  const [moveNewName, setMoveNewName] = useState('');
+  const [moveNewModule, setMoveNewModule] = useState('');
+  const [moving, setMoving] = useState(false);
   const [executionName, setExecutionName] = useState('');
 
   const [options, setOptions] = useState({
@@ -307,6 +318,44 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
   };
 
   const pickedSets = new Set([...picked.values()].map((p) => p.suite));
+
+  /** Re-file the picked scenarios into another set — chosen, or named and
+   *  created here — so a set that grew from several requests is split back
+   *  into one set per request without retyping anything. */
+  const movePicked = async () => {
+    if (!picked.size || moving) return;
+    let targetId = moveTarget;
+    if (!targetId) {
+      toast.warning('Pick a Test Set to move the scenarios into, or name a new one.');
+      return;
+    }
+    setMoving(true);
+    try {
+      if (targetId === MOVE_NEW) {
+        const name = moveNewName.trim();
+        if (!name) {
+          toast.warning('Name the new Test Set.');
+          return;
+        }
+        const created = await api.createSuite({
+          name, kind: suite.kind, tags: [], module: moveNewModule.trim() || suite.module || null,
+        });
+        targetId = created.id;
+      }
+      const result = await api.moveCases([...picked.keys()], targetId);
+      toast.success(`${result.moved} scenario${result.moved === 1 ? '' : 's'} moved to “${result.suiteName}”.`);
+      setPicked(new Map());
+      setMoveTarget('');
+      setMoveNewName('');
+      setMoveNewModule('');
+      setSuite(await api.suite(suite.id));
+      await loadSuites();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setMoving(false);
+    }
+  };
 
   const runPicked = async () => {
     if (!picked.size || running) return;
@@ -583,6 +632,50 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
                   <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Map())} disabled={running}>
                     Clear
                   </button>
+
+                  {/* Splitting a set: the picked scenarios go to another set,
+                      existing or named here, so one set that collected several
+                      requests can be broken back into one set per request. */}
+                  <div className="pick-move">
+                    <select
+                      value={moveTarget}
+                      onChange={(event) => setMoveTarget(event.target.value)}
+                      disabled={moving || running}
+                      aria-label="Test Set to move the picked scenarios into"
+                    >
+                      <option value="">Move to…</option>
+                      {suites.filter((s) => s.id !== suite.id && s.kind === suite.kind).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.module ? `${s.module} / ` : ''}{s.name}
+                        </option>
+                      ))}
+                      <option value={MOVE_NEW}>＋ New Test Set…</option>
+                    </select>
+                    {moveTarget === MOVE_NEW && (
+                      <>
+                        <input
+                          type="text"
+                          value={moveNewName}
+                          onChange={(event) => setMoveNewName(event.target.value)}
+                          placeholder="New set name — e.g. Tek yön uçuş ara"
+                          disabled={moving}
+                        />
+                        <input
+                          type="text"
+                          value={moveNewModule}
+                          onChange={(event) => setMoveNewModule(event.target.value)}
+                          placeholder={suite.module ? `Module — ${suite.module}` : 'Module (optional)'}
+                          disabled={moving}
+                        />
+                      </>
+                    )}
+                    {moveTarget && (
+                      <button className="btn btn-sm" onClick={movePicked} disabled={moving || running}>
+                        {moving ? <Loader2 size={14} className="spin" /> : <ArrowRight size={14} />}
+                        Move {picked.size}
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 

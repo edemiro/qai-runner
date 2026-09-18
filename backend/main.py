@@ -1519,6 +1519,24 @@ async def remove_case(case_id: str):
     return {"deleted": True}
 
 
+class MoveCasesBody(BaseModel):
+    caseIds: List[str]
+    suiteId: str
+
+
+@app.post("/api/cases/move")
+async def move_cases(body: MoveCasesBody):
+    """Re-file picked scenarios into another Test Set — how one set that
+    collected several requests' worth of scenarios is split back apart."""
+    if not body.caseIds:
+        raise HTTPException(status_code=400, detail="Pick at least one scenario to move.")
+    target = storage.get_suite(body.suiteId)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target Test Set not found.")
+    moved = storage.move_cases(body.caseIds, body.suiteId)
+    return {"moved": moved, "suiteId": target["id"], "suiteName": target["name"]}
+
+
 @app.post("/api/runs/{run_id}/save-as-case")
 async def save_run_as_case(run_id: str, suite_id: str, name: Optional[str] = None):
     """Promote a one-off run into a repeatable suite case.

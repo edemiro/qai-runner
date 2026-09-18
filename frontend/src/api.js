@@ -219,6 +219,9 @@ export const api = {
     request(`/api/session/${sessionId}/scenarios/generate`, { method: 'POST', body }),
   updateCase: (caseId, body) => request(`/api/cases/${caseId}`, { method: 'PATCH', body }),
   deleteCase: (caseId) => request(`/api/cases/${caseId}`, { method: 'DELETE' }),
+  // Re-file picked scenarios into another Test Set (existing or just created).
+  moveCases: (caseIds, suiteId) =>
+    request('/api/cases/move', { method: 'POST', body: { caseIds, suiteId } }),
   saveRunAsCase: (runId, suiteId, name = null) =>
     request(
       `/api/runs/${runId}/save-as-case?suite_id=${suiteId}`

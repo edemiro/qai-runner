@@ -5509,3 +5509,29 @@ textarea,
 }
 
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ==========================================================================
+   Move picked scenarios to another Test Set (splitting a set)
+   ========================================================================== */
+.pick-move {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pick-move select,
+.pick-move input {
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.pick-move select { min-width: 150px; cursor: pointer; }
+.pick-move input { min-width: 170px; }
+.pick-move input:focus,
+.pick-move select:focus { outline: none; border-color: var(--accent); }
