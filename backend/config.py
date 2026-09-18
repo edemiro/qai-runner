@@ -54,6 +54,15 @@ WEB_EXTRA_HEADERS: Dict[str, Dict[str, str]] = json.loads(
     os.environ.get("WEB_EXTRA_HEADERS", "").strip() or "{}"
 )
 
+# Bundle id (iOS) / package (Android) for each named test build, so the quick
+# "open on connect" buttons can launch a known build by id — including on a
+# cloud device, where the app is not in any list to match by name. Fill this in
+# once the ids are known.
+# Example: {"ThyDev": "com.thy.dev", "ThyTest": "com.thy.test", "ThyReg": "com.thy.reg"}
+THY_ENV_BUNDLE_IDS: Dict[str, str] = json.loads(
+    os.environ.get("THY_ENV_BUNDLE_IDS", "").strip() or "{}"
+)
+
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.
 ALLOWED_ORIGINS = [

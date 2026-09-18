@@ -14,6 +14,7 @@ id — that id is what goes in the capabilities where a local session would name
 an installed package.
 """
 
+import asyncio
 import base64
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -130,19 +131,47 @@ def _version_key(version: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
+_apps_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+_APPS_TTL = 60.0
+_apps_lock = asyncio.Lock()
+
+
+def _apps_cache_fresh() -> bool:
+    import time
+    return _apps_cache["value"] is not None and time.monotonic() - _apps_cache["at"] < _APPS_TTL
+
+
 async def list_apps() -> List[Dict[str, Any]]:
     """Apps already uploaded to this account.
 
     An app has to be on BrowserStack before a device can install it, and the
     upload is done from their dashboard or CI — QAi only picks from what is
     there, so nothing here can spend the account's storage.
+
+    Cached briefly, behind a single-flight lock: the device picker asks once per
+    card, so a screen of cloud devices fires this identical account-wide request
+    a dozen times at once on load. Without the lock every one of them misses the
+    still-empty cache and hits BrowserStack, which times most of them out; with
+    it, the first fills the cache and the rest read it.
     """
+    if _apps_cache_fresh():
+        return _apps_cache["value"]
+    async with _apps_lock:
+        # Filled while waiting for the lock — the whole point of the lock.
+        if _apps_cache_fresh():
+            return _apps_cache["value"]
+        return await _fetch_apps()
+
+
+async def _fetch_apps() -> List[Dict[str, Any]]:
+    import time
     try:
         raw = await _get("/recent_apps")
     except httpx.HTTPStatusError as exc:
         # An account that has never uploaded an app answers 422 rather than an
         # empty list, which is not an error worth showing anyone.
         if exc.response.status_code == 422:
+            _apps_cache.update(at=time.monotonic(), value=[])
             return []
         raise
     apps = []
@@ -156,6 +185,7 @@ async def list_apps() -> List[Dict[str, Any]]:
             "version": entry.get("app_version") or "",
             "uploadedAt": entry.get("uploaded_at") or "",
         })
+    _apps_cache.update(at=time.monotonic(), value=apps)
     return apps
 
 

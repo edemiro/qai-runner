@@ -195,20 +195,29 @@ TEST_ENVIRONMENTS = ("ThyDev", "ThyTest", "ThyReg")
 
 
 def match_environments(apps: List[Dict]) -> List[Dict]:
-    """Pair each known environment with the installed app that is it, if any.
+    """Pair each known environment with the app that is it, if any.
 
-    An environment that is not installed is still returned, marked absent, so
-    the picker can show all three and say which are missing — an option that
-    quietly disappears looks like the feature is broken.
+    An environment resolves to an app id one of two ways: a bundle id / package
+    configured for it (THY_ENV_BUNDLE_IDS), which works even on a cloud device
+    where nothing is listed to match by name; or, failing that, an installed app
+    whose name is the environment. An environment with neither is still returned,
+    marked absent, so the picker shows all three and says which are missing —
+    an option that quietly disappears looks like the feature is broken.
     """
+    import config
+
+    configured = {k.lower(): v for k, v in config.THY_ENV_BUNDLE_IDS.items()}
     by_name = {str(app.get("name", "")).strip().lower(): app for app in apps}
     matched = []
     for label in TEST_ENVIRONMENTS:
-        app = by_name.get(label.lower())
+        app_id = configured.get(label.lower())
+        if not app_id:
+            app = by_name.get(label.lower())
+            app_id = app["id"] if app else None
         matched.append({
             "label": label,
-            "appId": app["id"] if app else None,
-            "installed": bool(app),
+            "appId": app_id,
+            "installed": bool(app_id),
         })
     return matched
 
