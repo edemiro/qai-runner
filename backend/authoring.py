@@ -56,11 +56,16 @@ def _name_from_screen(tree: Optional[Dict[str, Any]], url: Optional[str]) -> str
 # ara ekranı" — the instruction to write is not part of the name.
 _ASK_VERBS = re.compile(
     r"\b(test\s+)?(senaryolar[ıi]n[ıi]|senaryolar[ıi]|senaryo(su)?|scenarios?)\s*"
-    r"(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?|olu[şs]tur|üret|write|generate|create)\b.*$"
-    r"|\b(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?|olu[şs]tur|üret)\s*$"
+    r"(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?([ıi]r\s+m[ıi]s[ıi]n)?|olu[şs]tur(ur\s+m[ıi]s[ıi]n)?"
+    r"|üret(ir\s+m[ıi]s[ıi]n)?|write|generate|create)\b.*$"
+    r"|\b(yaz(ar\s+m[ıi]s[ıi]n)?|ç[ıi]kar(t)?([ıi]r\s+m[ıi]s[ıi]n)?|olu[şs]tur|üret)\s*$"
     r"|^\s*(bu\s+ekran(ın|in)?|bu\s+sayfan[ıi]n|for\s+this\s+screen)\s*",
     re.IGNORECASE,
 )
+
+# "ekranının senaryoları" leaves the screen in the genitive once the verb is
+# gone; the set is called "…ekranı", not "…ekranının".
+_GENITIVE = re.compile(r"(?<=[ıiuü])(n[ıiuü]n)$", re.IGNORECASE)
 
 
 def _name_from_brief(brief: Optional[str]) -> str:
@@ -82,6 +87,7 @@ def _name_from_brief(brief: Optional[str]) -> str:
     text = _ASK_VERBS.sub("", text).strip(" -–:,.")
     # A connector left dangling once the verb is gone: "uçuş ara ekranı için".
     text = re.sub(r"\s+(için|for|about|on)$", "", text, flags=re.IGNORECASE)
+    text = _GENITIVE.sub("", text)
     text = " ".join(text.split())[:60]
     return text[:1].upper() + text[1:] if text else ""
 
