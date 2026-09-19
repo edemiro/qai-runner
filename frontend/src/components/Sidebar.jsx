@@ -33,7 +33,9 @@ const byId = Object.fromEntries(NAV.map((item) => [item.id, item]));
 const NAV_GROUPS = [
   { title: 'PLATFORM', items: ['web', 'mobile'].map((id) => byId[id]) },
   { title: 'TEST SUITE', items: ['suites', 'executions'].map((id) => byId[id]) },
-  { title: 'REPORT', items: ['runs', 'insights', 'bugs'].map((id) => byId[id]) },
+  // Bugs above Insights: a defect is something to act on today, trends are
+  // something to read at the end of the week.
+  { title: 'REPORT', items: ['runs', 'bugs', 'insights'].map((id) => byId[id]) },
 ];
 
 const USER = { name: 'Ergün Demiro', role: 'QA Engineer' };

@@ -520,6 +520,8 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished["status"], "failed")
         self.assertIn("Step 2", finished["summary"])
 
+
+
     async def test_a_step_that_proves_nothing_cannot_pass(self):
         # The same trap as a green run that asserted nothing, one scale down:
         # a step with an expected result has to actually check it.
@@ -552,3 +554,165 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
     async def test_a_run_without_steps_keeps_the_open_ended_prompt(self):
         self.assertNotIn("step_done", agent.build_system_prompt("web"))
         self.assertIn("step_done", agent.build_system_prompt("web", stepwise=True))
+
+
+class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
+    """The second run of an unchanged scenario should not ask the model how to
+    do what the first one already did.
+
+    A green run's actions are kept on the scenario's steps, and a step that has
+    them carries them out instead of reasoning its way there — which is the
+    whole saving, since a model call is what an action costs. Everything here
+    is about the two halves of that being true at once: that the model really
+    is skipped, and that a recording which no longer fits the page hands the
+    step straight back rather than driving on through a screen it does not
+    describe.
+    """
+
+    ASSERT = ('```json\n{"type":"action","action":"assert_visible",'
+              '"elementId":"el_1","reason":"r"}\n```')
+    CLOSE = ('```json\n{"type":"action","action":"step_done","value":"pass",'
+             '"reason":"ok"}\n```')
+
+    async def _run(self, steps, script=None, fails=()):
+        """Run the scenario, counting what the model was asked and what ran.
+
+        `fails` names the actions `_execute_action` should refuse *when they
+        were replayed*, which is how a recording that no longer fits the page
+        is expressed. The model's own attempt at the same action succeeds —
+        that is the point of handing the step back to it.
+        """
+        script = list(script or [])
+        asked = []
+        ran = []
+
+        class Provider:
+            id, label = "fake", "Fake"
+
+            async def stream(self, _system, turns, *a, **k):
+                asked.append(turns)
+                yield script.pop(0) if script else (
+                    '```json\n{"type":"action","action":"step_done",'
+                    '"value":"fail","reason":"script ran out"}\n```'
+                )
+
+        class Snapshot:
+            snapshot_id = "s"
+            def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
+
+        class Target:
+            kind, session_id = "web", "replay-test"
+            def describe(self): return {"name": "t", "platform": "Web"}
+            async def snapshot(self): return Snapshot()
+            async def screenshot(self): return None
+
+        async def execute(_target, action, _snapshot):
+            kind = (action.get("action") or "").lower()
+            reason = action.get("reason") or ""
+            ran.append((kind, action.get("selector"), reason))
+            ok = not (kind in fails and "replayed" in reason)
+            return {"ok": ok, "message": "ok" if ok else "gone", "element": None}
+
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", execute):
+            async for line in agent.run_agent(
+                Target(), "senaryo", steps=steps, session_state=agent.AgentSession(),
+            ):
+                events.append(json.loads(line))
+        return events, asked, ran
+
+    @staticmethod
+    def _verdicts(events):
+        return [(e["index"], e["status"])
+                for e in events if e["event"] == "scenario_step_finished"]
+
+    RECORDED = [
+        {"action": "click", "selector": "#search", "value": None, "label": "Uçuş ara"},
+        {"action": "assert_visible", "selector": "#results", "value": None, "label": "Results"},
+    ]
+
+    async def test_a_recorded_step_costs_no_model_call_at_all(self):
+        """The point of the whole thing. One step, fully recorded, ending in an
+        assertion that holds — the provider is never reached."""
+        events, asked, ran = await self._run([
+            {"action": "Search", "expected": "Results", "recorded": self.RECORDED},
+        ])
+        self.assertEqual(asked, [], "the model should not have been asked anything")
+        self.assertEqual([kind for kind, _, _ in ran], ["click", "assert_visible"])
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_the_recorded_selector_is_what_gets_acted_on(self):
+        _, _, ran = await self._run([
+            {"action": "Search", "expected": "Results", "recorded": self.RECORDED},
+        ])
+        self.assertEqual([selector for _, selector, _ in ran], ["#search", "#results"])
+
+    async def test_a_replayed_action_says_where_it_came_from(self):
+        """It goes into the run's own record, so a reader can tell a step that
+        was worked out from one that was repeated."""
+        _, _, ran = await self._run([
+            {"action": "Search", "expected": "Results", "recorded": self.RECORDED},
+        ])
+        self.assertIn("replayed", (ran[0][2] or "").lower())
+
+    async def test_a_recording_that_misses_hands_the_step_back(self):
+        """The page moved. Everything still queued was recorded against a state
+        it is no longer in, so the model takes over from where the replay got
+        to rather than driving on through it."""
+        events, asked, ran = await self._run(
+            [{"action": "Search", "expected": "Results", "recorded": self.RECORDED}],
+            script=[self.ASSERT, self.CLOSE],
+            fails={"click"},
+        )
+        self.assertTrue(asked, "the model should have been asked to finish the step")
+        self.assertNotIn("assert_visible", [kind for kind, _, r in ran if r and "replayed" in r])
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_a_stale_recorded_assertion_does_not_fail_the_run(self):
+        """A recorded assertion that no longer holds says the recording is out
+        of date, which is the case the model is there for. Ending the run on it
+        would make a scenario fail for having passed before."""
+        events, asked, _ = await self._run(
+            [{"action": "Search", "expected": "Results", "recorded": self.RECORDED}],
+            script=[self.ASSERT, self.CLOSE],
+            fails={"assert_visible"},
+        )
+        # The replayed assertion fails, the model is asked, and its own
+        # assertion (which this harness lets through) closes the step.
+        self.assertTrue(asked)
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_a_recording_that_proves_nothing_still_goes_to_the_model(self):
+        """Clicks alone are not a passed step. Without an assertion behind it
+        the step is handed over exactly as an unrecorded one would be."""
+        events, asked, ran = await self._run(
+            [{"action": "Search", "expected": "Results",
+              "recorded": [{"action": "click", "selector": "#search"}]}],
+            script=[self.ASSERT, self.CLOSE],
+        )
+        self.assertTrue(asked, "a recording with no assertion cannot close a step")
+        self.assertEqual(ran[0][0], "click", "but its actions still ran")
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_a_step_with_no_recording_behaves_as_it_always_did(self):
+        events, asked, _ = await self._run(
+            [{"action": "Search", "expected": "Results"}],
+            script=[self.ASSERT, self.CLOSE],
+        )
+        self.assertEqual(len(asked), 2)
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    async def test_a_recorded_step_and_an_unrecorded_one_in_the_same_scenario(self):
+        """The mixed case is the ordinary one while a suite is warming up."""
+        events, asked, _ = await self._run(
+            [
+                {"action": "Search", "expected": "Results", "recorded": self.RECORDED},
+                {"action": "Pick a flight", "expected": "Passenger page"},
+            ],
+            script=[self.ASSERT, self.CLOSE],
+        )
+        self.assertEqual(len(asked), 2, "only the unrecorded step should cost calls")
+        self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "passed")])

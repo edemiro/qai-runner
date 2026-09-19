@@ -11,8 +11,20 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
  * reported as "carried out", never as verified.
  */
 export function StepEditor({ steps, onChange, disabled = false }) {
+  /* Rewriting a step drops what the last green run recorded for it. The runner
+     replays that recording instead of working the step out again, so a step
+     that now says something different has to be worked out again — and the
+     danger is not the wasted effort, it is a recorded assertion general enough
+     to still pass, which would report the new step as verified without it ever
+     having been carried out. Reordering keeps them: a step that moved is still
+     the same step. */
   const update = (index, patch) => {
-    onChange(steps.map((step, i) => (i === index ? { ...step, ...patch } : step)));
+    onChange(steps.map((step, i) => {
+      if (i !== index) return step;
+      const next = { ...step, ...patch };
+      if ('action' in patch || 'expected' in patch) delete next.recorded;
+      return next;
+    }));
   };
 
   const add = () => onChange([...steps, { action: '', expected: '' }]);

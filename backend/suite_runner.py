@@ -213,6 +213,33 @@ async def cancel(suite_run_id: str) -> bool:
     return True
 
 
+def _keep_what_worked(
+    run_id: Optional[str], case: Dict[str, Any], row: Optional[Dict[str, Any]],
+) -> None:
+    """Hand a green run's actions back to the scenario that produced them.
+
+    The second run of an unchanged scenario has no reason to ask the model how
+    to do what the first one already did, so what worked is kept on the steps
+    themselves and replayed next time.
+
+    Not for a dataset row, though. The recorded actions carry the values that
+    were typed, and those came from that row — replaying them under the next
+    row would fill the form with the previous passenger and then assert against
+    the wrong one. A scenario driven by data is re-derived each time.
+
+    Best-effort throughout: a scenario that cannot learn from a run is not a
+    reason to fail the run.
+    """
+    if not run_id or row:
+        return
+    try:
+        kept = storage.promote_recording(run_id, case["id"])
+        if kept:
+            print(f"[suite] kept the recording for {kept} step(s) of {case['id']}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[suite] could not keep the recording for {case['id']}: {exc}")
+
+
 def _record_unstarted_case(
     case: Dict[str, Any],
     suite_run_id: str,
@@ -429,6 +456,7 @@ async def _execute_one(
         _cleanup(staging)
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
+            _keep_what_worked(run_id, case, row)
         else:
             run_id = _record_unstarted_case(
                 case, suite_run_id, "web", error, row, label,
@@ -536,6 +564,7 @@ async def _run_mobile_case(
     finally:
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
+            _keep_what_worked(run_id, case, row)
         else:
             run_id = _record_unstarted_case(
                 case, suite_run_id, "mobile", error, row, label,

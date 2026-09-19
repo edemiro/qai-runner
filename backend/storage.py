@@ -235,6 +235,11 @@ MIGRATIONS = [
     ("runs", "dataset_row", "TEXT"),
     ("steps", "selector", "TEXT"),
     ("steps", "healed", "INTEGER"),
+    # Which scenario step this agent action was serving. A scenario step is
+    # carried out by several actions, and without this the two lists could only
+    # be shown side by side and left to the reader to line up — which is also
+    # what stopped a green run's work from being kept and reused.
+    ("steps", "scenario_idx", "INTEGER"),
     # What kind of request failed, and whose server answered. Without these a
     # report can say "1 page error" but not whether it has anything to do with
     # the feature under test.
@@ -531,20 +536,26 @@ def add_step(
     duration_ms: Optional[int] = None,
     selector: Optional[str] = None,
     healed: bool = False,
+    scenario_idx: Optional[int] = None,
 ) -> int:
+    # The element the action resolved to already carries the selector that
+    # reached it; taking it from there means every action records how it found
+    # what it acted on, not just the ones that were handed a selector.
+    if not selector and element:
+        selector = element.get("xpath") or None
     with _connect() as conn:
         cursor = conn.execute("SELECT COALESCE(MAX(idx), 0) + 1 AS next FROM steps WHERE run_id = ?", (run_id,))
         idx = cursor.fetchone()["next"]
         cursor = conn.execute(
             """INSERT INTO steps (run_id, idx, action, target, value, reason, status,
                                   message, element, screenshot, duration_ms, created_at,
-                                  selector, healed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  selector, healed, scenario_idx)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, idx, action, target, value, reason, status, message,
                 json.dumps(element, ensure_ascii=False) if element else None,
                 screenshot, duration_ms, time.time(),
-                selector, 1 if healed else 0,
+                selector, 1 if healed else 0, scenario_idx,
             ),
         )
         return cursor.lastrowid
@@ -1109,8 +1120,94 @@ def get_suite(suite_id: str) -> Optional[Dict[str, Any]]:
 
 MAX_STEPS = 40
 
+# How many recorded actions a step may carry back. A step that took more than
+# this to carry out is one the agent struggled with, and a recording of a
+# struggle is not worth replaying — the budget that cuts a step off is 12.
+MAX_RECORDED_ACTIONS = 12
 
-def clean_steps(raw: Any) -> List[Dict[str, str]]:
+# What a recorded action keeps. Deliberately the minimum needed to perform it
+# again: everything else — the screenshot, the timing, the model's reasoning —
+# belongs to the run that produced it, not to the scenario.
+_RECORDED_FIELDS = ("action", "selector", "value", "label")
+
+
+def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
+    """The actions a step was last carried out with, in a shape it can be
+    carried out with again.
+
+    An action with nothing to act on is dropped: it could not be replayed, and
+    a recording with a hole in it is worse than no recording, because the
+    replay would skip a step and then assert against a screen that never
+    reached the state the assertion describes.
+    """
+    if not isinstance(raw, list):
+        return []
+    actions = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        kind = " ".join(str(entry.get("action") or "").split()).lower()
+        if not kind:
+            continue
+        if kind in NOT_REPLAYABLE:
+            return []
+        selector = (str(entry.get("selector") or "").strip())[:400] or None
+        value = entry.get("value")
+        value = (str(value).strip())[:600] if value is not None else None
+        # Only the actions that reach into the page need one; `wait`, `key` and
+        # `scroll` act on the page as a whole.
+        if not selector and kind not in ACTIONS_WITHOUT_A_TARGET:
+            return []
+        actions.append({
+            "action": kind, "selector": selector, "value": value,
+            "label": (str(entry.get("label") or "").strip())[:120] or None,
+        })
+        if len(actions) > MAX_RECORDED_ACTIONS:
+            return []
+    return actions
+
+
+# Acting on the page rather than on something in it, so a recording of one is
+# complete without a selector.
+ACTIONS_WITHOUT_A_TARGET = {"wait", "key", "scroll", "swipe", "navigate", "back"}
+
+# Actions a recording cannot carry, so a step containing one keeps none.
+# `assert_disabled` resolves against a live snapshot's elementId, which a
+# recording does not have; `explore` and the authoring verbs are about reading
+# the screen rather than driving it; the rest close the step or the run and are
+# the loop's business, not the page's.
+NOT_REPLAYABLE = {
+    "assert_disabled", "explore", "write_scenarios", "run_test_set",
+    "step_done", "done", "finish", "complete",
+}
+
+
+def drop_stale_recordings(
+    existing: Optional[Dict[str, Any]], steps: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Take the recording off any step whose instruction has changed.
+
+    The runner replays a recording instead of working the step out again, so a
+    step that now says something different has to be worked out again. The
+    danger is not the wasted effort — it is a recorded assertion general enough
+    to still hold, which would report the rewritten step as verified without it
+    ever having been carried out.
+
+    Matched on what the step says rather than on where it sits, so reordering a
+    scenario costs nothing: a step that moved is the same step, and only a step
+    whose wording no longer appears in the saved scenario loses its recording.
+    """
+    said_before = {
+        (step.get("action"), step.get("expected"))
+        for step in ((existing or {}).get("steps") or [])
+    }
+    for step in steps:
+        if "recorded" in step and (step.get("action"), step.get("expected")) not in said_before:
+            step.pop("recorded")
+    return steps
+
+
+def clean_steps(raw: Any) -> List[Dict[str, Any]]:
     """Ordered steps, each an instruction and what it should produce.
 
     Anything without an instruction is dropped rather than stored: a step with
@@ -1135,7 +1232,15 @@ def clean_steps(raw: Any) -> List[Dict[str, str]]:
         if not action:
             continue
         expected = " ".join(str(entry.get("expected") or "").split())
-        steps.append({"action": action[:600], "expected": expected[:600]})
+        step: Dict[str, Any] = {"action": action[:600], "expected": expected[:600]}
+        # Carried through every edit of the scenario. A step whose wording
+        # changes keeps its recording; if the wording changed enough to mean
+        # something else, the replay fails its assertion and the step is handed
+        # back to the model, which re-records it.
+        recorded = clean_recorded(entry.get("recorded"))
+        if recorded:
+            step["recorded"] = recorded
+        steps.append(step)
     return steps[:MAX_STEPS]
 
 
@@ -1268,7 +1373,7 @@ def update_case(case_id: str, **fields: Any) -> bool:
         sets.append("tags = ?")
         values.append(_dump_tags(fields["tags"]))
     if "steps" in fields:
-        cleaned = clean_steps(fields["steps"])
+        cleaned = drop_stale_recordings(get_case(case_id), clean_steps(fields["steps"]))
         sets.append("steps = ?")
         values.append(json.dumps(cleaned, ensure_ascii=False) if cleaned else None)
     if "required_data" in fields:
@@ -1340,6 +1445,70 @@ def delete_case(case_id: str) -> bool:
     with _connect() as conn:
         cursor = conn.execute("DELETE FROM suite_cases WHERE id = ?", (case_id,))
         return cursor.rowcount > 0
+
+
+def promote_recording(run_id: str, case_id: str) -> int:
+    """Keep what a green run did, on the scenario that ran.
+
+    Every execution re-derived the same clicks from the same screens: a
+    screenshot and a model call per action, paid again on every run of a
+    scenario that had not changed. The run already knows which element each
+    action reached and how it addressed it, so the second run of a scenario has
+    no reason to ask the model how to do what the first one already did.
+
+    Only a green run is kept. A recording taken from a failed one would make
+    the next run repeat the same wrong move, faster and without the model
+    present to notice — and a scenario that has never passed has nothing worth
+    learning from. Returns how many steps came away with a recording.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return 0
+    steps = case.get("steps") or []
+    if not steps:
+        return 0
+
+    with _connect() as conn:
+        run = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if run is None or run["status"] != "passed":
+            return 0
+        rows = conn.execute(
+            """SELECT scenario_idx, action, selector, value, target, status
+                 FROM steps
+                WHERE run_id = ? AND scenario_idx IS NOT NULL
+                ORDER BY idx ASC""",
+            (run_id,),
+        ).fetchall()
+        # A scenario step is only worth keeping if every action under it
+        # worked. One failure in the middle means the agent recovered by doing
+        # something else, and replaying the recovery without what prompted it
+        # reproduces the mistake, not the fix.
+        by_step: Dict[int, List[Dict[str, Any]]] = {}
+        spoiled = set()
+        for row in rows:
+            idx = row["scenario_idx"]
+            if row["status"] != "passed":
+                spoiled.add(idx)
+                continue
+            by_step.setdefault(idx, []).append({
+                "action": row["action"], "selector": row["selector"],
+                "value": row["value"], "label": row["target"],
+            })
+
+        kept = 0
+        for position, step in enumerate(steps, start=1):
+            recorded = clean_recorded(by_step.get(position) or [])
+            if position in spoiled or not recorded:
+                step.pop("recorded", None)
+                continue
+            step["recorded"] = recorded
+            kept += 1
+
+        conn.execute(
+            "UPDATE suite_cases SET steps = ? WHERE id = ?",
+            (json.dumps(steps, ensure_ascii=False), case_id),
+        )
+    return kept
 
 
 def get_case(case_id: str) -> Optional[Dict[str, Any]]:

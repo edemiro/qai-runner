@@ -1057,10 +1057,22 @@ async def run_agent(
     # budget and starve every step after it.
     ACTIONS_PER_STEP = 12
 
+    # A scenario that has passed before does not need the model to work out how
+    # to do it again. `promote_recording` keeps what a green run did on the
+    # scenario itself, and these are those actions, waiting to be carried out in
+    # place of asking. The queue is emptied the moment one of them misses: past
+    # that point the screen is not in the state the rest was recorded against,
+    # so the model takes the step back — and the run that results, if it is
+    # green, replaces the recording.
+    replay_queue: List[Dict[str, Any]] = []
+    replayed_actions = 0
+
     def open_step(index: int):
-        nonlocal step_closed
+        nonlocal step_closed, replay_queue, replayed_actions
         entry = scenario_steps[index]
         step_closed = False
+        replay_queue = [dict(item) for item in (entry.get("recorded") or [])]
+        replayed_actions = 0
         return storage.start_scenario_step(
             run_id, index + 1, entry["action"], entry.get("expected") or None,
         )
@@ -1086,7 +1098,11 @@ async def run_agent(
             # A step that has spent its budget without closing itself is cut
             # off here and marked failed, so the steps after it still get to
             # run instead of inheriting an exhausted ceiling.
-            if stepwise and step_actions >= ACTIONS_PER_STEP:
+            # Replayed actions do not count against it. The budget is there to
+            # stop the model grinding at a step it cannot do; a recording that
+            # turned out to be stale should hand over the full budget rather
+            # than a step already half spent. The report still shows the total.
+            if stepwise and (step_actions - replayed_actions) >= ACTIONS_PER_STEP:
                 stalled = (
                     f"Step {step_index + 1} used {ACTIONS_PER_STEP} actions without "
                     "reaching its expected result."
@@ -1143,77 +1159,110 @@ async def run_agent(
             else:
                 focus = goal
 
-            turns = _build_turns(
-                state.history, screen_json, screenshot if use_vision else None, focus,
-            )
-
-            yield _event("thinking", step=step_no)
+            # The recording, when there is one, is taken instead of asking —
+            # not as a shortcut through the loop but as the same kind of thing
+            # the model would have produced, so it is executed, recorded and
+            # reported by exactly the code below that handles a model action.
+            action: Optional[Dict[str, Any]] = None
+            replaying = False
+            # Only the model path produces one, but the no-action handling
+            # below reads it either way.
             reply = ""
-            try:
-                async for token in provider.stream(
-                    system_prompt, turns, model, api_key, effort, usage=run_usage,
-                ):
-                    reply += token
-                    yield _event("token", text=token, step=step_no)
-            except ProviderError as exc:
-                final_status, final_error = "failed", str(exc)
-                yield _event("error", message=final_error)
-                break
-            except Exception as exc:
-                final_status, final_error = "failed", f"{provider.label} error: {exc}"
-                yield _event("error", message=final_error)
-                break
+            if replay_queue:
+                entry = replay_queue.pop(0)
+                action = {
+                    "action": entry.get("action"),
+                    "selector": entry.get("selector"),
+                    "value": entry.get("value"),
+                    "reason": "replayed from the last green run",
+                }
+                replaying = True
+                replayed_actions += 1
+                yield _event("replaying", step=step_no, action=action["action"],
+                             label=entry.get("label"))
 
-            # An empty response is its own failure, not "the model is done".
-            # Reporting it as "finished without asserting" hides the cause.
-            if not reply.strip():
-                final_status = "failed"
-                final_error = (
-                    f"{provider.label} returned an empty response for step {step_no}. "
-                    "This is usually a safety filter rejecting the screenshot or the "
-                    "scenario text. Try turning Vision off, rewording the goal, or "
-                    "switching provider in Settings."
+            # When the recording runs out having proved the step's expected
+            # result, the step is closed on that proof alone. Without an
+            # assertion behind it the model still takes over — a recording that
+            # verified nothing is a sequence of clicks, not a passed step.
+            elif stepwise and replayed_actions and step_asserted and not step_closed:
+                action = {
+                    "action": "step_done", "value": "pass",
+                    "reason": "carried out from the last green run's recording",
+                }
+
+            if action is None:
+                turns = _build_turns(
+                    state.history, screen_json, screenshot if use_vision else None, focus,
                 )
-                yield _event("error", message=final_error)
-                break
 
-            state.history.append({"role": "assistant", "content": reply})
-
-            action = parse_action(reply)
-
-            # Models regularly describe the action instead of emitting it
-            # ("I will enter an invalid email."). One corrective nudge recovers
-            # the step; giving up here would end a perfectly good run on the
-            # first turn.
-            if action is None and not looks_like_an_attempted_action(reply):
-                state.history.append({
-                    "role": "user",
-                    "content": (
-                        "That reply had no action block, so nothing ran. Reply again with "
-                        "exactly one fenced ```json block using the documented keys "
-                        '("type":"action" and "action":"<name>"). If the goal is already '
-                        'met, use the `done` action.'
-                    ),
-                })
-                retry_turns = _build_turns(
-                    state.history, screen_json, screenshot if use_vision else None, goal
-                )
-                retry = ""
+                yield _event("thinking", step=step_no)
+                reply = ""
                 try:
                     async for token in provider.stream(
-                        system_prompt, retry_turns, model, api_key, effort, usage=run_usage,
+                        system_prompt, turns, model, api_key, effort, usage=run_usage,
                     ):
-                        retry += token
+                        reply += token
                         yield _event("token", text=token, step=step_no)
-                except (ProviderError, Exception) as exc:
+                except ProviderError as exc:
                     final_status, final_error = "failed", str(exc)
                     yield _event("error", message=final_error)
                     break
+                except Exception as exc:
+                    final_status, final_error = "failed", f"{provider.label} error: {exc}"
+                    yield _event("error", message=final_error)
+                    break
 
-                state.history.append({"role": "assistant", "content": retry})
-                action = parse_action(retry)
-                if action is not None:
-                    reply = retry
+                # An empty response is its own failure, not "the model is done".
+                # Reporting it as "finished without asserting" hides the cause.
+                if not reply.strip():
+                    final_status = "failed"
+                    final_error = (
+                        f"{provider.label} returned an empty response for step {step_no}. "
+                        "This is usually a safety filter rejecting the screenshot or the "
+                        "scenario text. Try turning Vision off, rewording the goal, or "
+                        "switching provider in Settings."
+                    )
+                    yield _event("error", message=final_error)
+                    break
+
+                state.history.append({"role": "assistant", "content": reply})
+
+                action = parse_action(reply)
+
+                # Models regularly describe the action instead of emitting it
+                # ("I will enter an invalid email."). One corrective nudge recovers
+                # the step; giving up here would end a perfectly good run on the
+                # first turn.
+                if action is None and not looks_like_an_attempted_action(reply):
+                    state.history.append({
+                        "role": "user",
+                        "content": (
+                            "That reply had no action block, so nothing ran. Reply again with "
+                            "exactly one fenced ```json block using the documented keys "
+                            '("type":"action" and "action":"<name>"). If the goal is already '
+                            'met, use the `done` action.'
+                        ),
+                    })
+                    retry_turns = _build_turns(
+                        state.history, screen_json, screenshot if use_vision else None, goal
+                    )
+                    retry = ""
+                    try:
+                        async for token in provider.stream(
+                            system_prompt, retry_turns, model, api_key, effort, usage=run_usage,
+                        ):
+                            retry += token
+                            yield _event("token", text=token, step=step_no)
+                    except (ProviderError, Exception) as exc:
+                        final_status, final_error = "failed", str(exc)
+                        yield _event("error", message=final_error)
+                        break
+
+                    state.history.append({"role": "assistant", "content": retry})
+                    action = parse_action(retry)
+                    if action is not None:
+                        reply = retry
 
             if action is None:
                 # The tokens are already on screen; re-emitting them as a
@@ -1351,6 +1400,18 @@ async def run_agent(
                 executed_assertion = True
                 step_asserted = True
 
+            # The recording has stopped describing this screen. Everything
+            # still queued was recorded against a state the page is no longer
+            # in, so it is dropped and the model takes the step from here —
+            # with the part that did work already applied, which is the same
+            # position it would be in had it done those actions itself.
+            if replaying and not result["ok"]:
+                replay_queue.clear()
+                yield _event(
+                    "replay_abandoned", step=step_no, action=kind,
+                    message=result["message"],
+                )
+
             # Stored only when it shows something the last stored frame did
             # not. Two steps in a row proving things about the same unchanged
             # screen used to file the same picture twice.
@@ -1374,6 +1435,9 @@ async def run_agent(
                 element=result.get("element"),
                 screenshot=step_shot,
                 duration_ms=duration_ms,
+                # Which scenario step this served, so a green run's work can be
+                # kept on that step and replayed instead of re-derived.
+                scenario_idx=(step_index + 1) if stepwise else None,
             )
 
             yield _event(
@@ -1388,7 +1452,12 @@ async def run_agent(
 
             # A failed assertion ends the run; a failed interaction is reported
             # back to the model so it can try a different route.
-            if not result["ok"] and kind in ASSERTION_ACTIONS:
+            #
+            # Not when it was replayed, though. A recorded assertion that no
+            # longer holds says the recording is stale, which is exactly the
+            # case the model is there for — ending the run on it would make a
+            # scenario that has passed before fail for having passed before.
+            if not result["ok"] and kind in ASSERTION_ACTIONS and not replaying:
                 final_status, final_error = "failed", result["message"]
                 yield _event("finished", status="failed", summary=result["message"])
                 break
