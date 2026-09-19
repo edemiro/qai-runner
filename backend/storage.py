@@ -1169,7 +1169,18 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
 
 # Acting on the page rather than on something in it, so a recording of one is
 # complete without a selector.
-ACTIONS_WITHOUT_A_TARGET = {"wait", "key", "scroll", "swipe", "navigate", "back"}
+#
+# The assertions here are the reason this list matters rather than being a
+# detail: `assert_text` and `assert_absent` read the screen's text and are
+# driven entirely by the value they look for, so they never carry a selector —
+# and while they were treated as incomplete, a single one of them at the end of
+# a step threw away the recording for every action in it. Measured on five
+# scenarios, that was six of the twenty steps. `assert_visible` is not here: it
+# resolves an element, so it does need one.
+ACTIONS_WITHOUT_A_TARGET = {
+    "wait", "key", "scroll", "swipe", "navigate", "back",
+    "assert_text", "assert_absent", "assert_no_errors", "assert_visual",
+}
 
 # Actions a recording cannot carry, so a step containing one keeps none.
 # `assert_disabled` resolves against a live snapshot's elementId, which a

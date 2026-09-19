@@ -697,6 +697,27 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ran[0][0], "click", "but its actions still ran")
         self.assertEqual(self._verdicts(events), [(1, "passed")])
 
+    async def test_a_replayed_action_records_the_selector_it_used(self):
+        """Measured on a real suite: a run that replayed a recording perfectly
+        then erased it. A replayed action is given a selector rather than an
+        elementId, so the driver resolves it without a snapshot and has no
+        element to hand back — and the selector, derived from that element, came
+        out empty. An action with no selector cannot be replayed, so promotion
+        threw the whole step's recording away and the third run paid full price
+        again.
+        """
+        recorded = []
+        with patch.object(agent.storage, "add_step",
+                          side_effect=lambda *a, **k: recorded.append(k) or 1):
+            await self._run([{
+                "action": "Search", "expected": "Results", "recorded": self.RECORDED,
+            }])
+        assert recorded, "nothing was recorded at all"
+        self.assertEqual(
+            [entry.get("selector") for entry in recorded],
+            ["#search", "#results"],
+        )
+
     async def test_a_step_with_no_recording_behaves_as_it_always_did(self):
         events, asked, _ = await self._run(
             [{"action": "Search", "expected": "Results"}],

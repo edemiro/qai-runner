@@ -1435,6 +1435,13 @@ async def run_agent(
                 element=result.get("element"),
                 screenshot=step_shot,
                 duration_ms=duration_ms,
+                # How the element was addressed, taken from the action first.
+                # A replayed action is given a selector rather than an
+                # elementId, so the driver resolves it without a snapshot and
+                # has no element to hand back — leaving this to be derived from
+                # one meant a replayed action recorded no selector, and the run
+                # that replayed a recording perfectly then erased it.
+                selector=action.get("selector") or action.get("xpath"),
                 # Which scenario step this served, so a green run's work can be
                 # kept on that step and replayed instead of re-derived.
                 scenario_idx=(step_index + 1) if stepwise else None,

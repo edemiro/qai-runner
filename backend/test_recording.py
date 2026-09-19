@@ -71,6 +71,26 @@ def test_an_action_on_the_page_itself_needs_no_target(db):
     assert [item["action"] for item in kept] == ["wait", "scroll"]
 
 
+def test_an_assertion_about_the_screen_needs_no_target_either():
+    """Measured on five scenarios: `assert_text` and `assert_absent` read the
+    page's text and are driven by the value they look for, so they never carry
+    a selector. While that counted as incomplete, one of them at the end of a
+    step threw away the recording for every action in it — six of twenty steps.
+    """
+    kept = storage.clean_recorded([
+        {"action": "click", "selector": "#go"},
+        {"action": "assert_text", "value": "ESB"},
+    ])
+    assert [item["action"] for item in kept] == ["click", "assert_text"]
+    assert kept[1]["value"] == "ESB"
+
+
+def test_an_assertion_about_an_element_still_needs_one():
+    """assert_visible resolves an element, so a recording of it without a
+    selector could not be replayed."""
+    assert storage.clean_recorded([{"action": "assert_visible"}]) == []
+
+
 def test_an_action_a_recording_cannot_carry_voids_it():
     """assert_disabled resolves against a live snapshot's elementId, which a
     recording does not have, so replaying it would always fail."""
