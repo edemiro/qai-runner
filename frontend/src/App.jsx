@@ -267,7 +267,18 @@ export default function App() {
   );
 
   // ------------------------------------------------------------------ agent -
-  const agent = useAgentRun(activeSessionId, {
+  // The visible workspace owns the session the agent runs against. Connecting a
+  // phone makes it the active session, so binding the one agent hook to
+  // activeSessionId alone would let a run started from the Web tab drive the
+  // phone while the browser sat on screen. Derived rather than synced into
+  // state: on any other tab the active session is still the right answer.
+  const agentSessionId = useMemo(() => {
+    if (activeTab === 'web') return webSession?.sessionId ?? null;
+    if (activeTab === 'mobile') return mobileSession?.sessionId ?? null;
+    return activeSessionId;
+  }, [activeTab, webSession, mobileSession, activeSessionId]);
+
+  const agent = useAgentRun(agentSessionId, {
     onFinished: () => refreshTree(),
   });
 
@@ -392,6 +403,15 @@ export default function App() {
     setActiveTab('runs');
   }, []);
 
+  const openExecution = useCallback((suiteRunId) => {
+    setFocusExecutionId(suiteRunId);
+    setActiveTab('executions');
+  }, []);
+
+  // Stable, so ExecutionsPage's load callback keeps its identity and the list
+  // is not refetched on every unrelated re-render of App.
+  const clearExecutionFocus = useCallback(() => setFocusExecutionId(null), []);
+
   const needsKey = useCallback(() => {
     toast.warning('Choose a model provider and save its API key in Settings first.');
     setActiveTab('settings');
@@ -415,7 +435,7 @@ export default function App() {
         <ExecutionsPage
           onOpenRun={openRunReport}
           focusId={focusExecutionId}
-          onFocused={() => setFocusExecutionId(null)}
+          onFocused={clearExecutionFocus}
         />
       );
     }
@@ -423,12 +443,8 @@ export default function App() {
     if (activeTab === 'suites') {
       return (
         <SuitesPage
-          onOpenRun={openRunReport}
           onRunHere={runCaseHere}
-          onOpenExecution={(id) => {
-            setFocusExecutionId(id);
-            setActiveTab('executions');
-          }}
+          onOpenExecution={openExecution}
         />
       );
     }
@@ -445,6 +461,8 @@ export default function App() {
       return (
         <WebWorkspace
           session={webSession}
+          agent={agent}
+          onOpenExecution={openExecution}
           onOpen={openWebPage}
           onNavigate={navigateWeb}
           onClose={() => webSession && disconnectDevice(webSession.sessionId)}
@@ -572,6 +590,7 @@ export default function App() {
           sessionId={activeSessionId}
           brief={writeBrief}
           kind="mobile"
+          onOpenExecution={openExecution}
           onClose={() => setWriteBrief(null)}
         />
       )}
@@ -585,6 +604,7 @@ export default function App() {
           readFrom={agent.proposed.readFrom}
           suggestedName={agent.proposed.suggestedName}
           kind={agent.proposed.kind || 'mobile'}
+          onOpenExecution={openExecution}
           onClose={agent.clearProposed}
         />
       )}

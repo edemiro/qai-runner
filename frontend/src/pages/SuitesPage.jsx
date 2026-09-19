@@ -594,10 +594,17 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
                     onChange={(event) => setExecutionName(event.target.value)}
                     placeholder={pickedSets.size > 1
                       ? `Execution name — e.g. “${[...pickedSets].join(' + ')}”`
-                      : 'Execution name — optional'}
+                      : 'Execution name — required'}
                     disabled={running}
                   />
-                  <button className="btn btn-primary btn-sm" onClick={runPicked} disabled={running}>
+                  {/* Disabled rather than warned about after the click: the
+                      name is required, so say so before the button is pressed. */}
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={runPicked}
+                    disabled={running || !executionName.trim()}
+                    title={executionName.trim() ? undefined : 'Name the execution first'}
+                  >
                     <Play size={14} /> Run execution
                   </button>
                   <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Map())} disabled={running}>

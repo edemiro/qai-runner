@@ -10,7 +10,6 @@ import { ScenarioReviewModal } from '../components/ScenarioReviewModal';
 import { Inspector } from '../components/Inspector';
 import { ScanPanel } from '../components/ScanPanel';
 import { WebTools } from '../components/WebTools';
-import { useAgentRun } from '../hooks/useAgentRun';
 import { useExplore } from '../hooks/useExplore';
 import { useFullscreen } from '../hooks/useFullscreen';
 import { useScreenStream } from '../hooks/useScreenStream';
@@ -128,7 +127,13 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
   );
 }
 
-export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigured, onNeedsKey, onOpenRun }) {
+// `agent` is owned by App and handed down rather than started here: a run can
+// also be launched from outside this component — "Run here" on a Test Set
+// scenario — and when the workspace kept its own useAgentRun those were two
+// different runs. The one driving the browser was App's; the one on screen was
+// this component's, permanently idle. That showed no timeline, no step count
+// and no Stop, and left the page clickable while the agent was driving it.
+export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmConfigured, onNeedsKey, onOpenRun, onOpenExecution }) {
   const toast = useToast();
   const sessionId = session?.sessionId ?? null;
 
@@ -296,7 +301,16 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
     };
   }, [showInspector, sessionId, tree, toast]);
 
-  const agent = useAgentRun(sessionId, { onFinished: () => refreshTree() });
+  // The agent leaves the page somewhere else than it found it, so the tree on
+  // screen is stale the moment a run ends. App owns the hook and cannot reach
+  // this component's tree state, so the refresh hangs off the status instead of
+  // the hook's onFinished.
+  const agentStatus = agent?.status;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && agentStatus !== 'running') refreshTree();
+    wasRunning.current = agentStatus === 'running';
+  }, [agentStatus, refreshTree]);
 
   const startAgent = useCallback(
     (goal, options) => {
@@ -740,6 +754,7 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
         <ScenarioReviewModal
           sessionId={sessionId}
           brief={writeBrief}
+          onOpenExecution={onOpenExecution}
           onClose={() => setWriteBrief(null)}
         />
       )}
@@ -752,6 +767,7 @@ export function WebWorkspace({ session, onOpen, onNavigate, onClose, llmConfigur
           scenarios={agent.proposed.scenarios}
           readFrom={agent.proposed.readFrom}
           suggestedName={agent.proposed.suggestedName}
+          onOpenExecution={onOpenExecution}
           onClose={agent.clearProposed}
         />
       )}

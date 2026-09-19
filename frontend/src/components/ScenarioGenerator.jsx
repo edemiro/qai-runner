@@ -26,6 +26,9 @@ export function ScenarioGenerator({
   // Platform of the session the scenarios were read from; a new set created
   // here is filed under it, so a mobile session never produces a "web" set.
   kind = 'web',
+  // Open the execution "Save & run" just started. Absent where the caller has
+  // no way to switch tabs, in which case the toast says where to find it.
+  onOpenExecution = null,
 }) {
   const toast = useToast();
   const seeded = Array.isArray(initialScenarios) && initialScenarios.length > 0;
@@ -250,9 +253,12 @@ export function ScenarioGenerator({
         caseIds, name: execName.trim(), workers: 1, headless: false,
       });
       toast.success(
-        `“${execName.trim()}” started${suiteRunId ? '' : ''} — follow it in Test Executions.`,
+        suiteRunId && onOpenExecution
+          ? `“${execName.trim()}” started — opening it.`
+          : `“${execName.trim()}” started — follow it in Test Executions.`,
       );
       clearAfterSave();
+      if (suiteRunId && onOpenExecution) onOpenExecution(suiteRunId);
     } catch (err) {
       toast.error(`Execution could not start: ${err.message}`);
     } finally {

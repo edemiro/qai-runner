@@ -18,6 +18,8 @@ export function ScenarioReviewModal({
   scenarios = null, readFrom = null, suggestedName = '',
   // Platform of the session being reviewed, so a new set is filed under it.
   kind = 'web',
+  // Forwarded so "Save & run" lands on the execution it just started.
+  onOpenExecution = null,
 }) {
   const seeded = Array.isArray(scenarios) && scenarios.length > 0;
   useEffect(() => {
@@ -48,6 +50,7 @@ export function ScenarioReviewModal({
             initialReadFrom={readFrom}
             defaultSetName={suggestedName}
             kind={kind}
+            onOpenExecution={onOpenExecution}
             onAdded={onClose}
           />
         </div>
