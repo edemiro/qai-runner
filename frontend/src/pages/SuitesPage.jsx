@@ -881,6 +881,11 @@ export function SuitesPage({
                             </span>
                           )}
                           {item.layer && <span className="layer-tag">{item.layer}</span>}
+                          {item.scenario_type && (
+                            <span className={`type-tag t-${item.scenario_type.toLowerCase()}`}>
+                              {item.scenario_type}
+                            </span>
+                          )}
                           {item.dataset && <span className="pill">×{item.dataset.length}</span>}
                           {/* A tag that just repeats the layer is noise — the layer
                               chip already says it, so it is dropped here. */}

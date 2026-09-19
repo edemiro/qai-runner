@@ -44,6 +44,8 @@ AVAILABLE ACTIONS
 {"type":"action","action":"wait","value":"2","reason":"why"}
 {"type":"action","action":"assert_visible","elementId":"el_9","reason":"what this proves"}
 {"type":"action","action":"assert_text","value":"Welcome back","reason":"what this proves"}
+{"type":"action","action":"assert_absent","value":"Çerez","reason":"what this proves"}
+{"type":"action","action":"assert_disabled","elementId":"el_7","reason":"what this proves"}
 {"type":"action","action":"assert_visual","value":"checkout-page","reason":"what this proves"}
 {"type":"action","action":"assert_no_errors","reason":"what this proves"}
 {"type":"action","action":"write_scenarios","value":"Test Set name","brief":"what to test","reason":"why"}
@@ -61,6 +63,13 @@ AVAILABLE ACTIONS
 `assert_visual` compares the screen against a stored baseline named by `value`.
   The first time a name is used the current screen becomes the baseline and the
   check passes, so use a stable, descriptive name.
+`assert_absent` proves something is NOT on the screen — a banner dismissed, a
+  warning cleared, a row removed. This is how a negative outcome is proved:
+  every other assert checks that something is there. It refuses to pass on a
+  blank screen, so it cannot be satisfied by a page that simply had not loaded.
+`assert_disabled` proves a control is on the screen but cannot be used — the
+  increase button at its maximum, a submit greyed out until the form is valid.
+  This is how a boundary is proved at the limit.
 `assert_no_errors` fails if the page has logged a console error or a failed
   request since the run began. Use it when the goal mentions errors, or as a
   final check that the flow was clean.
@@ -148,10 +157,19 @@ carry out that step and prove its expected result — nothing else.
 - Prove the expected result before closing the step, with assert_visible or
   assert_text. Describing what you see is not proof — a step closed as passed
   with no assertion behind it is recorded as failed, however right you were.
+- Assert THIS step's expected result, and assert the most specific thing that
+  proves it. A step whose expected result is "the cookie banner is dismissed"
+  is proved by the banner's own text being gone, not by some other control
+  being visible; a step that sets a field is proved by the value in that field.
+  Re-proving what an earlier step already established says nothing new.
+- ONE assertion is enough when it proves the expected result. Do not check the
+  same fact two or three ways: a scenario carries dozens of steps and an
+  end-to-end run carries hundreds, each costing a model call and a screenshot,
+  so a redundant check is paid for on every run of that scenario for ever.
 - This holds for a step you find already satisfied on arrival, which happens
   whenever the previous step's work covered it: a cookie banner dismissed
-  earlier, a page already on screen. Assert what makes it true, then close the
-  step. Never close a step without acting at all.
+  earlier, a page already on screen. Assert what that step names, then close it.
+  Never close a step without acting at all.
 - Close every step with `step_done`. "pass" means the expected result held;
   "fail" means it did not, and the reason must say what you saw instead.
 - A step that cannot be carried out at all is a `step_done` with "fail" — not a
@@ -182,7 +200,16 @@ def build_system_prompt(kind: str, stepwise: bool = False) -> str:
 
 ACTION_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 TERMINAL_ACTIONS = {"done", "finish", "complete"}
-ASSERTION_ACTIONS = {"assert_visible", "assert_text", "assert_visual", "assert_no_errors"}
+ASSERTION_ACTIONS = {
+    "assert_visible", "assert_text", "assert_visual", "assert_no_errors",
+    # Every verb above proves something is THERE. A negative or boundary
+    # scenario is about what is not: a banner dismissed, a control refused at
+    # its limit, a page that must not navigate. With nothing to prove those
+    # with, the step closed bare and the no-assertion gate then recorded a
+    # correct outcome as a failure — measured at roughly one run in five on the
+    # most common such step.
+    "assert_absent", "assert_disabled",
+}
 
 # Every action the agent can take. Used to recognise an action block even when
 # the model puts the verb under "type" instead of "action" — a variation that
@@ -190,6 +217,7 @@ ASSERTION_ACTIONS = {"assert_visible", "assert_text", "assert_visual", "assert_n
 KNOWN_ACTIONS = {
     "click", "type", "clear", "scroll", "swipe", "key", "wait",
     "assert_visible", "assert_text", "assert_visual", "assert_no_errors",
+    "assert_absent", "assert_disabled",
     "write_scenarios", "run_test_set",
     "step_done",
     "done", "finish", "complete",
@@ -395,6 +423,42 @@ def _shrink_for_mirror(screenshot: Optional[str]) -> Optional[str]:
 # a splash. Steps used to store these, and a report full of blank rectangles is
 # worse than one with gaps: it looks like evidence and shows nothing.
 _BLANK_SPREAD = 10
+
+
+def _frame_digest(screenshot: Optional[str]) -> Optional[bytes]:
+    """A thumbnail of the frame, for telling two steps' pictures apart.
+
+    Compared rather than stored: a step whose screen is the one the last step
+    already showed adds a second copy of the same picture to the report and to
+    the database. On a scenario of nine steps that is tolerable; on the
+    end-to-end runs this is built for, which carry hundreds, it is most of the
+    storage and most of what a reader has to scroll past.
+    """
+    if not screenshot:
+        return None
+    try:
+        import io as _io
+
+        from PIL import Image
+
+        image = Image.open(_io.BytesIO(base64.b64decode(screenshot))).convert("L")
+        image.thumbnail((32, 32))
+        return image.tobytes()
+    except Exception:
+        return None
+
+
+def _frames_match(a: Optional[bytes], b: Optional[bytes], tolerance: int = 4) -> bool:
+    """Do these two thumbnails show the same screen?
+
+    A tolerance rather than equality: two JPEG captures of a page that has not
+    changed still differ by a level or two, and a caret blinking somewhere is
+    not a different screen.
+    """
+    if a is None or b is None or len(a) != len(b):
+        return False
+    differing = sum(1 for x, y in zip(a, b) if abs(x - y) > tolerance)
+    return differing <= 0.01 * len(a)
 
 
 def _is_blank_frame(screenshot: Optional[str]) -> bool:
@@ -775,6 +839,54 @@ async def _execute_action(
             "element": None,
         }
 
+    if kind == "assert_absent":
+        needle = (value or "").strip()
+        if not needle:
+            return {"ok": False, "message": "assert_absent needs a value", "element": None}
+        await asyncio.sleep(0.4)
+        fresh = await target.snapshot()
+        if fresh is None:
+            return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
+        # A blank or half-loaded page has nothing on it, so "not there" would
+        # pass for the wrong reason. Absence only counts on a screen that has
+        # something on it.
+        if len(fresh.visible_text()) < 3:
+            return {
+                "ok": False,
+                "message": (
+                    f'Could not prove "{needle}" is gone: the screen was still '
+                    "blank when it was checked."
+                ),
+                "element": None,
+            }
+        if not fresh.contains_text(needle):
+            return {"ok": True, "message": f'"{needle}" is no longer on screen', "element": None}
+        return {
+            "ok": False,
+            "message": f'Expected "{needle}" to be gone but it is still on screen.',
+            "element": _element_info(
+                fresh.locate_text(needle) if hasattr(fresh, "locate_text") else None
+            ),
+        }
+
+    if kind == "assert_disabled":
+        if not element_id:
+            return {"ok": False, "message": "assert_disabled needs an elementId", "element": None}
+        await asyncio.sleep(0.3)
+        fresh = await target.snapshot()
+        element = fresh.elements_by_id.get(element_id) if fresh else None
+        if element is None:
+            return {
+                "ok": False,
+                "message": f"{element_id} is not on the screen any more, so it cannot be checked.",
+                "element": None,
+            }
+        info = _element_info(element)
+        label = (info or {}).get("label") or element_id
+        if not getattr(element, "enabled", True):
+            return {"ok": True, "message": f'"{label}" is disabled', "element": info}
+        return {"ok": False, "message": f'"{label}" is still enabled', "element": info}
+
     if kind == "assert_text":
         needle = (value or "").strip()
         if not needle:
@@ -897,6 +1009,9 @@ async def run_agent(
     final_error: Optional[str] = None
     step_no = 0
     executed_assertion = False
+    # The picture the last stored step showed, so the next one is only filed if
+    # it shows something different.
+    last_shot_digest: Optional[bytes] = None
 
     # Written-scenario bookkeeping. `step_index` is which scenario step is open,
     # `scenario_row_id` its database row, and `step_actions` how many agent actions
@@ -1200,6 +1315,16 @@ async def run_agent(
                 executed_assertion = True
                 step_asserted = True
 
+            # Stored only when it shows something the last stored frame did
+            # not. Two steps in a row proving things about the same unchanged
+            # screen used to file the same picture twice.
+            step_shot = _step_frame(kind, result, before_shot, after_shot, snapshot)
+            shot_digest = _frame_digest(step_shot)
+            if step_shot is not None and _frames_match(shot_digest, last_shot_digest):
+                step_shot = None
+            elif shot_digest is not None:
+                last_shot_digest = shot_digest
+
             step_actions += 1
             step_status = "passed" if result["ok"] else "failed"
             step_row_id = storage.add_step(
@@ -1211,7 +1336,7 @@ async def run_agent(
                 reason=reason,
                 message=result["message"],
                 element=result.get("element"),
-                screenshot=_step_frame(kind, result, before_shot, after_shot, snapshot),
+                screenshot=step_shot,
                 duration_ms=duration_ms,
             )
 

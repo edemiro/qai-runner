@@ -5986,3 +5986,23 @@ textarea,
   0%, 100% { opacity: 0.25; transform: scale(0.8); }
   50%      { opacity: 1;    transform: scale(1.15); }
 }
+
+/* What kind of check a scenario is. Colour-coded because the mix is the point:
+   a set that is all green is a set that only ever tried the happy path. */
+.type-tag,
+.type-select {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.type-tag.t-positive, .type-select.t-positive { background: rgba(70, 170, 110, 0.15); color: #6cc08d; border-color: rgba(70, 170, 110, 0.3); }
+.type-tag.t-negative, .type-select.t-negative { background: rgba(214, 100, 69, 0.15); color: #e0895f; border-color: rgba(214, 100, 69, 0.3); }
+.type-tag.t-boundary, .type-select.t-boundary { background: rgba(120, 130, 220, 0.15); color: #8f9ae4; border-color: rgba(120, 130, 220, 0.3); }
+
+.type-select { cursor: pointer; min-width: 92px; }
+.type-select:focus { outline: none; border-color: var(--accent); }

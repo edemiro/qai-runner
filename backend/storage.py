@@ -186,6 +186,9 @@ MIGRATIONS = [
     # scenario to carry. See docs/scenario-standards.md.
     ("suite_cases", "priority", "TEXT"),
     ("suite_cases", "layer", "TEXT"),
+    # Positive / Negative / Boundary. A suite of happy paths proves the feature
+    # works when used correctly and nothing about what happens when it is not.
+    ("suite_cases", "scenario_type", "TEXT"),
     # Copied onto the run when it is adopted into an execution. A report has to
     # keep reading correctly after the Test Set it came from is deleted, and a
     # join to a row that no longer exists cannot do that.
@@ -894,6 +897,7 @@ def add_case(
     auth_profile: Optional[str] = None, source_run_id: Optional[str] = None,
     priority: Optional[str] = None, layer: Optional[str] = None,
     steps: Optional[List[Dict[str, str]]] = None,
+    scenario_type: Optional[str] = None,
 ) -> str:
     case_id = uuid.uuid4().hex[:16]
     cleaned_steps = clean_steps(steps)
@@ -905,13 +909,15 @@ def add_case(
         conn.execute(
             """INSERT INTO suite_cases (id, suite_id, idx, name, goal, url, tags,
                                         dataset, auth_profile, source_run_id,
-                                        priority, layer, steps, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                        priority, layer, steps, scenario_type,
+                                        created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 case_id, suite_id, idx, name[:200], goal, url, _dump_tags(tags),
                 json.dumps(dataset, ensure_ascii=False) if dataset else None,
                 auth_profile, source_run_id, priority, layer,
                 json.dumps(cleaned_steps, ensure_ascii=False) if cleaned_steps else None,
+                scenario_type,
                 time.time(),
             ),
         )
@@ -921,7 +927,10 @@ def add_case(
 def update_case(case_id: str, **fields: Any) -> bool:
     # priority and layer are editable: the generator proposes them from the
     # standard, but the tester who knows the business flow has the last word.
-    allowed = {"name", "goal", "url", "auth_profile", "idx", "priority", "layer"}
+    allowed = {
+        "name", "goal", "url", "auth_profile", "idx",
+        "priority", "layer", "scenario_type",
+    }
     sets, values = [], []
     for key, value in fields.items():
         if key in allowed and value is not None:

@@ -25,6 +25,10 @@ from llm import Turn
 from llm import registry as providers
 
 LAYERS = ("E2E", "Component")
+# What kind of check a scenario is. A suite made only of happy paths proves the
+# feature works when used correctly and nothing about what happens when it is
+# not — which is where most defects live.
+TYPES = ("Positive", "Negative", "Boundary")
 PRIORITIES = ("Critical", "High", "Medium", "Low")
 
 # "Module - Submodule | <data & precondition> - <action & expected>".
@@ -111,6 +115,7 @@ OTHERWISE — reply with one JSON array and nothing else:
 [
   {"title": "<the one-line scenario, English, in the format above>",
    "layer": "E2E" | "Component",
+   "type": "Positive" | "Negative" | "Boundary",
    "priority": "Critical" | "High" | "Medium" | "Low",
    "goal": "<what the agent should actually do, plain instruction, one or two sentences>",
    "steps": [
@@ -122,6 +127,33 @@ OTHERWISE — reply with one JSON array and nothing else:
 
 `goal` is what the team reads as the summary; `steps` is what QAi executes, one
 step at a time, and each step is reported pass or fail on its own.
+
+COVER ALL THREE KINDS OF SCENARIO. A set that is only happy paths proves the
+feature works when it is used correctly and nothing about what happens when it
+is not, and that is where defects actually live. For any screen worth testing,
+write:
+- Positive — the flow used as intended, with valid data.
+- Negative — the flow refused as it should be: a required field left empty, an
+  invalid format, an unauthorised action, a rule broken on purpose. The expected
+  result is the refusal and the message that explains it, not a blank screen.
+- Boundary — the edges where behaviour changes: the first and last allowed date,
+  the minimum and maximum passenger count, a field at its length limit, zero and
+  one and the maximum of anything countable. Write the value just inside and the
+  value just outside the limit as separate scenarios — the pair is the point.
+
+Do not write a Negative or a Boundary scenario where the screen has no such
+rule to break; a search box with no validation has no Negative case worth a
+run. But where a rule exists, an unexercised one is untested.
+
+NEVER INVENT A LIMIT. A maximum, minimum, count or label that is not visible in
+the attached screen is not test data. A scenario that asserted "the panel reads
+9 Yolcu" against a site whose real maximum is 7 failed twice on every run and
+found nothing — the app was enforcing its rule correctly, and the scenario was
+simply wrong. Where the limit is not on the screen, write the boundary against
+observed behaviour instead of a guessed number:
+  action:   "increase the adult count until the increase control stops responding"
+  expected: "the increase control is disabled and the panel total stops rising"
+Name a specific number only when that number is on the attached screen.
 
 WRITING STEPS:
 - One action per step. "Fill the passenger form and continue" is two steps.
@@ -231,6 +263,16 @@ def _clean_layer(value: Any) -> str:
     return "Component" if candidate == "component" else "E2E"
 
 
+def _clean_type(value: Any) -> str:
+    """Positive unless the model said otherwise, and said it recognisably."""
+    candidate = str(value or "").strip().lower()
+    if candidate.startswith("neg"):
+        return "Negative"
+    if candidate.startswith("bound") or "sınır" in candidate or "limit" in candidate:
+        return "Boundary"
+    return "Positive"
+
+
 def parse(text: str) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
     """Return (scenarios, rejections, questions).
 
@@ -270,6 +312,7 @@ def parse(text: str) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
         scenarios.append({
             "title": title[:200],
             "layer": layer,
+            "type": _clean_type(entry.get("type")),
             "priority": _clean_priority(entry.get("priority"), layer),
             # A scenario with no runnable instruction still has a usable title;
             # falling back to it beats dropping the scenario entirely.

@@ -1380,6 +1380,8 @@ class CaseBody(BaseModel):
     enabled: Optional[bool] = None
     priority: Optional[str] = None
     layer: Optional[str] = None
+    # Positive / Negative / Boundary — what kind of check this is.
+    scenarioType: Optional[str] = None
     steps: Optional[List[ScenarioStep]] = None
 
 
@@ -1465,6 +1467,7 @@ async def post_case(suite_id: str, body: CaseBody):
         suite_id, body.name, body.goal, url=body.url, tags=body.tags,
         dataset=body.dataset, auth_profile=body.authProfile,
         source_run_id=body.sourceRunId, priority=body.priority, layer=body.layer,
+        scenario_type=body.scenarioType,
         steps=[step.model_dump() for step in body.steps] if body.steps else None,
     )
     return storage.get_case(case_id)
@@ -1479,6 +1482,7 @@ async def post_cases_bulk(suite_id: str, body: BulkCaseBody):
             suite_id, case.name, case.goal, url=case.url, tags=case.tags,
             dataset=case.dataset, auth_profile=case.authProfile,
             source_run_id=case.sourceRunId, priority=case.priority, layer=case.layer,
+            scenario_type=case.scenarioType,
             steps=[step.model_dump() for step in case.steps] if case.steps else None,
         ))
         for case in body.cases
@@ -1616,7 +1620,13 @@ async def generate_scenarios(body: ScenarioGenerateBody):
         try:
             # In the background, like the workspace: reading a page to write
             # scenarios from should never put a browser window on the desktop.
-            target = await WebTarget.launch(url=url, viewport="desktop", headless=True)
+            # Headed by default, for the same reason a Test Set run is: the
+            # sites these scenarios are written against drop a headless browser
+            # at the network layer, so generating from a URL failed outright on
+            # exactly the pages this exists for.
+            target = await WebTarget.launch(
+                url=url, viewport="desktop", headless=config.RUN_HEADLESS_DEFAULT,
+            )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
         try:
@@ -1680,6 +1690,7 @@ async def patch_case(case_id: str, body: CaseBody):
         "name": body.name, "goal": body.goal, "url": body.url,
         "tags": body.tags, "auth_profile": body.authProfile,
         "priority": body.priority, "layer": body.layer,
+        "scenario_type": body.scenarioType,
     }
     if body.dataset is not None:
         fields["dataset"] = body.dataset

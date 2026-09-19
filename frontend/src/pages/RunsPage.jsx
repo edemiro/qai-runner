@@ -240,6 +240,8 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
   const activeTab = tab ?? (run.scenarioSteps?.length ? 'scenario' : 'steps');
   const passed = run.steps.filter((s) => s.status === 'passed').length;
   const assertions = run.steps.filter((s) => s.action?.startsWith('assert')).length;
+  const scenarioTotal = run.scenarioSteps?.length || 0;
+  const scenarioPassed = (run.scenarioSteps || []).filter((s) => s.status === 'passed').length;
   const allEvents = run.pageEvents || [];
   const pageErrors = allEvents.filter((event) => event.level === 'error');
   // Warnings are recorded but never decide a verdict — a 404 on a tracking
@@ -302,12 +304,33 @@ function RunDetail({ runId, onBack, onDeleted, activeSessionId, onReplay }) {
         <div className="stat">
           <StatusBadge status={run.status} />
         </div>
-        <div className="stat">
-          <span className="stat-value">
-            {passed}/{run.step_count}
-          </span>
-          <span className="stat-label">steps passed</span>
-        </div>
+        {/* For a written scenario the headline is its own steps, not the
+            agent's clicks. Every click can succeed while the step they were
+            meant to prove does not — a step runs out of its action budget, or
+            the agent closes it as failed — and "36/36 steps passed" beside a
+            red verdict reads as a contradiction when it is simply counting
+            something else. Both are shown, each named for what it is. */}
+        {scenarioTotal > 0 ? (
+          <>
+            <div className="stat">
+              <span className={`stat-value ${scenarioPassed < scenarioTotal ? 'bad' : ''}`}>
+                {scenarioPassed}/{scenarioTotal}
+              </span>
+              <span className="stat-label">scenario steps</span>
+            </div>
+            <div className="stat">
+              <span className="stat-value">{passed}/{run.step_count}</span>
+              <span className="stat-label">agent actions</span>
+            </div>
+          </>
+        ) : (
+          <div className="stat">
+            <span className="stat-value">
+              {passed}/{run.step_count}
+            </span>
+            <span className="stat-label">agent actions</span>
+          </div>
+        )}
         <div className="stat">
           <span className="stat-value">{assertions}</span>
           <span className="stat-label">assertions</span>

@@ -198,6 +198,7 @@ export function ScenarioGenerator({
       url: readFrom || null,
       priority: s.priority,
       layer: s.layer,
+      scenarioType: s.type,
       steps: s.steps || [],
       tags: [],
     })));
@@ -416,6 +417,18 @@ export function ScenarioGenerator({
                       )}
                     </div>
                     <span className="layer-tag">{scenario.layer}</span>
+                    {/* Editable: the generator reads the kind off what it wrote,
+                        and the reviewer who knows the rules has the last word. */}
+                    <select
+                      className={`type-select t-${(scenario.type || 'Positive').toLowerCase()}`}
+                      value={scenario.type || 'Positive'}
+                      onChange={(event) => patchScenario(index, { type: event.target.value })}
+                      aria-label="Scenario type"
+                    >
+                      {['Positive', 'Negative', 'Boundary'].map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </select>
                     <select
                       className={`priority-select p-${scenario.priority.toLowerCase()}`}
                       value={scenario.priority}
