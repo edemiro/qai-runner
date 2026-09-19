@@ -73,6 +73,45 @@ def _event(kind: str, **payload) -> str:
     return json.dumps({"event": kind, **payload}, ensure_ascii=False) + "\n"
 
 
+def _record_unstarted_case(
+    case: Dict[str, Any],
+    suite_run_id: str,
+    kind: str,
+    error: Optional[str],
+    row: Optional[Dict[str, Any]],
+    label: str,
+) -> str:
+    """Give a case that died before the agent started a run of its own.
+
+    The agent owns run creation, so a case that fails on the way there — a
+    browser the site refuses, a device that dropped, a URL that will not
+    resolve — used to leave nothing behind at all: the reason went out on the
+    live stream and was gone, and the execution came back `failed` with zero
+    scenarios. That reads as "nothing ran" when in fact everything ran and
+    everything broke, and the JUnit report counted `tests="0" failures="0"`,
+    which a build server calls green. A row here costs one insert and makes the
+    failure survive the run that produced it.
+    """
+    run_id = storage.create_run(
+        case.get("goal") or case.get("name") or label,
+        kind=kind,
+        tags=case.get("tags") or [],
+        suite_run_id=suite_run_id,
+        case_id=case["id"],
+        dataset_row=row,
+    )
+    storage.link_run_to_suite(
+        run_id, suite_run_id, case["id"],
+        title=label, tags=case.get("tags") or [],
+        dataset_row=row, kind=kind,
+        priority=case.get("priority"), layer=case.get("layer"),
+        case_idx=case.get("idx"),
+    )
+    reason = error or "The run never started and gave no reason."
+    storage.finish_run(run_id, "failed", reason, verdict_note=reason)
+    return run_id
+
+
 async def _execute_one(
     execution: Dict[str, Any],
     suite_run_id: str,
@@ -191,6 +230,10 @@ async def _execute_one(
         _cleanup(staging)
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
+        else:
+            run_id = _record_unstarted_case(
+                case, suite_run_id, "web", error, row, label,
+            )
 
     result = {
         "caseId": case["id"], "runId": run_id, "label": label,
@@ -268,6 +311,10 @@ async def _run_mobile_case(
     finally:
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
+        else:
+            run_id = _record_unstarted_case(
+                case, suite_run_id, "mobile", error, row, label,
+            )
 
     result = {
         "caseId": case["id"], "runId": run_id, "label": label,
