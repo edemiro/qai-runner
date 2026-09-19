@@ -5732,3 +5732,91 @@ textarea,
 .env-select:hover:not(:disabled) { color: var(--text-primary); }
 .env-select:focus { outline: none; border-color: var(--accent); }
 .env-select:disabled { opacity: 0.5; }
+
+/* ==========================================================================
+   Watching an execution
+   --------------------------------------------------------------------------
+   A suite drives browsers of its own. They are registered so the mirror can
+   reach them, and shown here read-only: the run is holding the mouse, and a
+   stray click from the person watching is a corrupted result.
+   ========================================================================== */
+
+.watch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border, var(--accent));
+}
+
+.watch-exec {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* One tab per scenario currently running, so two workers are two places to
+   look rather than one picture and a guess about the other. */
+.watch-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.watch-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 420px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.watch-tab:hover { background: var(--bg-hover); border-color: var(--border); }
+.watch-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.watch-tab-idx { flex: none; font-weight: 700; opacity: 0.75; }
+.watch-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The scenario on screen, named in full above its frame. */
+.watch-scenario {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0 8px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.watch-scenario-idx { flex: none; font-weight: 700; color: var(--text-tertiary); }
+.watch-scenario-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Nothing here is clickable, and saying so is better than a dead cursor. */
+.browser-viewport.watching { cursor: default; }
+.browser-viewport.watching .browser-image { pointer-events: none; user-select: none; }

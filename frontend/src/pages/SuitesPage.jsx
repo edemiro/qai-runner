@@ -85,7 +85,7 @@ function PriorityStrip({ cases }) {
   );
 }
 
-export function SuitesPage({ onRunHere, onOpenExecution }) {
+export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
   const toast = useToast();
 
   const [suites, setSuites] = useState([]);
@@ -394,7 +394,10 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
       toast.success(`“${executionName.trim()}” started.`);
       setPicked(new Map());
       setExecutionName('');
-      onOpenExecution?.(suiteRunId);
+      // Straight to the workspace, watching. A list of status chips is not
+      // what someone who just pressed Run wants to look at.
+      if (onWatchExecution) onWatchExecution(suiteRunId, suite?.kind || 'web');
+      else onOpenExecution?.(suiteRunId);
     } catch (err) {
       toast.error(`Execution could not start: ${err.message}`);
     } finally {
@@ -417,7 +420,8 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
         failOnPageError: options.failOnPageError,
       });
       toast.success(`“${suite.name}” started.`);
-      onOpenExecution?.(suiteRunId);
+      if (onWatchExecution) onWatchExecution(suiteRunId, suite?.kind || 'web');
+      else onOpenExecution?.(suiteRunId);
     } catch (err) {
       toast.error(`Execution could not start: ${err.message}`);
     } finally {

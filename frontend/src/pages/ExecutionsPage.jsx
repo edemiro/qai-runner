@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Trash2, XCircle,
+  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Trash2, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
@@ -56,7 +56,7 @@ function duration(ms) {
   return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) {
+export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFocused = null }) {
   const toast = useToast();
   const [executions, setExecutions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -248,6 +248,17 @@ export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) 
                   )}
                 </div>
                 <div className="row-actions">
+                  {/* A way back to the live view. Starting a run lands on it,
+                      but anyone who navigated away had no route back while it
+                      was still going. */}
+                  {onWatch && execution.status === 'running' && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => onWatch(execution.id, execution.kind || 'web')}
+                    >
+                      <Radio size={14} /> Watch
+                    </button>
+                  )}
                   <a
                     className="btn btn-sm"
                     href={api.suiteReportUrl(execution.id, 'junit')}

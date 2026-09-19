@@ -630,6 +630,10 @@ async def list_sessions():
         info = target.describe()
         out.append({
             "sessionId": session_id,
+            # Present only for a browser an execution is driving, naming the
+            # run and the scenario. The workspace watches those read-only; the
+            # tester's own pages have no owner and behave as before.
+            "watching": drivers.owner(session_id),
             "device": {
                 "udid": info.get("udid"),
                 "platform": info.get("platform"),

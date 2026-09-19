@@ -21,6 +21,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import uuid4
 
 import agent
+import drivers
 import storage
 import config
 from drivers.web import WebTarget, run_artifact_dir
@@ -157,6 +158,19 @@ async def _execute_one(
             if options.get("record_video") else None,
         )
 
+        # Registered, so the mirror can reach it: an execution used to run in a
+        # browser no route knew about, which is why starting one left the
+        # tester watching a status chip and nothing else. The owner marks it as
+        # the run's browser rather than a page the tester opened, so the
+        # workspace shows it read-only instead of offering to close it.
+        drivers.register(target, owner={
+            "suiteRunId": suite_run_id,
+            "name": options.get("execution_name"),
+            "caseId": case["id"],
+            "label": label,
+            "idx": case.get("idx"),
+        })
+
         if options.get("trace"):
             await target.start_trace()
 
@@ -233,7 +247,9 @@ async def _execute_one(
     finally:
         if target is not None:
             try:
-                await target.close()
+                # Through the registry, so the session stops being offered for
+                # watching at the same moment its browser goes away.
+                await drivers.close(target.session_id)
                 if options.get("record_video") and run_id:
                     await _attach_video(target, run_id)
             except Exception:
@@ -453,6 +469,11 @@ async def run_suite(
         ),
         kind=suite.get("kind") or "web",
     )
+
+    # Carried down to each case so a watchable session can name the execution
+    # it belongs to — the session list is all the workspace has to go on.
+    execution_name = name or suite.get("name")
+    options = {**options, "execution_name": execution_name}
 
     yield _event(
         "suite_started", suiteRunId=suite_run_id, suite=suite["name"],

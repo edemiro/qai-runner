@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Globe, Loader2, Maximize2, Minimize2,
-  PanelRightClose, PanelRightOpen, RefreshCw, RotateCcw, Wrench, X,
+  PanelRightClose, PanelRightOpen, Radio, RefreshCw, RotateCcw, Wrench, X,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -133,7 +133,14 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
 // different runs. The one driving the browser was App's; the one on screen was
 // this component's, permanently idle. That showed no timeline, no step count
 // and no Stop, and left the page clickable while the agent was driving it.
-export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmConfigured, onNeedsKey, onOpenRun, onOpenExecution }) {
+export function WebWorkspace({
+  session, agent, onOpen, onNavigate, onClose, llmConfigured, onNeedsKey, onOpenRun, onOpenExecution,
+  // Present while an execution is being watched. `session` is then one of the
+  // run's own browsers, not a page the tester opened, so the workspace renders
+  // a read-only view: no address bar, no agent composer, and no pointer or
+  // wheel reaching a browser something else is driving.
+  watch = null,
+}) {
   const toast = useToast();
   const sessionId = session?.sessionId ?? null;
 
@@ -499,6 +506,107 @@ export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmC
   }, [hovered, selected, screen]);
 
   // --- empty state ------------------------------------------------------ //
+
+  if (watch) {
+    return (
+      <main className="page web-page">
+        <header className="page-header compact">
+          <div className="web-title-row">
+            <h1 className="page-title">Web</h1>
+            <span className="watch-pill">
+              <Radio size={12} /> Watching
+            </span>
+            <span className="watch-exec" title="The execution being watched">
+              {watch.name || 'Execution'}
+            </span>
+          </div>
+          <div className="web-header-actions">
+            {watch.onOpenExecution && (
+              <button className="btn btn-ghost btn-sm" onClick={watch.onOpenExecution}>
+                Open execution
+              </button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={watch.onExit}>
+              <X size={13} /> Stop watching
+            </button>
+          </div>
+        </header>
+
+        {/* One browser per scenario runs at a time, up to the worker count, so
+            the strip is how the tester moves between them. Hidden for a single
+            worker, where there is nothing to choose. */}
+        {watch.sessions.length > 1 && (
+          <div className="watch-strip" role="tablist" aria-label="Running scenarios">
+            {watch.sessions.map((item) => (
+              <button
+                key={item.sessionId}
+                role="tab"
+                aria-selected={item.sessionId === session?.sessionId}
+                className={`watch-tab ${item.sessionId === session?.sessionId ? 'active' : ''}`}
+                onClick={() => watch.onPick(item.sessionId)}
+                title={item.watching.label}
+              >
+                <span className="watch-tab-idx">#{item.watching.idx}</span>
+                <span className="watch-tab-name">{item.watching.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {session ? (
+          <>
+            <div className="watch-scenario">
+              <span className="watch-scenario-idx">#{session.watching?.idx}</span>
+              <span className="watch-scenario-name">{session.watching?.label}</span>
+              <span className={`stream-pill ${connection}`}>
+                <span className="status-dot" />
+                {connection === 'live' ? 'live' : connection}
+              </span>
+            </div>
+            <div className="browser-viewport watching" ref={stageRef}>
+              {screenshot ? (
+                <div
+                  className="browser-canvas"
+                  style={{ width: screen.width, height: screen.height, transform: `scale(${fit})` }}
+                >
+                  {/* No pointer or wheel handlers: this browser belongs to the
+                      run, and a stray click is a corrupted result. */}
+                  <img
+                    ref={imgRef}
+                    src={`data:image/jpeg;base64,${screenshot}`}
+                    alt={`Live view of ${session.watching?.label || 'the running scenario'}`}
+                    className="browser-image"
+                    draggable={false}
+                    onContextMenu={(event) => event.preventDefault()}
+                  />
+                </div>
+              ) : (
+                <div className="browser-placeholder">
+                  <Loader2 size={22} className="spin" />
+                  <span>Waiting for the first frame…</span>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">
+            <Radio size={34} />
+            <h3>{watch.finished ? 'Every scenario has finished' : 'Waiting for a scenario to start'}</h3>
+            <p>
+              {watch.finished
+                ? 'The run has no browser open any more. Its report is on the execution.'
+                : 'The run is opening a browser. It appears here as soon as the first scenario starts.'}
+            </p>
+            {watch.onOpenExecution && (
+              <button className="btn btn-primary" onClick={watch.onOpenExecution}>
+                Open execution
+              </button>
+            )}
+          </div>
+        )}
+      </main>
+    );
+  }
 
   if (!session) {
     return (

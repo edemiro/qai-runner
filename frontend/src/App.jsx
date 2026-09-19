@@ -53,21 +53,55 @@ export default function App() {
   // A brief from the composer's "write scenarios" mode, awaiting review in a
   // dialog. null = closed.
   const [writeBrief, setWriteBrief] = useState(null);
+  // The execution currently being watched in a workspace, and which of its
+  // scenarios is on screen. Starting a run lands here: a suite drives browsers
+  // of its own, and until they were registered there was nothing to watch.
+  const [watchExecutionId, setWatchExecutionId] = useState(null);
+  const [watchSessionId, setWatchSessionId] = useState(null);
+  // Whether a browser of the watched run has been seen yet, so "still starting"
+  // and "all finished" are not the same empty screen. Set from the poll's own
+  // callback rather than an effect watching the list — the value comes from
+  // outside React, which is where it should be read.
+  const [watchSeen, setWatchSeen] = useState(false);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.sessionId === activeSessionId) || null,
     [sessions, activeSessionId],
   );
 
+  // A running execution registers a browser per scenario so it can be watched.
+  // Those are not the tester's own page and must never be picked up as one —
+  // the workspace would offer to close a browser the run is driving, and the
+  // page the tester opened would vanish from under them mid-run.
+  const ownSessions = useMemo(() => sessions.filter((s) => !s.watching), [sessions]);
+  const watchedSessions = useMemo(() => sessions.filter((s) => s.watching), [sessions]);
+
+  // Every live browser of the execution being watched, in scenario order.
+  const watchList = useMemo(
+    () => watchedSessions
+      .filter((s) => s.watching.suiteRunId === watchExecutionId)
+      .sort((a, b) => (a.watching.idx || 0) - (b.watching.idx || 0)),
+    [watchedSessions, watchExecutionId],
+  );
+  const watchSession = useMemo(
+    () => watchList.find((s) => s.sessionId === watchSessionId) || watchList[0] || null,
+    [watchList, watchSessionId],
+  );
+  // The execution's name, taken from whichever of its browsers is up. Not
+  // fetched separately: the session list already carries it and a run with no
+  // browser left has nothing to name anyway.
+  const watchName = watchList[0]?.watching?.name || null;
+
+
   // Each workspace owns its own kind of session, so switching tabs never shows
   // a phone bezel around a web page or vice versa.
   const mobileSessions = useMemo(
-    () => sessions.filter((session) => session.device.kind !== 'web'),
-    [sessions],
+    () => ownSessions.filter((session) => session.device.kind !== 'web'),
+    [ownSessions],
   );
   const webSession = useMemo(
-    () => sessions.find((session) => session.device.kind === 'web') || null,
-    [sessions],
+    () => ownSessions.find((session) => session.device.kind === 'web') || null,
+    [ownSessions],
   );
   const mobileSession = useMemo(
     () => mobileSessions.find((session) => session.sessionId === activeSessionId) || mobileSessions[0] || null,
@@ -140,13 +174,42 @@ export default function App() {
       .then((data) => {
         if (data.sessions?.length) {
           setSessions(data.sessions);
-          setActiveSessionId((current) => current || data.sessions[0].sessionId);
+          const own = data.sessions.find((s) => !s.watching);
+          if (own) setActiveSessionId((current) => current || own.sessionId);
         }
       })
       .catch(() => {
         /* backend not up yet; the status strip shows it */
       });
   }, []);
+
+  // While an execution is being watched the list has to be re-read: the run
+  // opens a browser per scenario and closes it the moment that scenario ends,
+  // so the set of watchable sessions turns over as the suite progresses. One
+  // self-rescheduling chain, torn down when watching stops.
+  useEffect(() => {
+    if (!watchExecutionId) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const data = await api.sessions();
+        if (cancelled) return;
+        const list = data.sessions || [];
+        setSessions(list);
+        if (list.some((s) => s.watching?.suiteRunId === watchExecutionId)) setWatchSeen(true);
+      } catch {
+        /* the status strip already reports a backend that is not answering */
+      } finally {
+        if (!cancelled) timer = setTimeout(tick, 2000);
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [watchExecutionId]);
 
   // ------------------------------------------------------------------ DOM ---
   const refreshTree = useCallback(async () => {
@@ -403,6 +466,27 @@ export default function App() {
     setActiveTab('executions');
   }, []);
 
+  /* Starting a run lands on the workspace, watching it. A suite drives browsers
+     of its own, so before this the tester was sent to a list of status chips
+     and had no way to see the thing they had just started. A mobile suite runs
+     on the phone already connected, which the Mobile workspace is already
+     mirroring — there is nothing extra to attach to, just somewhere to be. */
+  const watchExecution = useCallback((suiteRunId, kind = 'web') => {
+    if (kind === 'mobile') {
+      setActiveTab('mobile');
+      return;
+    }
+    setWatchExecutionId(suiteRunId);
+    setWatchSessionId(null);
+    setWatchSeen(false);
+    setActiveTab('web');
+  }, []);
+
+  const stopWatching = useCallback(() => {
+    setWatchExecutionId(null);
+    setWatchSessionId(null);
+  }, []);
+
   // Stable, so ExecutionsPage's load callback keeps its identity and the list
   // is not refetched on every unrelated re-render of App.
   const clearExecutionFocus = useCallback(() => setFocusExecutionId(null), []);
@@ -429,6 +513,7 @@ export default function App() {
       return (
         <ExecutionsPage
           onOpenRun={openRunReport}
+          onWatch={watchExecution}
           focusId={focusExecutionId}
           onFocused={clearExecutionFocus}
         />
@@ -440,6 +525,7 @@ export default function App() {
         <SuitesPage
           onRunHere={runCaseHere}
           onOpenExecution={openExecution}
+          onWatchExecution={watchExecution}
         />
       );
     }
@@ -455,8 +541,19 @@ export default function App() {
     if (activeTab === 'web') {
       return (
         <WebWorkspace
-          session={webSession}
+          session={watchExecutionId ? watchSession : webSession}
           agent={agent}
+          watch={watchExecutionId ? {
+            name: watchName,
+            sessions: watchList,
+            // Empty only after at least one browser has been seen: before that
+            // the run is still opening its first one, which reads very
+            // differently to the tester.
+            finished: watchList.length === 0 && watchSeen,
+            onPick: setWatchSessionId,
+            onOpenExecution: () => openExecution(watchExecutionId),
+            onExit: stopWatching,
+          } : null}
           onOpenExecution={openExecution}
           onOpen={openWebPage}
           onNavigate={navigateWeb}
