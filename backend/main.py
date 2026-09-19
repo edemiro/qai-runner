@@ -26,7 +26,7 @@ import base64
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -538,7 +538,13 @@ _NAVIGATION_HINTS = (
 )
 
 
-def _explain_navigation_failure(url: str, exc: Exception) -> str:
+def _explain_navigation_failure(url: str, exc: Union[Exception, str]) -> str:
+    """Why a page would not open, in the words a tester can act on.
+
+    Takes a message as readily as an exception: the driver now reports a
+    refusal by returning it rather than raising, and the hint is worth just as
+    much either way.
+    """
     raw = str(exc).split("\n")[0][:220]
     for needles, hint in _NAVIGATION_HINTS:
         if any(needle in str(exc) for needle in needles):
@@ -598,16 +604,15 @@ async def navigate_web_session(session_id: str, req: NavigateRequest):
         raise HTTPException(status_code=400, detail="That session is a device, not a browser page.")
 
     url = req.url.strip()
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
     try:
-        # Not a bare goto(): a refused connection leaves Chromium's error page
-        # behind without raising, and reporting that as a success is how a
-        # session ends up sitting on "Bu siteye ulaşılamıyor".
+        # The driver normalises the address and reports a refusal rather than
+        # raising it, so a failure here is something it could not account for.
         result = await target.navigate(url)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, exc))
-    return {"status": "success", **result}
+    if not result.ok:
+        raise HTTPException(status_code=502, detail=_explain_navigation_failure(url, result.message))
+    return {"status": "success", "url": target.page.url, "title": await target.page.title()}
 
 
 @app.post("/api/web/session/{session_id}/reopen")

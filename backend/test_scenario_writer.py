@@ -159,6 +159,20 @@ class PromptContract(unittest.TestCase):
         self.assertIsNone(turns[0].image_b64)
         self.assertNotIn("ELEMENT TREE", turns[0].text)
 
+    def test_web_scenarios_are_told_not_to_write_a_cookie_step(self):
+        """The browser accepts the banner before the first step, so a step for
+        it would arrive with nothing to do — and 49 of the 62 scenarios already
+        written carry one."""
+        turns = writer.build_turns(kind="web", brief="Booking")
+        self.assertIn("cookie consent banner", turns[0].text)
+        self.assertIn("Do not write a step", turns[0].text)
+
+    def test_mobile_scenarios_are_not(self):
+        """Nothing dismisses an in-app banner on a phone, so telling a mobile
+        scenario to skip the step would leave it unable to get past one."""
+        turns = writer.build_turns(kind="mobile", brief="Booking")
+        self.assertNotIn("Do not write a step", turns[0].text)
+
 
 if __name__ == "__main__":
     unittest.main()

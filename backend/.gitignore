@@ -6,3 +6,7 @@ __pycache__/
 appium.log
 qai.db
 qai.db-journal
+# Traces and videos a run leaves behind — output, not source, and already 1.2GB
+# of it here. Left untracked they sit in every `git status` waiting for someone
+# to sweep them in with `git add -A`.
+data/artifacts/

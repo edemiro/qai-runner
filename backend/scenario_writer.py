@@ -242,6 +242,17 @@ def build_turns(
         + _screen_brief(tree, url, kind)
         + (f"\n\nAnswers to your earlier questions:\n{answers}" if answers else "")
     )
+    # The browser accepts the cookie banner before the agent is shown the page,
+    # so a step for it now arrives with nothing left to do — a model call and a
+    # screenshot spent on a screen nobody is testing. Said here rather than in
+    # the system prompt because it is only true of web: nothing dismisses an
+    # in-app banner on a phone.
+    if kind == "web":
+        asked += (
+            "\n\nDo not write a step for the cookie consent banner. The runner "
+            "accepts it before the first step, so the page is already clear by "
+            "the time the scenario starts."
+        )
     if screenshot:
         asked += (
             "\n\nA screenshot of the same screen is attached. Use it for anything "

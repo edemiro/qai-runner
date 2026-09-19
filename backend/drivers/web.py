@@ -107,6 +107,88 @@ OFFSCREEN_POSITION = "-32000,-32000"
 PARK_BOUNDS = {"left": 30000, "top": 30000, "width": 100, "height": 100}
 
 
+# --- cookie consent -------------------------------------------------------- #
+#
+# The banner is a toll every scenario paid. It sits over the page from the first
+# paint, and scenarios were written with "Close the cookie consent banner by
+# tapping Accept." as step one or two — 49 of the 62 in the suite carry it. Each
+# one costs a model call, a screenshot and the tokens to describe a screen that
+# nobody is testing. It is the same click every time, on a control the page puts
+# in the same place, which makes it the driver's job rather than the agent's.
+
+# Id first, and text only as a fallback, because text is actively misleading
+# here: the Turkish Airlines banner labels BOTH of its buttons "...kabul
+# ediyorum" — accepting everything and accepting only what is required — so
+# matching on "kabul" is a coin toss that silently changes what the rest of the
+# run is testing.
+CONSENT_ACCEPT_SELECTORS = (
+    "#allowCookiesButton",            # turkishairlines.com
+    "#onetrust-accept-btn-handler",   # OneTrust, which most of the rest use
+)
+
+# Reserved for a banner neither id matches. Deliberately narrow: the label has
+# to say it accepts *everything*, which means an all-word and an accept-word
+# together, in either order — "Tüm çerezleri kabul ediyorum", "Tümünü kabul
+# et", "Accept all cookies". A bare "Accept" does not qualify: on a two-button
+# banner it is as likely to be the restrictive choice, so it is left to the
+# agent rather than guessed at.
+_ALL = r"(?:t[üu]m\w*|b[üu]t[üu]n\w*|hepsin\w*|\ball\b)"
+_ACCEPT = r"(?:kabul|onayla\w*|izin\s*ver\w*|accept|allow|agree)"
+CONSENT_ACCEPT_TEXT = re.compile(
+    rf"{_ALL}[^.!?]{{0,40}}?{_ACCEPT}|{_ACCEPT}[^.!?]{{0,40}}?{_ALL}",
+    re.IGNORECASE,
+)
+
+# Checked against the matched label before clicking it. The all-word and the
+# accept-word can both appear in a refusal — "Tümünü reddet", "Only accept
+# what is necessary" — and clicking that silently changes what the rest of the
+# run is testing, which is the failure this whole block exists to avoid.
+CONSENT_REFUSAL_TEXT = re.compile(
+    r"sadece|yaln[ıi]zca|zorunlu|gerekli|reddet\w*|reject|decline|refuse|deny"
+    r"|necessary|essential|required",
+    re.IGNORECASE,
+)
+
+# The banner is painted with the first render, so this is a check rather than a
+# wait. Long enough for a late one, short enough that a page without a banner —
+# every page after the first — does not pay for the lookup.
+CONSENT_TIMEOUT_MS = 2500
+
+
+async def dismiss_consent(page: Any) -> Optional[str]:
+    """Accept the cookie banner, if this page has one. Returns what it clicked.
+
+    Best-effort by construction: a page with no banner, a banner this does not
+    recognise, and a click that loses a race with a re-render are all ordinary
+    outcomes, not failures. Whatever is left standing the agent still handles
+    the way it does today — this removes the common case, it does not replace
+    the general one.
+    """
+    selector = ", ".join(CONSENT_ACCEPT_SELECTORS)
+    try:
+        button = page.locator(selector).first
+        await button.wait_for(state="visible", timeout=CONSENT_TIMEOUT_MS)
+        # Which of them matched, so the log names the button that was pressed
+        # rather than the list it was looked up in.
+        found = await button.get_attribute("id")
+        await button.click(timeout=CONSENT_TIMEOUT_MS)
+        return f"#{found}" if found else selector
+    except Exception:
+        pass
+
+    try:
+        button = page.get_by_role("button", name=CONSENT_ACCEPT_TEXT).first
+        if await button.count():
+            label = (await button.inner_text()).strip()
+            if CONSENT_REFUSAL_TEXT.search(label):
+                return None
+            await button.click(timeout=CONSENT_TIMEOUT_MS)
+            return label
+    except Exception:
+        pass
+    return None
+
+
 async def park_window(page: Any) -> None:
     """Get a headed browser window out of the user's way, after it exists.
 
@@ -562,6 +644,10 @@ class WebTarget:
         auth_profile: Optional[str] = None,
         record_video_dir: Optional[str] = None,
         offscreen: bool = True,
+        # Off only for a scenario that is about the banner itself. Nothing in
+        # the suite is today — every scenario that mentions it is trying to get
+        # past it — but a consent test would need the page as the user meets it.
+        accept_consent: bool = True,
     ) -> "WebTarget":
         from playwright.async_api import async_playwright
 
@@ -624,6 +710,12 @@ class WebTarget:
             # back to one once its scripts run — waits for the page to settle,
             # and retries the kind of refusal that clears on its own.
             await goto_with_retry(page, url)
+
+            # Before the agent is shown anything, so the first screenshot it
+            # reasons about is the page rather than the page behind a banner.
+            dismissed = await dismiss_consent(page) if accept_consent else None
+            if dismissed:
+                print(f"[web] accepted the cookie banner ({dismissed})")
         except Exception:
             # Close the browser too, not just the driver — a leaked chromium
             # process survives the failed attempt and holds its profile lock.
@@ -646,6 +738,10 @@ class WebTarget:
                 "headless": headless, "width": size["width"], "height": size["height"],
                 "authProfile": auth_profile, "videoDir": record_video_dir,
                 "offscreen": offscreen,
+                # Recorded so a report can say the banner was taken care of
+                # before the run began, rather than leaving a reader to wonder
+                # why a scenario's cookie step found nothing to close.
+                "consentAccepted": bool(dismissed),
             },
             events=events,
         )
@@ -669,6 +765,13 @@ class WebTarget:
         can only click what is already on screen. "Go back to the home page and
         start a new search" was unperformable, and the agent would hunt for a
         logo to click instead.
+
+        Everything goes through here — the agent's `navigate` action and the
+        address bar in the workspace. There were briefly two of these, and the
+        later definition silently replaced the earlier one: the survivor took
+        the URL raw, so a relative path like "/" — which the agent is told it
+        may use — reached Chromium as an address and came back "Cannot navigate
+        to invalid URL", killing the run rather than failing the step.
         """
         target = (url or "").strip()
         if not target:
@@ -682,11 +785,15 @@ class WebTarget:
             else:
                 target = "https://" + target
         try:
+            # Not a bare goto(): a site that refuses the browser mid-session
+            # leaves an error document behind without raising, exactly as it
+            # does on the first load, and reporting that as a success is how a
+            # session ends up sitting on "Bu siteye ulaşılamıyor".
             await goto_with_retry(self.page, target)
-        except NavigationError as exc:
-            return ActionResult(False, f"Could not open {target}: {exc}")
         except Exception as exc:
             return ActionResult(False, f"Could not open {target}: {exc}")
+        # Every bound in them belongs to the page that just left.
+        self._snapshots.clear()
         self.config["url"] = target
         return ActionResult(True, f"Opened {self.page.url}")
 
@@ -742,19 +849,6 @@ class WebTarget:
         await goto_with_retry(page, url)
         self.config["url"] = url
         return {"url": page.url, "title": await page.title()}
-
-    async def navigate(self, url: str) -> Dict[str, Any]:
-        """Go to a new URL in the existing session.
-
-        Routed through the same guard as the initial load, because a site that
-        refuses the browser mid-session leaves an error document behind exactly
-        as it does on the first navigation — and the address bar used to report
-        that as a successful navigation.
-        """
-        await goto_with_retry(self.page, url)
-        self._snapshots.clear()
-        self.config["url"] = url
-        return {"url": self.page.url, "title": await self.page.title()}
 
     async def set_viewport(self, width: int, height: int) -> Dict[str, int]:
         """Re-render the page at a new size, so it keeps filling its panel."""

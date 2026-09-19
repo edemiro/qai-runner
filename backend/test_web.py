@@ -508,9 +508,22 @@ class LaunchArgsTests(unittest.TestCase):
     desktop, when the page is supposed to live inside QAi.
     """
 
+    # Asserted on the window flags rather than on the whole list: every
+    # Chromium launch also carries the stealth flag, which is not about where
+    # the window goes and is wanted headless too. These read "no window flags",
+    # and checking for an empty list only ever stood in for that.
+    WINDOW_FLAGS = ("--window-position", "CalculateNativeWinOcclusion")
+
+    def assertNoWindowFlags(self, args):
+        self.assertFalse(
+            [a for a in args if any(flag in a for flag in self.WINDOW_FLAGS)],
+            f"expected no window flags, got {args}",
+        )
+
     def test_a_headless_launch_needs_no_window_flags(self):
         from drivers.web import _launch_args
-        self.assertEqual(_launch_args(headless=True, offscreen=True, browser_name="chromium"), [])
+        self.assertNoWindowFlags(
+            _launch_args(headless=True, offscreen=True, browser_name="chromium"))
 
     def test_a_headed_launch_is_positioned_off_screen(self):
         from drivers.web import _launch_args
@@ -526,7 +539,18 @@ class LaunchArgsTests(unittest.TestCase):
 
     def test_off_screen_can_be_turned_off(self):
         from drivers.web import _launch_args
-        self.assertEqual(_launch_args(headless=False, offscreen=False, browser_name="chromium"), [])
+        self.assertNoWindowFlags(
+            _launch_args(headless=False, offscreen=False, browser_name="chromium"))
+
+    def test_every_chromium_launch_hides_that_it_is_automated(self):
+        """Not a window flag, and wanted in all four combinations: without it
+        the bot-protection layer fails the app's own API calls behind an error
+        dialog, which reads as the feature being broken."""
+        from drivers.web import _launch_args
+        for headless in (True, False):
+            for offscreen in (True, False):
+                args = _launch_args(headless, offscreen, browser_name="chromium")
+                self.assertIn("--disable-blink-features=AutomationControlled", args)
 
     def test_only_chromium_takes_these_flags(self):
         from drivers.web import _launch_args
@@ -593,6 +617,244 @@ class NavigationGuardTests(unittest.TestCase):
         asyncio.run(goto_with_retry(page, "https://x.test/", attempts=3))
         self.assertEqual(page.calls, 2)
         self.assertEqual(page.url, "https://x.test/")
+
+
+class ConsentBannerTests(unittest.TestCase):
+    """Getting past the cookie banner without asking the model.
+
+    49 of the 62 scenarios in the suite open with "Close the cookie consent
+    banner by tapping Accept." — the same click on the same control, paid for
+    with a model call and a screenshot every time. The driver does it now,
+    before the agent is shown the page.
+
+    The thing to get right is *which* button: the Turkish Airlines banner
+    labels both of them "...kabul ediyorum", one accepting everything and one
+    accepting only what is required, so a match on the word "kabul" silently
+    changes what the rest of the run is testing.
+    """
+
+    class Button:
+        def __init__(self, text="", visible=True, raises=None, element_id=None):
+            self.text, self.visible, self.raises = text, visible, raises
+            self.element_id = element_id
+            self.clicks = 0
+
+        @property
+        def first(self):
+            return self
+
+        async def wait_for(self, **_kwargs):
+            if not self.visible:
+                raise RuntimeError("not visible")
+
+        async def count(self):
+            return 1 if self.visible else 0
+
+        async def get_attribute(self, name):
+            return self.element_id if name == "id" else None
+
+        async def inner_text(self):
+            return self.text
+
+        async def click(self, **_kwargs):
+            if self.raises:
+                raise self.raises
+            self.clicks += 1
+
+    class Page:
+        """A page that offers the banner through whichever lookup finds it."""
+
+        def __init__(self, by_selector=None, by_role=None):
+            self._by_selector, self._by_role = by_selector, by_role
+            self.asked_names = []
+
+        def locator(self, selector):
+            self.asked_selector = selector
+            return self._by_selector or ConsentBannerTests.Button(visible=False)
+
+        def get_by_role(self, role, name=None):
+            self.asked_names.append((role, name))
+            return self._by_role or ConsentBannerTests.Button(visible=False)
+
+    def test_the_known_button_is_clicked_by_id(self):
+        from drivers.web import dismiss_consent
+        button = self.Button(element_id="allowCookiesButton")
+        page = self.Page(by_selector=button)
+        result = asyncio.run(dismiss_consent(page))
+        self.assertEqual(button.clicks, 1)
+        # Names the button that was pressed, not the list it was found in: the
+        # log line and the run's own record both read this.
+        self.assertEqual(result, "#allowCookiesButton")
+
+    def test_the_restrictive_button_is_not_among_the_known_ids(self):
+        """The whole reason this goes by id: #notAllowCookiesButton reads
+        "Sadece zorunlu çerezleri kabul ediyorum" and would match on text."""
+        from drivers.web import CONSENT_ACCEPT_SELECTORS
+        joined = " ".join(CONSENT_ACCEPT_SELECTORS)
+        self.assertIn("#allowCookiesButton", joined)
+        self.assertNotIn("notAllow", joined)
+
+    def test_the_text_fallback_only_accepts_an_accept_everything_label(self):
+        from drivers.web import CONSENT_ACCEPT_TEXT
+        for label in ("Tüm çerezleri kabul ediyorum", "Tümünü kabul et",
+                      "Bütün çerezleri kabul et", "Hepsini kabul ediyorum",
+                      "Accept all cookies", "Allow all", "Accept All"):
+            self.assertRegex(label, CONSENT_ACCEPT_TEXT, label)
+        # A bare "Accept" on a two-button banner is as likely to be the
+        # restrictive choice, so it is left to the agent rather than guessed.
+        for label in ("Accept", "Kabul Et", "Onayla", "Ayarları değiştir",
+                      "Çerez politikamızı inceleyin.", "Devam"):
+            self.assertNotRegex(label, CONSENT_ACCEPT_TEXT, label)
+
+    def test_a_refusal_is_never_clicked_however_it_is_worded(self):
+        """The failure this exists to prevent: a label can carry both an
+        all-word and an accept-word and still be the restrictive button."""
+        from drivers.web import CONSENT_REFUSAL_TEXT
+        for label in ("Sadece zorunlu çerezleri kabul ediyorum",
+                      "Yalnızca gerekli çerezleri kabul et",
+                      "Tümünü reddet", "Reject all", "Accept only necessary",
+                      "Decline all cookies"):
+            self.assertRegex(label, CONSENT_REFUSAL_TEXT, label)
+        for label in ("Tüm çerezleri kabul ediyorum", "Accept all cookies"):
+            self.assertNotRegex(label, CONSENT_REFUSAL_TEXT, label)
+
+    def test_a_refusal_that_reaches_the_fallback_is_left_alone(self):
+        from drivers.web import dismiss_consent
+        refusal = self.Button("Sadece zorunlu çerezleri kabul ediyorum")
+        page = self.Page(by_selector=None, by_role=refusal)
+        self.assertIsNone(asyncio.run(dismiss_consent(page)))
+        self.assertEqual(refusal.clicks, 0, "the restrictive button must not be clicked")
+
+    def test_the_text_fallback_runs_only_when_no_id_matched(self):
+        from drivers.web import dismiss_consent
+        by_id = self.Button()
+        page = self.Page(by_selector=by_id, by_role=self.Button("Accept all"))
+        asyncio.run(dismiss_consent(page))
+        self.assertEqual(page.asked_names, [], "the id matched; nothing else should be tried")
+
+    def test_the_text_fallback_is_used_when_the_ids_are_absent(self):
+        from drivers.web import dismiss_consent
+        by_text = self.Button("Accept all cookies")
+        page = self.Page(by_selector=None, by_role=by_text)
+        result = asyncio.run(dismiss_consent(page))
+        self.assertEqual(by_text.clicks, 1)
+        self.assertEqual(result, "Accept all cookies")
+
+    def test_a_page_with_no_banner_is_an_ordinary_outcome(self):
+        """Every page after the first has no banner. It must cost nothing and
+        say nothing."""
+        from drivers.web import dismiss_consent
+        self.assertIsNone(asyncio.run(dismiss_consent(self.Page())))
+
+    def test_a_click_that_fails_does_not_bring_down_the_launch(self):
+        """Losing a race with a re-render is normal. Whatever is left standing,
+        the agent still handles the way it does today."""
+        from drivers.web import dismiss_consent
+        page = self.Page(by_selector=self.Button(raises=RuntimeError("detached")))
+        self.assertIsNone(asyncio.run(dismiss_consent(page)))
+
+
+class NavigateActionTests(unittest.TestCase):
+    """Going to an address from inside a run.
+
+    This is the action a scenario uses to say "go back to the home page and
+    start again", and it was broken in a way nothing caught: `navigate` was
+    defined twice on WebTarget, so the second definition replaced the first.
+    The survivor took the URL raw and returned a plain dict, which meant a
+    relative path — the form the agent is explicitly told it may use — reached
+    Chromium as an address and came back "Cannot navigate to invalid URL". The
+    exception was not caught either, so it killed the whole run instead of
+    failing one step. A real scenario lost 15 steps of work to it.
+    """
+
+    def target(self, url="https://shop.test/search?q=1"):
+        from drivers.web import WebTarget
+
+        class Page:
+            def __init__(self):
+                self.url = url
+                self.asked = []
+
+            async def goto(self, to, **_kwargs):
+                self.asked.append(to)
+                self.url = to
+
+        target = WebTarget.__new__(WebTarget)
+        target.page = Page()
+        target.config = {}
+        target._snapshots = ["a stale snapshot"]
+        return target
+
+    def test_only_one_navigate_survives_on_the_class(self):
+        """The bug itself: two defs, and Python keeps the last. Counted in the
+        source because by the time it is an attribute the loser is gone."""
+        import inspect
+        import drivers.web
+        source = inspect.getsource(drivers.web.WebTarget)
+        self.assertEqual(source.count("    async def navigate("), 1)
+
+    def test_a_relative_path_is_resolved_against_the_current_page(self):
+        target = self.target()
+        result = asyncio.run(target.navigate("/tr-tr/flights"))
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(target.page.asked, ["https://shop.test/tr-tr/flights"])
+
+    def test_the_site_root_is_a_valid_destination(self):
+        """"/" is what "return to the home screen" turns into, and it is the
+        exact value that produced the invalid-URL failure."""
+        target = self.target()
+        result = asyncio.run(target.navigate("/"))
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(target.page.asked, ["https://shop.test/"])
+
+    def test_a_bare_hostname_is_assumed_to_be_https(self):
+        target = self.target()
+        asyncio.run(target.navigate("example.test/x"))
+        self.assertEqual(target.page.asked, ["https://example.test/x"])
+
+    def test_an_absolute_url_is_left_alone(self):
+        target = self.target()
+        asyncio.run(target.navigate("http://other.test/y"))
+        self.assertEqual(target.page.asked, ["http://other.test/y"])
+
+    def test_it_returns_an_action_result_and_not_a_dict(self):
+        """The agent reads .ok and .message off whatever comes back, so a dict
+        here is an AttributeError mid-run — the second way the duplicate broke
+        this, and the one that would have bitten even on a valid URL."""
+        from drivers.base import ActionResult
+        result = asyncio.run(self.target().navigate("/x"))
+        self.assertIsInstance(result, ActionResult)
+
+    def test_an_empty_address_fails_the_step_rather_than_the_run(self):
+        target = self.target()
+        result = asyncio.run(target.navigate("  "))
+        self.assertFalse(result.ok)
+        self.assertEqual(target.page.asked, [], "nothing should have been opened")
+
+    def test_a_navigation_that_cannot_load_fails_the_step_rather_than_the_run(self):
+        from drivers.web import WebTarget
+
+        class DeadPage:
+            url = "https://shop.test/"
+
+            async def goto(self, to, **_kwargs):
+                raise RuntimeError("net::ERR_NAME_NOT_RESOLVED")
+
+        target = WebTarget.__new__(WebTarget)
+        target.page = DeadPage()
+        target.config = {}
+        target._snapshots = []
+
+        result = asyncio.run(target.navigate("https://nowhere.test/"))
+        self.assertFalse(result.ok)
+        self.assertIn("nowhere.test", result.message)
+
+    def test_the_element_cache_is_dropped_on_arrival(self):
+        """Every bound in it belongs to the page that just left; acting on one
+        afterwards clicks whatever now occupies those coordinates."""
+        target = self.target()
+        asyncio.run(target.navigate("/somewhere-else"))
+        self.assertEqual(target._snapshots, [])
 
     def test_a_permanent_failure_is_raised_without_retrying(self):
         from drivers.web import NavigationError, goto_with_retry
