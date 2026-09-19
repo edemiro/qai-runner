@@ -23,7 +23,6 @@ from uuid import uuid4
 import agent
 import storage
 import config
-from config import MAX_AGENT_STEPS
 from drivers.web import WebTarget, run_artifact_dir
 
 # More than this and the machine, not the site, becomes the bottleneck — each
@@ -134,14 +133,20 @@ async def _execute_one(
 
     await emit.put(_event("case_started", case=case["id"], label=label, url=url))
 
+    # The video directory has to be chosen before the browser starts, but the
+    # run id only exists once the agent has created it — so recordings go under
+    # the case, and are moved into the run's folder afterwards. Assigned before
+    # the try because `finally` cleans it up: raising for a missing URL inside
+    # the try left it unbound, and the UnboundLocalError that followed escaped
+    # `_execute_one` entirely — gather() swallowed it, the case produced no
+    # `case_finished` and no result row, and a suite whose other cases passed
+    # was reported green while silently dropping that one.
+    staging = run_artifact_dir(f"case-{case['id']}-{uuid4().hex[:8]}")
+
     try:
         if not url:
             raise ValueError("The case has no URL and no base URL was given.")
 
-        # The video directory has to be chosen before the browser starts, but
-        # the run id only exists once the agent has created it — so recordings
-        # go under the case, and are moved into the run's folder afterwards.
-        staging = run_artifact_dir(f"case-{case['id']}-{uuid4().hex[:8]}")
         target = await WebTarget.launch(
             url,
             headless=options.get("headless", config.RUN_HEADLESS_DEFAULT),
@@ -158,7 +163,13 @@ async def _execute_one(
         last_status = None
         async for line in agent.run_agent(
             target, goal,
-            max_steps=options.get("max_steps", MAX_AGENT_STEPS),
+            # Left as None unless the caller asked for a ceiling: a written
+            # scenario gets one scaled to its own length, and passing the
+            # free-roaming 40 here would cap an 8-step case at 40 actions when
+            # a single step may spend 12. The same case run from the workspace
+            # sends None and gets the full budget — the verdict must not depend
+            # on which button started it.
+            max_steps=options.get("max_steps"),
             use_vision=options.get("use_vision", True),
             # A case written out as steps is run step by step and judged the
             # same way; one without them keeps the open-ended behaviour.
@@ -281,7 +292,7 @@ async def _run_mobile_case(
         # overwrite the outer run's history/run_id/cancel mid-flight.
         async for line in agent.run_agent(
             target, goal,
-            max_steps=options.get("max_steps", MAX_AGENT_STEPS),
+            max_steps=options.get("max_steps"),  # scaled to the steps — see the web path
             use_vision=options.get("use_vision", True),
             session_state=agent.AgentSession(),
             steps=case.get("steps") or None,

@@ -493,20 +493,26 @@ def list_runs(
     search: Optional[str] = None,
     offset: int = 0,
 ) -> List[Dict[str, Any]]:
+    # Priority and layer come from the run's own snapshot first: the columns
+    # exist so a report survives its Test Set being deleted, and reading the
+    # join alone made a run lose its band the moment the case went away.
     query = """SELECT r.*,
-                      c.priority AS priority,
-                      c.layer    AS layer,
-                      c.idx      AS case_idx,
+                      COALESCE(r.case_priority, c.priority) AS priority,
+                      COALESCE(r.case_layer, c.layer)       AS layer,
                       (SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count,
                       (SELECT COUNT(*) FROM steps s
                         WHERE s.run_id = r.id AND s.status = 'failed') AS failed_count,
+                      -- page_events holds warnings as well; counting the lot
+                      -- made the list claim errors the detail view did not.
                       (SELECT COUNT(*) FROM page_events e
-                        WHERE e.run_id = r.id) AS page_error_count
+                        WHERE e.run_id = r.id AND e.level = 'error') AS page_error_count
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id"""
     where, params = [], []
     if priority:
-        where.append("c.priority = ?")
+        # Not `c.priority = ?`, which would also turn the LEFT JOIN into an
+        # inner one and drop every run whose case has since been deleted.
+        where.append("COALESCE(r.case_priority, c.priority) = ?")
         params.append(priority)
     if tag:
         where.append("r.tags LIKE ?")
@@ -1084,8 +1090,11 @@ def get_suite_run(suite_run_id: str) -> Optional[Dict[str, Any]]:
         # Read from the run's own snapshot, falling back to the case only while
         # it still exists: a report has to survive its Test Set being deleted.
         run_rows = conn.execute(
-            """SELECT r.*,
-                      COALESCE(r.case_idx, c.idx)           AS case_idx,
+            # case_idx is listed before r.* on purpose: r.* carries a column of
+            # that name too, and sqlite3.Row keeps the *first* of a duplicate
+            # pair, so putting the COALESCE second silently discarded it.
+            """SELECT COALESCE(r.case_idx, c.idx)           AS case_idx,
+                      r.*,
                       COALESCE(r.case_priority, c.priority) AS priority,
                       COALESCE(r.case_layer, c.layer)       AS layer,
                       (SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count,
@@ -1212,14 +1221,18 @@ def priority_breakdown(days: int = 14) -> List[Dict[str, Any]]:
     since = time.time() - days * 86400
     with _connect() as conn:
         rows = conn.execute(
-            """SELECT c.priority AS priority,
+            # Grouped on the run's own snapshot first, falling back to the case
+            # only while it still exists: reading the join alone dropped every
+            # run whose Test Set had since been deleted into "unclassified",
+            # losing the band it actually ran at.
+            """SELECT COALESCE(r.case_priority, c.priority) AS priority,
                       SUM(r.status = 'passed') AS passed,
                       SUM(r.status = 'failed') AS failed,
                       COUNT(*) AS total
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id
                WHERE r.started_at >= ?
-               GROUP BY c.priority""",
+               GROUP BY COALESCE(r.case_priority, c.priority)""",
             (since,),
         ).fetchall()
 
