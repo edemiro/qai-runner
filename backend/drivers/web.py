@@ -235,11 +235,17 @@ def attach_page_listeners(page, sink: List[Dict[str, Any]]) -> None:
         if message.type not in ("error", "warning"):
             return
         location = message.location if isinstance(message.location, dict) else {}
+        # Computed here too, not only for network events. Without it every
+        # console error was recorded as first-party, so a Google Sign-In
+        # widget, a TikTok pixel or an mPulse beacon complaining in someone
+        # else's script counted against the run — which is the opposite of
+        # what _is_third_party exists to prevent.
         _append_event(sink, {
             "kind": "console",
             "level": message.type,
             "text": message.text[:2000],
             "url": location.get("url"),
+            "thirdParty": _is_third_party(page, location.get("url")),
         })
 
     def on_page_error(error) -> None:

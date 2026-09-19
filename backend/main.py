@@ -1036,7 +1036,10 @@ async def _with_page_events(stream, target, tags: List[str], fail_on_page_error:
             if tags:
                 storage.set_run_tags(run_id, tags)
 
-            errors = [e for e in events if e.get("level") == "error"]
+            errors = [
+                e for e in events
+                if e.get("level") == "error" and not e.get("thirdParty")
+            ]
             if errors and status == "passed" and fail_on_page_error:
                 note = (
                     f"{len(errors)} page error(s) while the run was otherwise green — "

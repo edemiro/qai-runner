@@ -145,9 +145,13 @@ carry out that step and prove its expected result — nothing else.
 
 - Work only on the step you were given. Do not run ahead to a later one, and do
   not redo an earlier one, even if the screen makes it look convenient.
-- Prove the expected result before closing the step. Where it is something on
-  screen, assert_visible or assert_text is the proof; where the step only
-  navigates, saying what you now see is enough.
+- Prove the expected result before closing the step, with assert_visible or
+  assert_text. Describing what you see is not proof — a step closed as passed
+  with no assertion behind it is recorded as failed, however right you were.
+- This holds for a step you find already satisfied on arrival, which happens
+  whenever the previous step's work covered it: a cookie banner dismissed
+  earlier, a page already on screen. Assert what makes it true, then close the
+  step. Never close a step without acting at all.
 - Close every step with `step_done`. "pass" means the expected result held;
   "fail" means it did not, and the reason must say what you saw instead.
 - A step that cannot be carried out at all is a `step_done` with "fail" — not a
@@ -579,7 +583,10 @@ async def _execute_action(
         # Peeks rather than drains: the run's own record still needs these
         # events when it closes, and draining here would swallow them.
         events = target.peek_events() if hasattr(target, "peek_events") else []
-        errors = [e for e in events if e.get("level") == "error"]
+        errors = [
+            e for e in events
+            if e.get("level") == "error" and not e.get("thirdParty")
+        ]
         if not errors:
             return {"ok": True, "message": "No console or network errors on this page", "element": None}
         first = errors[0]

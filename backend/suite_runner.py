@@ -305,7 +305,15 @@ async def _execute_one(
         if run_id:
             storage.add_page_events(run_id, events)
 
-        page_errors = [e for e in events if e.get("level") == "error"]
+        # Someone else's server failing is not this test's result. The intent
+        # was already written down on _is_third_party — "their outages are not
+        # the test's problem" — but nothing consulted the flag, so an analytics
+        # host having a bad day failed every scenario in the set. They stay in
+        # the report either way; they just no longer decide the verdict.
+        page_errors = [
+            e for e in events
+            if e.get("level") == "error" and not e.get("thirdParty")
+        ]
         if status == "passed" and page_errors and options.get("fail_on_page_error", True):
             # A run that clicked through happily while the console threw and an
             # API returned 500 has not demonstrated that the feature works.

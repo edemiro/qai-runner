@@ -324,6 +324,8 @@ class WebSnapshot:
 
         raw_nodes: List[Dict[str, Any]] = payload.get("nodes", [])
         self._flat: List[WebElement] = [WebElement(node) for node in raw_nodes]
+        # Built on first use by contains_text; a snapshot never changes.
+        self._joined_text: Optional[str] = None
 
         self.elements_by_id: Dict[str, WebElement] = {}
         for index, element in enumerate(self._flat):
@@ -442,12 +444,51 @@ class WebSnapshot:
             self._stamp_ids(child_dict, child)
 
     def contains_text(self, needle: str) -> bool:
-        needle_lower = needle.lower()
+        """Is this phrase on screen, as a person reading the screen would say?
+
+        Matched against the page as one running text, not element by element.
+        A phrase a tester writes down is a phrase they read off the screen, and
+        the screen does not show them where one element stops: Turkish
+        Airlines renders an airport as two siblings, "İstanbul Havalimanı" and
+        "(IST)", so an assertion for "İstanbul Havalimanı (IST)" — which is
+        what the screen says — failed on every scenario that checked a port
+        had been selected, while the thing it asserted was plainly there.
+
+        Elements are joined with a space and runs of whitespace collapse, so
+        the phrase matches whether the page puts a space, a newline or nothing
+        at all between the two. Whitespace inside the phrase is still required:
+        this forgives how the markup was split, not what it says.
+        """
+        needle_norm = " ".join(needle.split()).lower()
+        if not needle_norm:
+            return False
         for element in self._flat:
             for value in (element.text, element.name):
-                if value and needle_lower in value.lower():
+                if value and needle_norm in " ".join(value.split()).lower():
                     return True
-        return False
+        return needle_norm in self._running_text()
+
+    def _running_text(self) -> str:
+        """Every node's text as one whitespace-normalised, lowercased string.
+
+        A label repeated back to back is written once. The same words reach
+        here twice over — a node's own text and its accessible name usually
+        agree, and a wrapper repeats its child — and appending both put
+        "İstanbul Havalimanı İstanbul Havalimanı" in the running text, which
+        contains "Havalimanı İstanbul": a phrase in an order the screen never
+        shows. Collapsing the repeat costs nothing and takes that with it.
+        """
+        if self._joined_text is None:
+            parts: List[str] = []
+            for element in self._flat:
+                for value in (element.text, element.name):
+                    if not value:
+                        continue
+                    normalised = " ".join(value.split())
+                    if normalised and normalised != (parts[-1] if parts else None):
+                        parts.append(normalised)
+            self._joined_text = " ".join(parts).lower()
+        return self._joined_text
 
     def visible_text(self) -> List[str]:
         out: List[str] = []

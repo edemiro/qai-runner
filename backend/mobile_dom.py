@@ -413,15 +413,36 @@ class MobileDOMManager:
         return matches
 
     def contains_text(self, needle: str) -> bool:
-        """Assertion helper: is this text anywhere on the visible screen?"""
-        needle_lower = needle.lower()
+        """Is this phrase on screen, as a person reading the screen would say?
+
+        Matched against the screen as one running text rather than view by
+        view, for the same reason as the web snapshot: a label a tester reads
+        as one phrase is very often two views side by side, and checking each
+        alone fails an assertion whose subject is plainly on the screen.
+        Whitespace inside the phrase is still required — this forgives how the
+        layout was split, not what it says.
+        """
+        needle_norm = " ".join(needle.split()).lower()
+        if not needle_norm:
+            return False
+        parts: List[str] = []
         for elem in self.get_all_elements():
             if not (elem.displayed and elem.visible):
                 continue
             for value in (elem.text, elem.name):
-                if value and needle_lower in value.lower():
+                if not value:
+                    continue
+                normalised = " ".join(value.split())
+                if not normalised:
+                    continue
+                if needle_norm in normalised.lower():
                     return True
-        return False
+                # A label repeated back to back — a view's text and its
+                # accessible name usually agree — would otherwise put a phrase
+                # in the running text in an order the screen never shows.
+                if normalised != (parts[-1] if parts else None):
+                    parts.append(normalised)
+        return needle_norm in " ".join(parts).lower()
 
     def visible_text(self) -> List[str]:
         """All visible strings on screen, for assertion failure messages."""
