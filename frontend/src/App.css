@@ -6148,3 +6148,55 @@ textarea,
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+
+/* A scenario waiting on the data its precondition asked for. Not run, and
+   saying so — a set whose count quietly dropped is worse than one that
+   explains itself. */
+.case-card.awaiting {
+  border-color: rgba(205, 155, 70, 0.4);
+  background: rgba(205, 155, 70, 0.04);
+  opacity: 1;
+}
+
+.case-awaiting {
+  margin-left: var(--case-gutter);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(205, 155, 70, 0.3);
+  background: rgba(205, 155, 70, 0.07);
+}
+
+.case-awaiting-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+
+.awaiting-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(205, 155, 70, 0.18);
+  color: #d2a259;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.case-data-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 11px;
+}
+
+.case-data-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.case-data-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

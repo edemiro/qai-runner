@@ -283,6 +283,11 @@ export const api = {
 
   // Bugs. The draft is composed from the run and handed back unsaved — a bug
   // that files itself is a bug nobody has checked.
+  // Answering what a scenario asked for. Filling the last field turns the
+  // scenario back on, which the backend does rather than the caller.
+  setPreconditionData: (caseId, data) =>
+    request(`/api/cases/${caseId}`, { method: 'PATCH', body: { preconditionData: data } }),
+
   bugDraft: (runId) => request(`/api/runs/${runId}/bug-draft`),
   bugs: ({ status = null, code = null, search = null } = {}) => {
     const q = new URLSearchParams();

@@ -117,6 +117,8 @@ OTHERWISE — reply with one JSON array and nothing else:
    "layer": "E2E" | "Component",
    "type": "Positive" | "Negative" | "Boundary",
    "precondition": "<the state this scenario needs before step 1, or \"\" if none>",
+   "requiredData": [{"key": "<short_key>", "label": "<what to ask the tester for>",
+                     "example": "<a plausible value, or \"\">"}],
    "priority": "Critical" | "High" | "Medium" | "Low",
    "goal": "<what the agent should actually do, plain instruction, one or two sentences>",
    "steps": [
@@ -163,7 +165,22 @@ screen. A scenario that buries its setup in a step fails on the setup, and the
 report then names the feature under test rather than the missing state. Leave
 it empty when the scenario genuinely starts from a cold home page.
 
+ASK FOR THE DATA THE PRECONDITION NEEDS. Where the setup depends on a real
+value nobody can invent — a member number, a booking reference, a password, a
+card — list it in `requiredData` with a short key and a label a tester can
+answer. QAi will not run the scenario until those are filled in: running it
+without them fails on the setup and the report then names the feature under
+test. Ask only for what cannot be derived from the screen; a route or a date
+the scenario itself chooses is not required data. An empty list is correct for
+a scenario anyone can run as a guest.
+
 WRITING STEPS:
+- DO NOT open the application as step 1. The run already starts on the page
+  under test — the browser is opened at its address before the first step — so
+  "Open the application and wait for the home screen to load" spends a model
+  call and an action proving something that was already true. 47 of the last 62
+  scenarios began that way. Start at the first thing the tester actually does.
+  Use `navigate` only to reach a *different* page mid-scenario.
 - One action per step. "Fill the passenger form and continue" is two steps.
 - `expected` is a control point that can be seen on the screen — "the passenger
   form opens with 2 ADT rows", not "it works". This is what the step is judged
@@ -322,6 +339,7 @@ def parse(text: str) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
             "layer": layer,
             "type": _clean_type(entry.get("type")),
             "precondition": str(entry.get("precondition") or "").strip()[:400],
+            "requiredData": storage.clean_required_data(entry.get("requiredData")),
             "priority": _clean_priority(entry.get("priority"), layer),
             # A scenario with no runnable instruction still has a usable title;
             # falling back to it beats dropping the scenario entirely.

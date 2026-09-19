@@ -1383,8 +1383,11 @@ class CaseBody(BaseModel):
     layer: Optional[str] = None
     # Positive / Negative / Boundary — what kind of check this is.
     scenarioType: Optional[str] = None
-    # The state the scenario needs before its first step.
+    # The state the scenario needs before its first step, what it needs from a
+    # person to reach it, and what they answered.
     precondition: Optional[str] = None
+    requiredData: Optional[List[Dict[str, str]]] = None
+    preconditionData: Optional[Dict[str, str]] = None
     steps: Optional[List[ScenarioStep]] = None
 
 
@@ -1471,6 +1474,7 @@ async def post_case(suite_id: str, body: CaseBody):
         dataset=body.dataset, auth_profile=body.authProfile,
         source_run_id=body.sourceRunId, priority=body.priority, layer=body.layer,
         scenario_type=body.scenarioType, precondition=body.precondition,
+        required_data=body.requiredData, precondition_data=body.preconditionData,
         steps=[step.model_dump() for step in body.steps] if body.steps else None,
     )
     return storage.get_case(case_id)
@@ -1486,6 +1490,7 @@ async def post_cases_bulk(suite_id: str, body: BulkCaseBody):
             dataset=case.dataset, auth_profile=case.authProfile,
             source_run_id=case.sourceRunId, priority=case.priority, layer=case.layer,
             scenario_type=case.scenarioType, precondition=case.precondition,
+            required_data=case.requiredData, precondition_data=case.preconditionData,
             steps=[step.model_dump() for step in case.steps] if case.steps else None,
         ))
         for case in body.cases
@@ -1687,15 +1692,45 @@ async def generate_scenarios_from_screen(session_id: str, body: ScenarioGenerate
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class CasePatchBody(BaseModel):
+    """A partial edit of a scenario.
+
+    Separate from CaseBody, where name and goal are required because creating a
+    scenario without them makes no sense. A patch that only answers the
+    precondition's data should not have to resend the whole scenario — doing so
+    invites a caller to overwrite a field someone else just edited.
+    """
+    name: Optional[str] = None
+    goal: Optional[str] = None
+    url: Optional[str] = None
+    tags: Optional[List[str]] = None
+    dataset: Optional[List[Dict[str, Any]]] = None
+    authProfile: Optional[str] = None
+    enabled: Optional[bool] = None
+    priority: Optional[str] = None
+    layer: Optional[str] = None
+    scenarioType: Optional[str] = None
+    precondition: Optional[str] = None
+    requiredData: Optional[List[Dict[str, str]]] = None
+    preconditionData: Optional[Dict[str, str]] = None
+    steps: Optional[List[ScenarioStep]] = None
+
+
 @app.patch("/api/cases/{case_id}")
-async def patch_case(case_id: str, body: CaseBody):
+async def patch_case(case_id: str, body: CasePatchBody):
     fields: Dict[str, Any] = {
         "name": body.name, "goal": body.goal, "url": body.url,
-        "tags": body.tags, "auth_profile": body.authProfile,
+        "auth_profile": body.authProfile,
         "priority": body.priority, "layer": body.layer,
         "scenario_type": body.scenarioType,
         "precondition": body.precondition,
     }
+    if body.tags is not None:
+        fields["tags"] = body.tags
+    if body.requiredData is not None:
+        fields["required_data"] = body.requiredData
+    if body.preconditionData is not None:
+        fields["precondition_data"] = body.preconditionData
     if body.dataset is not None:
         fields["dataset"] = body.dataset
     if body.enabled is not None:

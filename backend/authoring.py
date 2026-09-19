@@ -194,8 +194,20 @@ async def run_test_set(
         return {"ok": False, "message": f"No Test Set called “{name}”. Existing: {known}."}
 
     detail = storage.get_suite(suite["id"])
-    runnable = [case for case in detail["cases"] if case["enabled"]]
+    # .get with a fallback: every case read from storage carries these, but a
+    # caller that hands in a case it built itself should not crash on a field
+    # that is derived rather than stored.
+    runnable = [c for c in detail["cases"] if c.get("runnable", c.get("enabled"))]
     if not runnable:
+        waiting = [c for c in detail["cases"] if c.get("needsData")]
+        if waiting:
+            return {
+                "ok": False,
+                "message": (
+                    f"Test Set “{suite['name']}” has {len(waiting)} scenario(s) waiting on "
+                    "their precondition data — fill that in on Test Sets and they turn on."
+                ),
+            }
         return {"ok": False, "message": f"Test Set “{suite['name']}” has no enabled scenario to run."}
 
     # Graded exactly as the same set is from the Test Sets page. It used to

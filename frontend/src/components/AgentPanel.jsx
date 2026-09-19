@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser, Eye, EyeOff,
-  FileText, Loader2, PlayCircle, Send, Sparkles, Square, Target, XCircle, Zap,
+  ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser,
+  FileText, Image as ImageIcon, ImageOff, Loader2, PlayCircle, Send, Sparkles,
+  Square, Target, XCircle, Zap,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -556,10 +557,18 @@ export function AgentPanel({
                 className={`toggle-chip ${useVision ? 'on' : ''}`}
                 onClick={() => setUseVision((value) => !value)}
                 disabled={running}
-                title="Send the screenshot alongside the element tree so the model can see icon-only and custom-drawn UI"
+                /* Its own icon, not an eye: the Web tab has an eye too, for
+                   whether the browser has a window, and the two were being
+                   read as the same switch. */
+                title={useVision
+                  ? 'Sending the screenshot with the element tree. The model can then see '
+                    + 'icons, canvas and anything the tree does not describe — at about 1.6s '
+                    + 'a step. Applies to the next run.'
+                  : 'Sending the element tree only. About 1.6s a step faster, but the model '
+                    + 'is blind to icon-only and custom-drawn UI. Applies to the next run.'}
               >
-                {useVision ? <Eye size={13} /> : <EyeOff size={13} />}
-                Vision
+                {useVision ? <ImageIcon size={13} /> : <ImageOff size={13} />}
+                {useVision ? 'Vision on' : 'Vision off'}
               </button>
               <span className="composer-spacer" />
               {timeline.length > 0 && !running && (

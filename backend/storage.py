@@ -225,6 +225,13 @@ MIGRATIONS = [
     # skips it — and then fails on the missing setup while the report names the
     # feature under test.
     ("suite_cases", "precondition", "TEXT"),
+    # What the precondition needs from a person before the scenario can run:
+    # a member number, a booking reference, a password. `required_data` is what
+    # the scenario asks for, `precondition_data` is what the tester supplied.
+    # A scenario that asks for data it has not been given cannot be run — it
+    # would fail on the missing setup and the report would name the feature.
+    ("suite_cases", "required_data", "TEXT"),
+    ("suite_cases", "precondition_data", "TEXT"),
     # Copied onto the run when it is adopted into an execution. A report has to
     # keep reading correctly after the Test Set it came from is deleted, and a
     # join to a row that no longer exists cannot do that.
@@ -1004,7 +1011,9 @@ def get_suite(suite_id: str) -> Optional[Dict[str, Any]]:
             "SELECT * FROM suite_cases WHERE suite_id = ? ORDER BY idx ASC", (suite_id,)
         ).fetchall()
     suite["cases"] = [_row_to_case(r) for r in case_rows]
-    suite["case_count"] = sum(1 for c in suite["cases"] if c["enabled"])
+    suite["case_count"] = sum(1 for c in suite["cases"] if c["runnable"])
+    # Shown beside it: a set whose count dropped needs to say why.
+    suite["awaiting_data"] = sum(1 for c in suite["cases"] if c["needsData"])
     return suite
 
 
@@ -1055,7 +1064,54 @@ def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
         case["steps"] = json.loads(case["steps"]) if case.get("steps") else []
     except Exception:
         case["steps"] = []
+    for field, empty in (("required_data", []), ("precondition_data", {})):
+        try:
+            case[field] = json.loads(case[field]) if case.get(field) else empty
+        except Exception:
+            case[field] = empty
+    # Computed rather than stored: the answer changes the moment someone fills
+    # a field in, and two copies of it would disagree.
+    case["missingData"] = missing_data(case)
+    case["needsData"] = bool(case["missingData"])
+    # What an execution actually asks. A scenario waiting on its setup is not
+    # runnable however its enabled flag reads.
+    case["runnable"] = case["enabled"] and not case["needsData"]
     return case
+
+
+def clean_required_data(value: Any) -> List[Dict[str, str]]:
+    """The fields a scenario asks for, in the one shape the app uses.
+
+    A request with no key is unusable — there would be nothing to store the
+    answer under — so it is dropped rather than half-kept.
+    """
+    if not isinstance(value, list):
+        return []
+    cleaned = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        key = " ".join(str(item.get("key") or "").split())
+        if not key:
+            continue
+        cleaned.append({
+            "key": key[:60],
+            "label": (str(item.get("label") or key).strip())[:120],
+            "example": (str(item.get("example") or "").strip())[:120],
+        })
+    return cleaned
+
+
+def missing_data(case: Dict[str, Any]) -> List[str]:
+    """Which of the fields this scenario asked for have not been answered."""
+    required = case.get("required_data") or []
+    supplied = case.get("precondition_data") or {}
+    if not isinstance(supplied, dict):
+        supplied = {}
+    return [
+        field["key"] for field in required
+        if not str(supplied.get(field["key"]) or "").strip()
+    ]
 
 
 def add_case(
@@ -1066,9 +1122,21 @@ def add_case(
     steps: Optional[List[Dict[str, str]]] = None,
     scenario_type: Optional[str] = None,
     precondition: Optional[str] = None,
+    required_data: Optional[List[Dict[str, str]]] = None,
+    precondition_data: Optional[Dict[str, str]] = None,
+    enabled: Optional[bool] = None,
 ) -> str:
     case_id = uuid.uuid4().hex[:16]
     cleaned_steps = clean_steps(steps)
+    cleaned_required = clean_required_data(required_data)
+    supplied = precondition_data if isinstance(precondition_data, dict) else {}
+    # A scenario that still needs data starts disabled. Running it would fail
+    # on the missing setup, and the report would blame the feature — so it sits
+    # out of every execution until someone answers what it asked for.
+    if enabled is None:
+        enabled = not missing_data({
+            "required_data": cleaned_required, "precondition_data": supplied,
+        })
     with _connect() as conn:
         idx = conn.execute(
             "SELECT COALESCE(MAX(idx), 0) + 1 AS next FROM suite_cases WHERE suite_id = ?",
@@ -1078,14 +1146,18 @@ def add_case(
             """INSERT INTO suite_cases (id, suite_id, idx, name, goal, url, tags,
                                         dataset, auth_profile, source_run_id,
                                         priority, layer, steps, scenario_type,
-                                        precondition, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                        precondition, required_data,
+                                        precondition_data, enabled, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 case_id, suite_id, idx, name[:200], goal, url, _dump_tags(tags),
                 json.dumps(dataset, ensure_ascii=False) if dataset else None,
                 auth_profile, source_run_id, priority, layer,
                 json.dumps(cleaned_steps, ensure_ascii=False) if cleaned_steps else None,
                 scenario_type, precondition,
+                json.dumps(cleaned_required, ensure_ascii=False) if cleaned_required else None,
+                json.dumps(supplied, ensure_ascii=False) if supplied else None,
+                1 if enabled else 0,
                 time.time(),
             ),
         )
@@ -1111,6 +1183,15 @@ def update_case(case_id: str, **fields: Any) -> bool:
         cleaned = clean_steps(fields["steps"])
         sets.append("steps = ?")
         values.append(json.dumps(cleaned, ensure_ascii=False) if cleaned else None)
+    if "required_data" in fields:
+        required = clean_required_data(fields["required_data"])
+        sets.append("required_data = ?")
+        values.append(json.dumps(required, ensure_ascii=False) if required else None)
+    if "precondition_data" in fields:
+        supplied = fields["precondition_data"]
+        supplied = supplied if isinstance(supplied, dict) else {}
+        sets.append("precondition_data = ?")
+        values.append(json.dumps(supplied, ensure_ascii=False) if supplied else None)
     if "dataset" in fields:
         sets.append("dataset = ?")
         values.append(
@@ -1119,6 +1200,23 @@ def update_case(case_id: str, **fields: Any) -> bool:
     if "enabled" in fields:
         sets.append("enabled = ?")
         values.append(1 if fields["enabled"] else 0)
+    # Answering what the scenario asked for turns it back on. It was disabled
+    # because it was waiting on this and nothing else, so leaving the tester to
+    # flip a second switch afterwards would be asking them to say yes twice.
+    # An explicit `enabled` in the same update still wins: someone turning a
+    # scenario off on purpose is not overruled by filling in its data.
+    if "precondition_data" in fields and "enabled" not in fields:
+        current = get_case(case_id)
+        if current is not None:
+            merged = dict(current)
+            merged["precondition_data"] = (
+                fields["precondition_data"]
+                if isinstance(fields["precondition_data"], dict) else {}
+            )
+            if not missing_data(merged):
+                sets.append("enabled = ?")
+                values.append(1)
+
     if not sets:
         return False
     values.append(case_id)
@@ -1163,12 +1261,17 @@ def get_case(case_id: str) -> Optional[Dict[str, Any]]:
 
 
 def select_cases(suite_id: str, tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """The enabled cases of a suite, optionally narrowed to those carrying any
-    of `tags` — this is what `--tag smoke` on the CLI resolves to."""
+    """The runnable cases of a suite, optionally narrowed to those carrying any
+    of `tags` — this is what `--tag smoke` on the CLI resolves to.
+
+    Runnable, not merely enabled: a scenario still waiting on the data its
+    precondition asked for would fail on the missing setup, and the report
+    would name the feature under test rather than the absent member number.
+    """
     suite = get_suite(suite_id)
     if suite is None:
         return []
-    cases = [case for case in suite["cases"] if case["enabled"]]
+    cases = [case for case in suite["cases"] if case["runnable"]]
     if tags:
         wanted = {t.strip().lower() for t in tags if t and t.strip()}
         cases = [case for case in cases if wanted & set(case["tags"])]

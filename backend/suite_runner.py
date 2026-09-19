@@ -633,7 +633,34 @@ async def run_suite(
         }
 
     cases = cases if cases is not None else storage.select_cases(suite_id, tags)
+
+    # A scenario still waiting on the data its precondition asked for is
+    # dropped here as well as at selection, because a hand-picked execution and
+    # the CLI reach this by other routes. Running one would fail on the missing
+    # setup and the report would name the feature rather than the absent member
+    # number — and it would do that on every run until someone noticed.
+    waiting = [c for c in cases if c.get("needsData")]
+    if waiting:
+        cases = [c for c in cases if not c.get("needsData")]
+        yield _event(
+            "cases_skipped",
+            reason="awaiting-precondition-data",
+            count=len(waiting),
+            cases=[{"id": c["id"], "name": c.get("name"), "missing": c.get("missingData") or []}
+                   for c in waiting],
+            message=(
+                f"{len(waiting)} scenario(s) skipped: still waiting on their "
+                "precondition data."
+            ),
+        )
+
     if not cases:
+        if waiting:
+            yield _event("error", message=(
+                f"Every scenario in '{suite['name']}' is waiting on its precondition "
+                "data. Fill it in on Test Sets and they turn on."
+            ))
+            return
         criteria = f" matching {', '.join(tags)}" if tags else ""
         yield _event("error", message=f"Suite '{suite['name']}' has no enabled cases{criteria}.")
         return

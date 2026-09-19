@@ -129,6 +129,11 @@ export function SuitesPage({
   const [deviceUdid, setDeviceUdid] = useState('');
   const [deviceAppId, setDeviceAppId] = useState('');
   const [connecting, setConnecting] = useState(false);
+  // Which scenario's precondition data is being filled in, and what has been
+  // typed so far. Held here rather than per row so only one form is open.
+  const [dataFor, setDataFor] = useState(null);
+  const [dataValues, setDataValues] = useState({});
+  const [savingData, setSavingData] = useState(false);
   const [devices, setDevices] = useState([]);
   const [deviceBuilds, setDeviceBuilds] = useState([]);
 
@@ -469,6 +474,29 @@ export function SuitesPage({
       cancelled = true;
     };
   }, [isMobileSet, deviceUdid, devices]);
+
+  const openDataForm = (item) => {
+    setDataFor(item.id);
+    setDataValues({ ...(item.precondition_data || {}) });
+  };
+
+  /* Answering what the scenario asked for is what turns it on: it was disabled
+     because it was waiting on exactly this. The backend decides that, so the
+     rule lives in one place rather than being re-derived here. */
+  const saveData = async (item) => {
+    setSavingData(true);
+    try {
+      await api.setPreconditionData(item.id, dataValues);
+      setDataFor(null);
+      setSuite(await api.suite(suite.id));
+      await loadSuites();
+      toast.success('Saved. The scenario is ready to run.');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingData(false);
+    }
+  };
 
   const runPicked = async () => {
     if (!picked.size || running) return;
@@ -859,14 +887,20 @@ export function SuitesPage({
                        tells two scenarios apart. Given its own block the title
                        wraps in full, and every scenario is bounded by its own
                        edge instead of a hairline shared with its neighbour. */
-                    <li key={item.id} className={`case-card ${item.enabled ? '' : 'disabled'}`}>
+                    <li
+                      key={item.id}
+                      className={`case-card ${item.enabled ? '' : 'disabled'} ${item.needsData ? 'awaiting' : ''}`}
+                    >
                       <div className="case-card-head">
                         <input
                           type="checkbox"
                           checked={picked.has(item.id)}
                           onChange={() => togglePick(item)}
+                          disabled={item.needsData}
                           aria-label={`Select ${item.name}`}
-                          title="Pick this scenario for an execution"
+                          title={item.needsData
+                            ? 'Waiting on its precondition data — fill that in first'
+                            : 'Pick this scenario for an execution'}
                         />
                         <span className="case-idx" title="Scenario number in this Test Set">
                           #{item.idx}
@@ -946,6 +980,63 @@ export function SuitesPage({
                           <span className="case-precondition-label">Precondition</span>
                           {item.precondition}
                         </p>
+                      )}
+
+                      {/* A scenario waiting on its setup data is not run — it
+                          would fail on the missing member number and the report
+                          would name the feature. It says what it is waiting for
+                          and offers the form to end the wait. */}
+                      {item.needsData && (
+                        <div className="case-awaiting">
+                          <div className="case-awaiting-head">
+                            <span className="awaiting-chip">Needs data</span>
+                            <span className="muted small">
+                              Not run until {item.missingData.length} field
+                              {item.missingData.length === 1 ? '' : 's'} below
+                              {item.missingData.length === 1 ? ' is' : ' are'} filled in.
+                            </span>
+                            {dataFor !== item.id && (
+                              <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => openDataForm(item)}
+                              >
+                                Provide data
+                              </button>
+                            )}
+                          </div>
+
+                          {dataFor === item.id && (
+                            <div className="case-data-form">
+                              {(item.required_data || []).map((field) => (
+                                <label key={field.key}>
+                                  {field.label}
+                                  <input
+                                    value={dataValues[field.key] || ''}
+                                    placeholder={field.example || ''}
+                                    onChange={(e) => setDataValues({
+                                      ...dataValues, [field.key]: e.target.value,
+                                    })}
+                                  />
+                                </label>
+                              ))}
+                              <div className="case-data-actions">
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => setDataFor(null)}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => saveData(item)}
+                                  disabled={savingData}
+                                >
+                                  Save and enable
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                       {item.goal && <p className="case-goal">{item.goal}</p>}
 

@@ -103,9 +103,11 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
             ))}
           </div>
           <button
-            className={`chip-toggle ${visible ? 'on' : ''}`}
+            className={`toggle-chip ${visible ? 'on' : ''}`}
             onClick={() => setVisible((value) => !value)}
-            title="Headless is faster but most sites refuse it outright — leave this on unless you are testing that."
+            title={visible
+              ? 'The browser has a window (kept off-screen). Most sites refuse a headless one, so this is the default.'
+              : 'No browser window. Faster, but many sites — including this one — drop a headless browser at the network layer.'}
           >
             {visible ? <Eye size={13} /> : <EyeOff size={13} />}
             {visible ? 'Visible' : 'Headless'}

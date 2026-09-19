@@ -14,7 +14,7 @@ import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from config import ARTIFACT_DIR, AUTH_DIR, WEB_EXTRA_HEADERS
 from web_dom import EXTRACT_JS, WebSnapshot
@@ -660,6 +660,35 @@ class WebTarget:
             return not self.page.is_closed()
         except Exception:
             return False
+
+    async def navigate(self, url: str) -> ActionResult:
+        """Go to a page, the way a tester types an address.
+
+        A scenario that has to reach a second page had no way to say so: the
+        runner opens the browser at the case's URL and every action after that
+        can only click what is already on screen. "Go back to the home page and
+        start a new search" was unperformable, and the agent would hunt for a
+        logo to click instead.
+        """
+        target = (url or "").strip()
+        if not target:
+            return ActionResult(False, "navigate needs a URL")
+        if not target.startswith(("http://", "https://")):
+            # A path is relative to where the session already is, which is what
+            # "/tr-tr/flights" in a scenario means.
+            current = urlparse(self.page.url)
+            if target.startswith("/") and current.scheme and current.netloc:
+                target = urlunparse((current.scheme, current.netloc, target, "", "", ""))
+            else:
+                target = "https://" + target
+        try:
+            await goto_with_retry(self.page, target)
+        except NavigationError as exc:
+            return ActionResult(False, f"Could not open {target}: {exc}")
+        except Exception as exc:
+            return ActionResult(False, f"Could not open {target}: {exc}")
+        self.config["url"] = target
+        return ActionResult(True, f"Opened {self.page.url}")
 
     async def reopen(self) -> Dict[str, Any]:
         """Bring a dead page back at the same URL, keeping the session id.

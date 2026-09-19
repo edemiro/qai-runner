@@ -42,6 +42,7 @@ AVAILABLE ACTIONS
 {"type":"action","action":"swipe","value":"left","reason":"why"}
 {"type":"action","action":"key","value":"back","reason":"why"}
 {"type":"action","action":"wait","value":"2","reason":"why"}
+{"type":"action","action":"navigate","value":"/tr-tr/flights","reason":"why"}
 {"type":"action","action":"assert_visible","elementId":"el_9","reason":"what this proves"}
 {"type":"action","action":"assert_text","value":"Welcome back","reason":"what this proves"}
 {"type":"action","action":"assert_absent","value":"Çerez","reason":"what this proves"}
@@ -60,6 +61,10 @@ AVAILABLE ACTIONS
   the screen behind it instead, leaving the container looking unchanged.
 `key` takes one of: {keys}.
 `wait` takes a number of seconds (max 10).
+`navigate` goes to an address, the way a tester types one. A path like
+  "/tr-tr/flights" is relative to the site already open. The run already starts
+  on the page under test, so this is for reaching a *second* page or going back
+  — not for opening the first one.
 `assert_visual` compares the screen against a stored baseline named by `value`.
   The first time a name is used the current screen becomes the baseline and the
   check passes, so use a stable, descriptive name.
@@ -215,7 +220,7 @@ ASSERTION_ACTIONS = {
 # the model puts the verb under "type" instead of "action" — a variation that
 # used to make the whole block invisible, ending the run as a silent pass.
 KNOWN_ACTIONS = {
-    "click", "type", "clear", "scroll", "swipe", "key", "wait",
+    "click", "type", "clear", "scroll", "swipe", "key", "wait", "navigate",
     "assert_visible", "assert_text", "assert_visual", "assert_no_errors",
     "assert_absent", "assert_disabled",
     "write_scenarios", "run_test_set",
@@ -796,6 +801,16 @@ async def _execute_action(
 
     def as_dict(result: ActionResult) -> Dict[str, Any]:
         return {"ok": result.ok, "message": result.message, "element": result.element}
+
+    if kind == "navigate":
+        navigate = getattr(target, "navigate", None)
+        if navigate is None:
+            return {
+                "ok": False,
+                "element": None,
+                "message": "This target has no address to go to — navigate is for a browser.",
+            }
+        return as_dict(await navigate(value or ""))
 
     if kind == "wait":
         seconds = min(float(value or 1), 10.0)
