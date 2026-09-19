@@ -11,6 +11,7 @@ import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
 import { useToast } from './hooks/useToast';
 import { parseBounds, roleColor } from './lib/elements';
+import { BugsPage } from './pages/BugsPage';
 import { ExecutionsPage } from './pages/ExecutionsPage';
 import { InsightsPage } from './pages/InsightsPage';
 import { RunsPage } from './pages/RunsPage';
@@ -570,6 +571,7 @@ export default function App() {
         <ExecutionsPage
           onOpenRun={openRunReport}
           onWatch={watchExecution}
+          onOpenBugs={() => setActiveTab('bugs')}
           focusId={focusExecutionId}
           onFocused={clearExecutionFocus}
         />
@@ -590,6 +592,10 @@ export default function App() {
 
     if (activeTab === 'insights') {
       return <InsightsPage />;
+    }
+
+    if (activeTab === 'bugs') {
+      return <BugsPage onOpenRun={openRunReport} />;
     }
 
     if (activeTab === 'settings') {

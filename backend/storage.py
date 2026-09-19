@@ -154,6 +154,36 @@ CREATE INDEX IF NOT EXISTS idx_cases_suite ON suite_cases(suite_id, idx);
 CREATE INDEX IF NOT EXISTS idx_suite_runs ON suite_runs(suite_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON page_events(run_id, step_idx);
+
+-- A defect raised off a failed scenario. Deliberately NOT tied to the run's
+-- lifetime: a bug outlives the run that found it, and deleting run history must
+-- not quietly close what it raised. Everything needed to read the bug — the
+-- title, the body, the frame — is copied in at the moment it is raised, so it
+-- still reads correctly once the run, the case and the Test Set are gone.
+CREATE TABLE IF NOT EXISTS bugs (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    detail      TEXT,
+    code        TEXT,
+    severity    TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',
+    -- Soft pointers back to where it came from, for the reader who still has
+    -- the history and wants the full report.
+    run_id      TEXT,
+    suite_run_id TEXT,
+    case_id     TEXT,
+    -- Copied, not joined: the names have to survive their sources.
+    case_name   TEXT,
+    suite_name  TEXT,
+    url         TEXT,
+    screenshot  TEXT,
+    note        TEXT,
+    created_at  REAL NOT NULL,
+    updated_at  REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bugs_created ON bugs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bugs_run ON bugs(run_id);
 """
 
 # Columns added after the first release. SQLite cannot express "add if missing"
@@ -690,6 +720,131 @@ def link_run_to_suite(
             ),
         )
         return cursor.rowcount > 0
+
+
+# --- bugs ----------------------------------------------------------------- #
+
+BUG_STATUSES = ("open", "triaged", "fixed", "closed", "not-a-bug")
+
+
+def create_bug(
+    title: str,
+    detail: Optional[str] = None,
+    code: Optional[str] = None,
+    severity: Optional[str] = None,
+    run_id: Optional[str] = None,
+    suite_run_id: Optional[str] = None,
+    case_id: Optional[str] = None,
+    case_name: Optional[str] = None,
+    suite_name: Optional[str] = None,
+    url: Optional[str] = None,
+    screenshot: Optional[str] = None,
+    status: str = "open",
+) -> str:
+    bug_id = uuid.uuid4().hex[:16]
+    now = time.time()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO bugs (id, title, detail, code, severity, status, run_id,
+                                 suite_run_id, case_id, case_name, suite_name, url,
+                                 screenshot, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                bug_id, title[:300], detail, code, severity,
+                status if status in BUG_STATUSES else "open",
+                run_id, suite_run_id, case_id, case_name, suite_name, url,
+                screenshot, now, now,
+            ),
+        )
+    return bug_id
+
+
+def _row_to_bug(row: sqlite3.Row, include_screenshot: bool = False) -> Dict[str, Any]:
+    bug = dict(row)
+    bug["hasScreenshot"] = bool(bug.get("screenshot"))
+    if not include_screenshot:
+        bug.pop("screenshot", None)
+    return bug
+
+
+def list_bugs(
+    status: Optional[str] = None,
+    code: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    query = "SELECT * FROM bugs"
+    where, params = [], []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if code:
+        where.append("code = ?")
+        params.append(code)
+    if search and search.strip():
+        needle = f"%{search.strip().lower()}%"
+        where.append("(LOWER(title) LIKE ? OR LOWER(COALESCE(detail, '')) LIKE ?"
+                     " OR LOWER(COALESCE(case_name, '')) LIKE ?)")
+        params.extend([needle, needle, needle])
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_row_to_bug(row) for row in rows]
+
+
+def get_bug(bug_id: str, include_screenshot: bool = False) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM bugs WHERE id = ?", (bug_id,)).fetchone()
+    return _row_to_bug(row, include_screenshot) if row else None
+
+
+def update_bug(bug_id: str, **fields: Any) -> bool:
+    allowed = {"title", "detail", "code", "severity", "status", "note"}
+    sets, values = [], []
+    for key, value in fields.items():
+        if key in allowed and value is not None:
+            if key == "status" and value not in BUG_STATUSES:
+                continue
+            sets.append(f"{key} = ?")
+            values.append(value)
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    values.extend([time.time(), bug_id])
+    with _connect() as conn:
+        cursor = conn.execute(f"UPDATE bugs SET {', '.join(sets)} WHERE id = ?", values)
+    return cursor.rowcount > 0
+
+
+def delete_bug(bug_id: str) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM bugs WHERE id = ?", (bug_id,))
+    return cursor.rowcount > 0
+
+
+def bug_for_run(run_id: str) -> Optional[Dict[str, Any]]:
+    """The bug already raised for this run, if there is one.
+
+    Raising a second one for the same failed scenario buys nothing and makes
+    the list unreadable, so the UI offers to open the existing one instead.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM bugs WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    return _row_to_bug(row) if row else None
+
+
+def bug_counts() -> Dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT status, COUNT(*) AS n FROM bugs GROUP BY status").fetchall()
+    counts = {row["status"]: row["n"] for row in rows}
+    counts["all"] = sum(counts.values())
+    return counts
 
 
 # --- page events (console / network) ------------------------------------- #

@@ -37,6 +37,7 @@ import agent
 import appium_client as appium
 import authoring
 import browserstack
+import bug_report
 import mobile_session
 import config
 import devices as device_discovery
@@ -1803,6 +1804,110 @@ async def get_suite_run(suite_run_id: str):
     if suite_run is None:
         raise HTTPException(status_code=404, detail="Suite run not found.")
     return suite_run
+
+
+# --------------------------------------------------------------------------- #
+# Bugs — what a failed scenario turned out to mean
+# --------------------------------------------------------------------------- #
+
+class BugBody(BaseModel):
+    title: str
+    detail: Optional[str] = None
+    code: Optional[str] = None
+    severity: Optional[str] = None
+    status: str = "open"
+    runId: Optional[str] = None
+    suiteRunId: Optional[str] = None
+    caseId: Optional[str] = None
+    caseName: Optional[str] = None
+    suiteName: Optional[str] = None
+    url: Optional[str] = None
+    # Kept with the bug rather than pointed at, so it still reads once the run
+    # it came from has been deleted.
+    screenshot: Optional[str] = None
+
+
+class BugPatchBody(BaseModel):
+    title: Optional[str] = None
+    detail: Optional[str] = None
+    code: Optional[str] = None
+    severity: Optional[str] = None
+    status: Optional[str] = None
+    note: Optional[str] = None
+
+
+@app.get("/api/runs/{run_id}/bug-draft")
+async def get_bug_draft(run_id: str):
+    """What a bug raised from this run would say, before anyone saves it.
+
+    Composed rather than filed: QAi is wrong often enough — an expected string
+    the page never rendered, a limit the scenario invented — that a bug which
+    files itself is a bug nobody has checked.
+    """
+    draft = bug_report.draft_for_run(run_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return draft
+
+
+@app.get("/api/bugs")
+async def list_bugs(
+    status: Optional[str] = None,
+    code: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+):
+    return {
+        "bugs": storage.list_bugs(status=status, code=code, search=search, limit=limit),
+        "counts": storage.bug_counts(),
+        "codes": bug_report.CODES,
+        "notAppDefects": sorted(bug_report.NOT_APP_DEFECTS),
+        "statuses": list(storage.BUG_STATUSES),
+    }
+
+
+@app.post("/api/bugs")
+async def post_bug(body: BugBody):
+    bug_id = storage.create_bug(
+        title=body.title, detail=body.detail, code=body.code,
+        severity=body.severity, status=body.status,
+        run_id=body.runId, suite_run_id=body.suiteRunId, case_id=body.caseId,
+        case_name=body.caseName, suite_name=body.suiteName, url=body.url,
+        screenshot=body.screenshot,
+    )
+    return {"id": bug_id, "status": "created"}
+
+
+@app.get("/api/bugs/{bug_id}")
+async def get_bug(bug_id: str):
+    bug = storage.get_bug(bug_id)
+    if bug is None:
+        raise HTTPException(status_code=404, detail="Bug not found.")
+    return bug
+
+
+@app.get("/api/bugs/{bug_id}/screenshot")
+async def get_bug_screenshot(bug_id: str):
+    bug = storage.get_bug(bug_id, include_screenshot=True)
+    if bug is None:
+        raise HTTPException(status_code=404, detail="Bug not found.")
+    if not bug.get("screenshot"):
+        raise HTTPException(status_code=404, detail="No screenshot was kept with this bug.")
+    return {"screenshot": bug["screenshot"]}
+
+
+@app.patch("/api/bugs/{bug_id}")
+async def patch_bug(bug_id: str, body: BugPatchBody):
+    if not storage.update_bug(bug_id, **body.model_dump(exclude_none=True)):
+        raise HTTPException(status_code=404, detail="Bug not found, or nothing to change.")
+    return storage.get_bug(bug_id)
+
+
+@app.delete("/api/bugs/{bug_id}")
+async def remove_bug(bug_id: str):
+    if not storage.delete_bug(bug_id):
+        raise HTTPException(status_code=404, detail="Bug not found.")
+    return {"deleted": True}
 
 
 @app.post("/api/suite-runs/{suite_run_id}/cancel")

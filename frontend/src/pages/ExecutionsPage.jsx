@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Ban, CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Square, Trash2, XCircle,
+  Ban, Bug, CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Square,
+  Trash2, X, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
@@ -59,7 +60,12 @@ function duration(ms) {
   return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFocused = null }) {
+export function ExecutionsPage({
+  onOpenRun, onWatch = null, focusId = null, onFocused = null,
+  // Where a raised bug goes, so the tester lands on it rather than being told
+  // it exists somewhere.
+  onOpenBugs = null,
+}) {
   const toast = useToast();
   const [executions, setExecutions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -110,6 +116,57 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
   };
 
   const [stopping, setStopping] = useState(false);
+  // Which scenario's bug is being composed, and the draft once it arrives.
+  const [draft, setDraft] = useState(null);
+  const [drafting, setDrafting] = useState(null);
+
+  /* Compose a bug from the failed scenario and show it before saving. The run
+     already holds the step that failed, what it was meant to prove, what the
+     agent saw instead and a picture of the screen — asking a tester to retype
+     that is asking them to transcribe, and what happens instead is that it gets
+     written from memory an hour later, or not raised at all. Nothing is filed
+     until it has been read: QAi is wrong often enough — an expected string no
+     page renders, a limit a scenario invented — that half of what it would
+     raise is about the scenario rather than the app. */
+  const raiseBug = async (run) => {
+    setDrafting(run.id);
+    try {
+      const data = await api.bugDraft(run.id);
+      if (data.existingBugId) {
+        toast.info('A bug was already raised for this scenario.');
+        onOpenBugs?.();
+        return;
+      }
+      setDraft({ ...data, title: data.title, detail: data.detail });
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDrafting(null);
+    }
+  };
+
+  const saveBug = async () => {
+    try {
+      await api.createBug({
+        title: draft.title,
+        detail: draft.detail,
+        code: draft.code,
+        severity: draft.severity,
+        runId: draft.runId,
+        suiteRunId: draft.suiteRunId,
+        caseId: draft.caseId,
+        caseName: draft.caseName,
+        suiteName: execution?.suite_name || null,
+        url: draft.url,
+        screenshot: draft.screenshot || null,
+      });
+      setDraft(null);
+      toast.success('Bug raised.');
+      onOpenBugs?.();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
 
   /* Stops the run on the server, not just on screen. The cases still queued
      never open a browser; the ones in flight are asked to stop and wind down
@@ -365,6 +422,19 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
                       </span>
                     )}
                     <Verdict status={run.status} />
+                    {run.status === 'failed' && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => raiseBug(run)}
+                        disabled={drafting === run.id}
+                        title="Raise a bug from this failure — written from the run"
+                      >
+                        {drafting === run.id
+                          ? <Loader2 size={14} className="spin" />
+                          : <Bug size={14} />}
+                        Bug
+                      </button>
+                    )}
                     <button
                       className="btn btn-ghost btn-sm"
                       onClick={() => onOpenRun?.(run.id)}
@@ -379,6 +449,65 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
           </div>
         )}
       </div>
+
+      {/* Read before it is filed. The body is editable because the tester
+          knows things the run does not — which release, which account, whether
+          this is the same defect as the one raised yesterday. */}
+      {draft && (
+        <div className="modal-overlay" onClick={() => setDraft(null)} role="dialog" aria-label="Raise a bug">
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2 className="modal-title"><Bug size={16} /> Raise a bug</h2>
+              <button className="icon-btn" onClick={() => setDraft(null)} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="modal-sub">
+              Written from the run: the step that failed, what it was meant to
+              prove, what happened instead, and the screen at the time.
+              {!draft.isAppDefect && (
+                <strong className="bug-warn">
+                  {' '}This failure describes the run rather than the product —
+                  check the scenario and the environment before filing it.
+                </strong>
+              )}
+            </p>
+            <div className="modal-body bug-draft">
+              <label>
+                Title
+                <input
+                  value={draft.title}
+                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                />
+              </label>
+              <div className="bug-draft-meta">
+                <span className="bug-code">{draft.code}</span>
+                {draft.severity && (
+                  <span className={`priority-tag p-${draft.severity.toLowerCase()}`}>
+                    {draft.severity}
+                  </span>
+                )}
+                {draft.screenshot && <span className="muted small">screen attached</span>}
+              </div>
+              <label>
+                Detail
+                <textarea
+                  rows={16}
+                  value={draft.detail}
+                  onChange={(e) => setDraft({ ...draft, detail: e.target.value })}
+                />
+              </label>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-ghost" onClick={() => setDraft(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveBug} disabled={!draft.title.trim()}>
+                <Bug size={14} /> Raise it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </main>
   );
 }

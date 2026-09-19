@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bug,
   Globe,
   History,
   Layers,
@@ -21,6 +22,7 @@ const NAV = [
   { id: 'executions', label: 'Test Executions', icon: ClipboardList, hint: 'Test Set runs, scenario verdicts and reports' },
   { id: 'runs', label: 'Test Runs', icon: History, hint: 'Every run, with steps and script export' },
   { id: 'insights', label: 'Insights', icon: Activity, hint: 'Trends and flaky tests' },
+  { id: 'bugs', label: 'Bug Report', icon: Bug, hint: 'Defects raised from failed scenarios' },
   { id: 'settings', label: 'Settings', icon: SettingsIcon, hint: 'Appium server and model provider' },
 ];
 
@@ -31,7 +33,7 @@ const byId = Object.fromEntries(NAV.map((item) => [item.id, item]));
 const NAV_GROUPS = [
   { title: 'PLATFORM', items: ['web', 'mobile'].map((id) => byId[id]) },
   { title: 'TEST SUITE', items: ['suites', 'executions'].map((id) => byId[id]) },
-  { title: 'REPORT', items: ['runs', 'insights'].map((id) => byId[id]) },
+  { title: 'REPORT', items: ['runs', 'insights', 'bugs'].map((id) => byId[id]) },
 ];
 
 const USER = { name: 'Ergün Demiro', role: 'QA Engineer' };

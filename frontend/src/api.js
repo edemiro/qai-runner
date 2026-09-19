@@ -281,6 +281,22 @@ export const api = {
   cancelSuiteRun: (suiteRunId) =>
     request(`/api/suite-runs/${suiteRunId}/cancel`, { method: 'POST' }),
 
+  // Bugs. The draft is composed from the run and handed back unsaved — a bug
+  // that files itself is a bug nobody has checked.
+  bugDraft: (runId) => request(`/api/runs/${runId}/bug-draft`),
+  bugs: ({ status = null, code = null, search = null } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (code) q.set('code', code);
+    if (search) q.set('search', search);
+    const query = q.toString();
+    return request(`/api/bugs${query ? `?${query}` : ''}`);
+  },
+  createBug: (body) => request('/api/bugs', { method: 'POST', body }),
+  updateBug: (bugId, body) => request(`/api/bugs/${bugId}`, { method: 'PATCH', body }),
+  deleteBug: (bugId) => request(`/api/bugs/${bugId}`, { method: 'DELETE' }),
+  bugScreenshot: (bugId) => request(`/api/bugs/${bugId}/screenshot`),
+
   // Reports and artifacts are files, so they are linked rather than fetched.
   suiteReportUrl: (suiteRunId, format) =>
     `${BASE}/api/suite-runs/${suiteRunId}/report?format=${format}`,

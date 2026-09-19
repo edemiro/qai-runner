@@ -6006,3 +6006,119 @@ textarea,
 
 .type-select { cursor: pointer; min-width: 92px; }
 .type-select:focus { outline: none; border-color: var(--accent); }
+
+/* ==========================================================================
+   Bug Report
+   --------------------------------------------------------------------------
+   A run says a scenario failed; a bug says what that turned out to mean. The
+   list is for triage — status, severity and cause readable without opening
+   anything — and the detail is the report itself.
+   ========================================================================== */
+
+.bugs-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.bug-search { min-width: 260px; }
+
+.bug-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.bug-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bug-item:hover { background: var(--bg-hover); border-color: var(--border); }
+.bug-item.active { background: var(--bg-raised); border-color: var(--accent); color: var(--text-primary); }
+
+.bug-item-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.bug-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.bug-item-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+/* Where it stands. Open is the one that needs someone. */
+.bug-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bug-status.s-open      { background: rgba(214, 69, 69, 0.16); color: #e06a6a; }
+.bug-status.s-triaged   { background: rgba(205, 155, 70, 0.16); color: #d2a259; }
+.bug-status.s-fixed     { background: rgba(70, 170, 110, 0.16); color: #6cc08d; }
+.bug-status.s-closed    { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+.bug-status\.s-not-a-bug,
+.bug-status.s-not-a-bug { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+
+/* The cause, as a code that groups. Dimmed when it describes the run rather
+   than the product — a reader triaging a list needs to know which half of it
+   they are looking at. */
+.bug-code {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.bug-code.soft { opacity: 0.6; font-style: italic; }
+
+.bug-detail { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.bug-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bug-actions select {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+/* Shown as written rather than parsed: nothing a run produced should be
+   swallowed by a markdown rule. */
+.bug-body {
+  margin: 0;
+  padding: 13px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.16);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bug-shot { max-width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); }
+
+.bug-draft { display: flex; flex-direction: column; gap: 12px; }
+.bug-draft label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-tertiary); }
+.bug-draft textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.6; }
+.bug-draft-meta { display: flex; align-items: center; gap: 8px; }
+.bug-warn { color: #d2a259; }
