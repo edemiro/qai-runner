@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import agent
 import storage
+import config
 from config import MAX_AGENT_STEPS
 from drivers.web import WebTarget, run_artifact_dir
 
@@ -104,7 +105,7 @@ async def _execute_one(
         staging = run_artifact_dir(f"case-{case['id']}-{uuid4().hex[:8]}")
         target = await WebTarget.launch(
             url,
-            headless=options.get("headless", True),
+            headless=options.get("headless", config.RUN_HEADLESS_DEFAULT),
             width=options.get("width", 1440),
             height=options.get("height", 900),
             auth_profile=case.get("auth_profile") or options.get("auth_profile"),

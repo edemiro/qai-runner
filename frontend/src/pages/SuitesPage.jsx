@@ -119,7 +119,9 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
   const [options, setOptions] = useState({
     workers: 2,
     tags: '',
-    headless: true,
+    // Headed: the sites these suites run against drop a headless browser at
+    // the network layer, which surfaces as every scenario failing at once.
+    headless: false,
     trace: true,
     recordVideo: false,
     failOnPageError: true,

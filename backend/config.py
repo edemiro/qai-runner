@@ -76,6 +76,14 @@ MOBILE_AUTO_PERMISSIONS = os.environ.get("MOBILE_AUTO_PERMISSIONS", "true").stri
 # corporate Claude Code config uses.
 SCENARIO_TIMEOUT_S = int(os.environ.get("SCENARIO_TIMEOUT_S", "300"))
 
+# Whether a Test Set run drives a headless browser. Off by default: the sites
+# these suites are written against refuse one outright — Akamai drops the
+# connection at the network layer and every scenario fails with
+# ERR_HTTP2_PROTOCOL_ERROR, which reads as a site outage rather than a browser
+# it would not talk to. Set to "true" where the target allows it; headless is
+# faster and needs no display.
+RUN_HEADLESS_DEFAULT = os.environ.get("RUN_HEADLESS_DEFAULT", "false").strip().lower() == "true"
+
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.
 ALLOWED_ORIGINS = [

@@ -15,6 +15,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import scenario_writer
+import config
 import storage
 import suite_runner
 
@@ -199,7 +200,7 @@ async def run_test_set(
 
     summary = await suite_runner.run_suite_collect(
         suite["id"], workers=workers, name=execution_name,
-        headless=True, fail_on_page_error=False,
+        headless=config.RUN_HEADLESS_DEFAULT, fail_on_page_error=False,
     )
 
     if summary.get("status") == "error":

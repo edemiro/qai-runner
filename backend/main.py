@@ -1329,7 +1329,8 @@ class BulkCaseBody(BaseModel):
 class SuiteRunBody(BaseModel):
     workers: int = 1
     tags: Optional[List[str]] = None
-    headless: bool = True
+    # Headed unless asked otherwise — see config.RUN_HEADLESS_DEFAULT.
+    headless: bool = config.RUN_HEADLESS_DEFAULT
     baseUrl: Optional[str] = None
     authProfile: Optional[str] = None
     trace: bool = False
@@ -1416,7 +1417,7 @@ class ExecutionBody(BaseModel):
     caseIds: List[str]
     name: Optional[str] = None
     workers: int = 2
-    headless: bool = True
+    headless: bool = config.RUN_HEADLESS_DEFAULT
     trace: bool = False
     recordVideo: bool = False
     failOnPageError: bool = True
