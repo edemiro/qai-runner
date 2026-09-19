@@ -169,6 +169,9 @@ export function WebWorkspace({
   // A brief typed into the composer's "write scenarios" mode, awaiting review in
   // a dialog. null = closed; '' or text = open.
   const [writeBrief, setWriteBrief] = useState(null);
+  // Seconds spent waiting for a watched run to open its first browser. A number
+  // that moves is the whole difference between "starting" and "stuck".
+  const [waited, setWaited] = useState(0);
 
   const imgRef = useRef(null);
   const pressRef = useRef(null);
@@ -498,6 +501,20 @@ export function WebWorkspace({
     };
   }, []);
 
+  const awaitingFirstFrame = Boolean(watch) && !session && !watch?.finished;
+  useEffect(() => {
+    if (!awaitingFirstFrame) return undefined;
+    const started = Date.now();
+    const id = setInterval(
+      () => setWaited(Math.round((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => {
+      clearInterval(id);
+      setWaited(0);
+    };
+  }, [awaitingFirstFrame]);
+
   const highlight = useMemo(() => {
     const node = hovered || selected;
     if (!node) return null;
@@ -513,8 +530,16 @@ export function WebWorkspace({
         <header className="page-header compact">
           <div className="web-title-row">
             <h1 className="page-title">Web</h1>
-            <span className="watch-pill">
-              <Radio size={12} /> Watching
+            {/* Connecting and connected are different things, and the wait
+                between them is long enough that saying so matters. */}
+            {/* Live means a frame has actually arrived, not merely that a
+                session exists — there is a second or two between the two, and
+                claiming the first during the second is how a pill stops being
+                worth reading. */}
+            <span className={`watch-pill ${screenshot ? 'live' : 'pending'}`}>
+              {screenshot
+                ? <><Radio size={12} /> Live</>
+                : <><Loader2 size={12} className="spin" /> Connecting</>}
             </span>
             <span className="watch-exec" title="The execution being watched">
               {watch.name || 'Execution'}
@@ -597,13 +622,27 @@ export function WebWorkspace({
           </>
         ) : (
           <div className="empty-state">
-            <Radio size={34} />
-            <h3>{watch.finished ? 'Every scenario has finished' : 'Waiting for a scenario to start'}</h3>
+            {watch.finished ? <Radio size={34} /> : <Loader2 size={34} className="spin" />}
+            <h3>{watch.finished ? 'Every scenario has finished' : 'Opening the browser'}</h3>
             <p>
               {watch.finished
                 ? 'The run has no browser open any more. Its report is on the execution.'
-                : 'The run is opening a browser. It appears here as soon as the first scenario starts.'}
+                : 'A browser takes a few seconds to start and reach the page. '
+                  + 'The scenario appears here the moment it does.'}
             </p>
+            {/* Something true and moving, so a ten-second wait does not read as
+                a page that has stopped. */}
+            {!watch.finished && (
+              <p className="watch-wait-progress">
+                <span className="watch-wait-dot" />
+                {watch.progress?.status === 'running' || !watch.progress
+                  ? 'Run started'
+                  : `Run ${watch.progress.status}`}
+                {watch.progress?.done > 0 && ` · ${watch.progress.done} scenario${
+                  watch.progress.done === 1 ? '' : 's'} finished`}
+                {waited > 2 && ` · ${waited}s`}
+              </p>
+            )}
             {watch.onOpenExecution && (
               <button className="btn btn-primary" onClick={watch.onOpenExecution}>
                 Open execution

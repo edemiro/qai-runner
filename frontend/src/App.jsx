@@ -63,6 +63,9 @@ export default function App() {
   // callback rather than an effect watching the list — the value comes from
   // outside React, which is where it should be read.
   const [watchSeen, setWatchSeen] = useState(false);
+  // How the watched run is getting on, so the wait before the first browser
+  // opens shows something moving rather than a fixed sentence.
+  const [watchProgress, setWatchProgress] = useState(null);
 
   // Read by connectDevice, which must see the current sessions without taking
   // them as a dependency — that would rebuild the callback on every change.
@@ -200,11 +203,26 @@ export default function App() {
     let timer = null;
     const tick = async () => {
       try {
-        const data = await api.sessions();
+        const [data, run] = await Promise.all([
+          api.sessions(),
+          // Read alongside the sessions so the wait has something true to say.
+          // Opening the first browser takes the better part of ten seconds, and
+          // a motionless screen for that long reads as broken.
+          api.suiteRun(watchExecutionId).catch(() => null),
+        ]);
         if (cancelled) return;
         const list = data.sessions || [];
         setSessions(list);
         if (list.some((s) => s.watching?.suiteRunId === watchExecutionId)) setWatchSeen(true);
+        if (run) {
+          setWatchProgress({
+            status: run.status,
+            done: (run.runs || []).length,
+            passed: run.passed || 0,
+            failed: run.failed || 0,
+            startedAt: run.started_at || null,
+          });
+        }
       } catch {
         /* the status strip already reports a backend that is not answering */
       } finally {
@@ -502,6 +520,7 @@ export default function App() {
     setWatchExecutionId(suiteRunId);
     setWatchSessionId(null);
     setWatchSeen(false);
+    setWatchProgress(null);
     setActiveTab('web');
   }, []);
 
@@ -589,6 +608,7 @@ export default function App() {
             // the run is still opening its first one, which reads very
             // differently to the tester.
             finished: watchList.length === 0 && watchSeen,
+            progress: watchProgress,
             onPick: setWatchSessionId,
             onOpenExecution: () => openExecution(watchExecutionId),
             onStop: () => stopExecution(watchExecutionId),
