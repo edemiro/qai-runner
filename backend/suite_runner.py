@@ -47,6 +47,42 @@ def substitute(text: Optional[str], row: Optional[Dict[str, Any]]) -> Optional[s
     )
 
 
+def with_precondition(goal: str, precondition: Optional[str]) -> str:
+    """Put the scenario's required starting state in front of its goal.
+
+    Stored separately so a reviewer can see it and edit it, but the agent only
+    ever receives the goal — so unless it is folded in here, the setup is
+    written down and then never acted on, which is worse than not having the
+    field at all.
+    """
+    text = " ".join((precondition or "").split())
+    if not text:
+        return goal
+    return f"Precondition (make this true before starting): {text}\n\n{goal}"
+
+
+def substitute_steps(
+    steps: Optional[List[Dict[str, str]]], row: Optional[Dict[str, Any]],
+) -> Optional[List[Dict[str, str]]]:
+    """Fill a dataset row into a scenario's steps, as it already is into its goal.
+
+    Without this a data-driven case ran N times with the literal text
+    `{{route}}` in every instruction — the goal and the URL were substituted
+    and the steps, which are what the agent actually carries out, were handed
+    over raw. The case editor invites exactly this: it tells the tester to use
+    {{placeholders}} in the field directly above the steps.
+    """
+    if not steps or not row:
+        return steps or None
+    filled = []
+    for step in steps:
+        filled.append({
+            "action": substitute(step.get("action"), row) or step.get("action"),
+            "expected": substitute(step.get("expected"), row),
+        })
+    return filled
+
+
 def expand_cases(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One execution per case, or per dataset row when the case has one."""
     executions = []
@@ -227,7 +263,10 @@ async def _execute_one(
     row = execution["row"]
     label = execution["label"]
 
-    goal = substitute(case["goal"], row) or case["goal"]
+    goal = with_precondition(
+        substitute(case["goal"], row) or case["goal"],
+        substitute(case.get("precondition"), row),
+    )
     url = apply_environment(
         substitute(case.get("url") or options.get("base_url"), row),
         options.get("env_url"),
@@ -305,7 +344,7 @@ async def _execute_one(
             use_vision=options.get("use_vision", True),
             # A case written out as steps is run step by step and judged the
             # same way; one without them keeps the open-ended behaviour.
-            steps=case.get("steps") or None,
+            steps=substitute_steps(case.get("steps"), row),
         ):
             try:
                 payload = json.loads(line)
@@ -421,7 +460,10 @@ async def _run_mobile_case(
     case = execution["case"]
     row = execution["row"]
     label = execution["label"]
-    goal = substitute(case["goal"], row) or case["goal"]
+    goal = with_precondition(
+        substitute(case["goal"], row) or case["goal"],
+        substitute(case.get("precondition"), row),
+    )
 
     run_id: Optional[str] = None
     status = "failed"
@@ -460,7 +502,7 @@ async def _run_mobile_case(
             max_steps=options.get("max_steps"),  # scaled to the steps — see the web path
             use_vision=options.get("use_vision", True),
             session_state=case_state,
-            steps=case.get("steps") or None,
+            steps=substitute_steps(case.get("steps"), row),
         ):
             try:
                 payload = json.loads(line)

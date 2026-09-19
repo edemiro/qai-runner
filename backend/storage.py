@@ -219,6 +219,12 @@ MIGRATIONS = [
     # Positive / Negative / Boundary. A suite of happy paths proves the feature
     # works when used correctly and nothing about what happens when it is not.
     ("suite_cases", "scenario_type", "TEXT"),
+    # The state the scenario needs before its first step: signed in as whom,
+    # which data already exists, what the previous search left behind. Without
+    # somewhere to say it, a scenario either buries its setup in step one or
+    # skips it — and then fails on the missing setup while the report names the
+    # feature under test.
+    ("suite_cases", "precondition", "TEXT"),
     # Copied onto the run when it is adopted into an execution. A report has to
     # keep reading correctly after the Test Set it came from is deleted, and a
     # join to a row that no longer exists cannot do that.
@@ -394,7 +400,13 @@ def finish_run(
 ) -> None:
     with _connect() as conn:
         conn.execute(
-            """UPDATE runs SET status = ?, finished_at = ?, error = ?,
+            # COALESCE on the error too, not only the note: a run is finished
+            # twice — the agent closes it with the reason it failed, then the
+            # suite runner closes it again with whatever it knows, which for an
+            # ordinary scenario failure is nothing. Writing that None over the
+            # agent's reason is why failed runs showed an empty error.
+            """UPDATE runs SET status = ?, finished_at = ?,
+                               error = COALESCE(?, error),
                                verdict_note = COALESCE(?, verdict_note)
                WHERE id = ?""",
             (status, time.time(), error, verdict_note, run_id),
@@ -1053,6 +1065,7 @@ def add_case(
     priority: Optional[str] = None, layer: Optional[str] = None,
     steps: Optional[List[Dict[str, str]]] = None,
     scenario_type: Optional[str] = None,
+    precondition: Optional[str] = None,
 ) -> str:
     case_id = uuid.uuid4().hex[:16]
     cleaned_steps = clean_steps(steps)
@@ -1065,14 +1078,14 @@ def add_case(
             """INSERT INTO suite_cases (id, suite_id, idx, name, goal, url, tags,
                                         dataset, auth_profile, source_run_id,
                                         priority, layer, steps, scenario_type,
-                                        created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                        precondition, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 case_id, suite_id, idx, name[:200], goal, url, _dump_tags(tags),
                 json.dumps(dataset, ensure_ascii=False) if dataset else None,
                 auth_profile, source_run_id, priority, layer,
                 json.dumps(cleaned_steps, ensure_ascii=False) if cleaned_steps else None,
-                scenario_type,
+                scenario_type, precondition,
                 time.time(),
             ),
         )
@@ -1084,7 +1097,7 @@ def update_case(case_id: str, **fields: Any) -> bool:
     # standard, but the tester who knows the business flow has the last word.
     allowed = {
         "name", "goal", "url", "auth_profile", "idx",
-        "priority", "layer", "scenario_type",
+        "priority", "layer", "scenario_type", "precondition",
     }
     sets, values = [], []
     for key, value in fields.items():

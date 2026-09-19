@@ -116,6 +116,7 @@ OTHERWISE — reply with one JSON array and nothing else:
   {"title": "<the one-line scenario, English, in the format above>",
    "layer": "E2E" | "Component",
    "type": "Positive" | "Negative" | "Boundary",
+   "precondition": "<the state this scenario needs before step 1, or \"\" if none>",
    "priority": "Critical" | "High" | "Medium" | "Low",
    "goal": "<what the agent should actually do, plain instruction, one or two sentences>",
    "steps": [
@@ -154,6 +155,13 @@ observed behaviour instead of a guessed number:
   action:   "increase the adult count until the increase control stops responding"
   expected: "the increase control is disabled and the panel total stops rising"
 Name a specific number only when that number is on the attached screen.
+
+PRECONDITIONS. Anything the scenario needs to be true before its first step
+goes in `precondition`, not into step 1: signed in as which kind of user, which
+booking or member number already exists, what a previous search left on the
+screen. A scenario that buries its setup in a step fails on the setup, and the
+report then names the feature under test rather than the missing state. Leave
+it empty when the scenario genuinely starts from a cold home page.
 
 WRITING STEPS:
 - One action per step. "Fill the passenger form and continue" is two steps.
@@ -313,6 +321,7 @@ def parse(text: str) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
             "title": title[:200],
             "layer": layer,
             "type": _clean_type(entry.get("type")),
+            "precondition": str(entry.get("precondition") or "").strip()[:400],
             "priority": _clean_priority(entry.get("priority"), layer),
             # A scenario with no runnable instruction still has a usable title;
             # falling back to it beats dropping the scenario entirely.

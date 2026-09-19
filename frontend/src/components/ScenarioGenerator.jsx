@@ -199,6 +199,7 @@ export function ScenarioGenerator({
       priority: s.priority,
       layer: s.layer,
       scenarioType: s.type,
+      precondition: s.precondition || null,
       steps: s.steps || [],
       tags: [],
     })));

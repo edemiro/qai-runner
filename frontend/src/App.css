@@ -6122,3 +6122,29 @@ textarea,
 .bug-draft textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.6; }
 .bug-draft-meta { display: flex; align-items: center; gap: 8px; }
 .bug-warn { color: #d2a259; }
+
+/* What has to be true before step 1. Above the goal, because that is the order
+   it matters in — a scenario that assumes its setup fails on the setup, and
+   the report then names the feature under test instead. */
+.case-precondition {
+  margin: 0;
+  padding-left: var(--case-gutter);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.case-precondition-label {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}

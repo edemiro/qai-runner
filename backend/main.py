@@ -1383,6 +1383,8 @@ class CaseBody(BaseModel):
     layer: Optional[str] = None
     # Positive / Negative / Boundary — what kind of check this is.
     scenarioType: Optional[str] = None
+    # The state the scenario needs before its first step.
+    precondition: Optional[str] = None
     steps: Optional[List[ScenarioStep]] = None
 
 
@@ -1468,7 +1470,7 @@ async def post_case(suite_id: str, body: CaseBody):
         suite_id, body.name, body.goal, url=body.url, tags=body.tags,
         dataset=body.dataset, auth_profile=body.authProfile,
         source_run_id=body.sourceRunId, priority=body.priority, layer=body.layer,
-        scenario_type=body.scenarioType,
+        scenario_type=body.scenarioType, precondition=body.precondition,
         steps=[step.model_dump() for step in body.steps] if body.steps else None,
     )
     return storage.get_case(case_id)
@@ -1483,7 +1485,7 @@ async def post_cases_bulk(suite_id: str, body: BulkCaseBody):
             suite_id, case.name, case.goal, url=case.url, tags=case.tags,
             dataset=case.dataset, auth_profile=case.authProfile,
             source_run_id=case.sourceRunId, priority=case.priority, layer=case.layer,
-            scenario_type=case.scenarioType,
+            scenario_type=case.scenarioType, precondition=case.precondition,
             steps=[step.model_dump() for step in case.steps] if case.steps else None,
         ))
         for case in body.cases
@@ -1692,6 +1694,7 @@ async def patch_case(case_id: str, body: CaseBody):
         "tags": body.tags, "auth_profile": body.authProfile,
         "priority": body.priority, "layer": body.layer,
         "scenario_type": body.scenarioType,
+        "precondition": body.precondition,
     }
     if body.dataset is not None:
         fields["dataset"] = body.dataset

@@ -22,6 +22,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+import config
 import reporters
 import storage
 import suite_runner
@@ -56,6 +57,15 @@ def _hydrate(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         if run:
             runs.append(run)
     return runs
+
+
+def _headless(args: argparse.Namespace) -> bool:
+    """Whether to run without a window: the flags first, then the project default."""
+    if getattr(args, "headed", False):
+        return False
+    if getattr(args, "headless", False):
+        return True
+    return config.RUN_HEADLESS_DEFAULT
 
 
 async def _cmd_run(args: argparse.Namespace) -> int:
@@ -232,7 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--suite", required=True, help="Suite id (see `cli suites`).")
     run.add_argument("--tag", action="append", help="Only cases with this tag. Repeatable.")
     run.add_argument("--workers", type=int, default=1, help="How many cases to run at once.")
-    run.add_argument("--headed", action="store_true", help="Show the browser (default: headless).")
+    # Headed by default, matching RUN_HEADLESS_DEFAULT and the UI. The sites
+    # these suites run against drop a headless browser at the network layer, so
+    # a CI default of headless made every scenario fail with
+    # ERR_HTTP2_PROTOCOL_ERROR — which reads as a site outage rather than as a
+    # browser the site would not talk to. --headless is there for a target that
+    # allows it, where it is faster and needs no display.
+    run.add_argument("--headed", action="store_true",
+                     help="Show the browser window (overrides the default).")
+    run.add_argument("--headless", action="store_true",
+                     help="Run with no window. Faster, but many sites refuse it.")
     run.add_argument("--base-url", help="URL for cases that do not carry their own.")
     run.add_argument(
         "--env",

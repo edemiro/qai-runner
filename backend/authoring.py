@@ -198,9 +198,14 @@ async def run_test_set(
     if not runnable:
         return {"ok": False, "message": f"Test Set “{suite['name']}” has no enabled scenario to run."}
 
+    # Graded exactly as the same set is from the Test Sets page. It used to
+    # pass fail_on_page_error=False here, so a set run from the chat and the
+    # same set run from a button could reach different verdicts on the same
+    # app — and the chat was the lenient one, which is the wrong way round for
+    # the path a tester trusts without opening the report.
     summary = await suite_runner.run_suite_collect(
         suite["id"], workers=workers, name=execution_name,
-        headless=config.RUN_HEADLESS_DEFAULT, fail_on_page_error=False,
+        headless=config.RUN_HEADLESS_DEFAULT,
     )
 
     if summary.get("status") == "error":

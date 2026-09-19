@@ -342,13 +342,21 @@ def looks_like_an_attempted_action(text: str) -> bool:
     return bool(re.search(r'"(?:type|action)"\s*:\s*"', text))
 
 
-def _verdict_without_assertion(executed_assertion: bool, reply: str):
+def _verdict_without_assertion(
+    executed_assertion: bool, reply: str, did_authoring: bool = False,
+):
     """A run that verified nothing has not passed — it just stopped.
 
     This is the difference between a test suite and a clicking robot, so the
     rule lives here rather than being left to the model's own judgement.
+
+    It does not apply to a run that was asked to write scenarios or start a
+    Test Set. Those never claim anything about the screen, so there is nothing
+    for them to assert — and holding them to the rule marked every "write the
+    scenarios for this page" as failed while it was doing exactly what it was
+    asked.
     """
-    if executed_assertion:
+    if executed_assertion or did_authoring:
         return "passed", None
     return "failed", (
         "The agent stopped without asserting anything, so nothing was verified. "
@@ -1009,6 +1017,10 @@ async def run_agent(
     final_error: Optional[str] = None
     step_no = 0
     executed_assertion = False
+    # Whether this run's job was authoring rather than testing — writing
+    # scenarios, or starting a Test Set. Such a run asserts nothing about the
+    # screen by design.
+    did_authoring = False
     # The picture the last stored step showed, so the next one is only filed if
     # it shows something different.
     last_shot_digest: Optional[bytes] = None
@@ -1019,6 +1031,9 @@ async def run_agent(
     # than eating the whole run's budget.
     step_index = 0
     scenario_row_id: Optional[int] = None
+    # Whether the step `scenario_row_id` points at has already been resolved.
+    # Without it the teardown would close a step the loop had just closed.
+    step_closed = False
     step_actions = 0
     step_asserted = False
     step_started = time.monotonic()
@@ -1028,7 +1043,9 @@ async def run_agent(
     ACTIONS_PER_STEP = 12
 
     def open_step(index: int):
+        nonlocal step_closed
         entry = scenario_steps[index]
+        step_closed = False
         return storage.start_scenario_step(
             run_id, index + 1, entry["action"], entry.get("expected") or None,
         )
@@ -1064,6 +1081,7 @@ async def run_agent(
                     actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
                 )
+                step_closed = True
                 yield _event(
                     "scenario_step_finished", index=step_index + 1,
                     total=len(scenario_steps), status="failed", message=stalled,
@@ -1198,7 +1216,7 @@ async def run_agent(
                     break
 
                 final_status, final_error = _verdict_without_assertion(
-                    executed_assertion, reply.strip()
+                    executed_assertion, reply.strip(), did_authoring,
                 )
                 yield _event("finished", status=final_status, summary=(final_error or reply.strip())[:400])
                 break
@@ -1222,6 +1240,7 @@ async def run_agent(
                     message=reason or None, actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
                 )
+                step_closed = True
                 yield _event(
                     "scenario_step_finished", index=step_index + 1,
                     total=len(scenario_steps),
@@ -1268,9 +1287,10 @@ async def run_agent(
                 final_status = "passed" if verdict.startswith("pass") else "failed"
                 if final_status == "failed":
                     final_error = reason or "The agent reported the scenario as failed."
-                elif not executed_assertion:
+                elif not executed_assertion and not did_authoring:
                     # A green run that verified nothing is worse than a red one:
-                    # it gets trusted.
+                    # it gets trusted. A run that was asked to write scenarios
+                    # is exempt — it never claimed to test anything.
                     final_status = "failed"
                     final_error = (
                         "The agent finished without asserting anything, so nothing was "
@@ -1302,6 +1322,7 @@ async def run_agent(
             if kind in AUTHORING_ACTIONS:
                 # These need the screen as material, not as a place to click,
                 # so they are handled here where the snapshot is still in hand.
+                did_authoring = True
                 result = await _run_authoring_action(
                     kind, action, target, snapshot, screenshot, goal,
                 )
@@ -1382,6 +1403,19 @@ async def run_agent(
         final_status, final_error = "failed", str(exc)
         yield _event("error", message=str(exc))
     finally:
+        # A scenario step is opened before its work and closed after it, so a
+        # run that ends in between — cancelled, out of budget, a provider that
+        # stopped answering — leaves one sitting at "running" for ever. The
+        # report then shows a step that never resolved, which reads as the
+        # product hanging rather than the run ending.
+        if stepwise and scenario_row_id is not None and not step_closed:
+            storage.finish_scenario_step(
+                scenario_row_id,
+                "cancelled" if final_status == "cancelled" else "failed",
+                message=final_error or "The run ended before this step closed.",
+                actions_used=step_actions,
+                duration_ms=int((time.monotonic() - step_started) * 1000),
+            )
         storage.finish_run(run_id, final_status, final_error)
         # Written here rather than per step: the total is what a run costs, and
         # a run that failed or was stopped still spent what it spent.

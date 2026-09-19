@@ -937,6 +937,16 @@ export function SuitesPage({
                         </div>
                       </div>
 
+                      {/* The state the scenario needs before step 1. Shown above
+                          the goal because it is what has to be true first, and
+                          a scenario that silently assumes it fails on the setup
+                          while the report names the feature. */}
+                      {item.precondition && (
+                        <p className="case-precondition">
+                          <span className="case-precondition-label">Precondition</span>
+                          {item.precondition}
+                        </p>
+                      )}
                       {item.goal && <p className="case-goal">{item.goal}</p>}
 
                       {/* Open by default. The steps are the scenario — what a
