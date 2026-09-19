@@ -1267,20 +1267,18 @@ select:disabled {
   color: var(--text-tertiary);
 }
 
+/* Two deliberate rows rather than a ragged wrap: the run's options fill one
+   line, and the actions sit right-aligned on the next. Letting these share a
+   line left the send button floating halfway down a two-line options block. */
 .composer-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 8px;
+  gap: 8px 10px;
+  margin-top: 10px;
 }
 
-.composer-options {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
+/* Defined once, below, with the rest of the composer. */
 
 .option-field {
   display: inline-flex;
@@ -4553,27 +4551,57 @@ a.scan-row-url {
 
 /* Vision, Model and Speed are the same kind of thing — per-run settings — so
    they get one height, one type size and one baseline. */
+/* Two equal columns, so neither picker is sized by the longest model id it
+   happens to contain. */
 .composer-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+/* Every control on this row is the same height as every other. It used to be
+   pinned to 26px here while the buttons beside it took the design system's
+   28px, which is why the boxes did not line up. */
+.composer-options .toggle-chip,
+.composer-options .option-field select {
+  height: var(--control-h-sm);
+  font-size: var(--control-font-sm);
+}
+
+/* Self-labelling selects: no separate caption, so the row fits a narrow panel
+   on one line. They shrink together rather than one pushing the other out. */
+.composer-options .option-select {
+  height: var(--control-h-sm);
+  width: 100%;
+  min-width: 0;
+  padding: 0 var(--control-px-sm);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--control-font-sm);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.composer-options .option-select:hover:not(:disabled) { color: var(--text-primary); }
+.composer-options .option-select:focus { outline: none; border-color: var(--accent); }
+.composer-options .option-select:disabled { opacity: 0.5; }
+
+/* Send, and the one action that operates on the conversation rather than on
+   the next run. Never wraps: it is the row's anchor. */
+.composer-send {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex: 1 1 100%;
 }
 
-.composer-options .toggle-chip,
-.composer-options .option-field select {
-  height: 26px;
-  font-size: 11.5px;
-}
-
-.composer-options .option-field {
-  gap: 5px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.composer-options .option-field select { min-width: 92px; }
+/* Pushes the actions to the right, leaving the Vision toggle on the left. */
+.composer-spacer { flex: 1 1 auto; }
 
 .composer-target-row { margin-bottom: 9px; }
 .composer-target-row .composer-target { margin-bottom: 0; }

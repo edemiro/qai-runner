@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eye, EyeOff,
+  ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser, Eye, EyeOff,
   FileText, Loader2, PlayCircle, Send, Sparkles, Square, Target, XCircle, Zap,
 } from 'lucide-react';
 
@@ -513,7 +513,45 @@ export function AgentPanel({
           )}
 
           <div className="composer-footer">
+            {/* The two pickers share one row at equal width; the toggle sits
+                with the actions below. A select is as wide as its longest
+                option — a model id — so left to itself it squeezed everything
+                else into a ragged wrap. */}
             <div className="composer-options">
+              {models.length > 0 && (
+                <select
+                  className="option-select"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={running}
+                  aria-label="Model for this run"
+                  title="Use a different model for this run only. Settings keeps its own default."
+                >
+                  <option value="">Model: auto</option>
+                  {models.map((entry) => (
+                    <option key={entry.id} value={entry.id} title={entry.note || ''}>{entry.id}</option>
+                  ))}
+                </select>
+              )}
+              <select
+                className="option-select"
+                value={effort}
+                onChange={(e) => setEffort(e.target.value)}
+                disabled={running}
+                aria-label="How hard the model thinks about each step"
+                title="How hard the model thinks about each step. Faster is cheaper; more thorough handles crowded screens better."
+              >
+                <option value="">Speed: auto</option>
+                <option value="low">Fast</option>
+                <option value="medium">Balanced</option>
+                <option value="high">Thorough</option>
+              </select>
+            </div>
+
+            {/* Clearing is an action on the conversation, not a setting for the
+                next run, so it sits with the send button rather than among the
+                options it kept being mistaken for. */}
+            <div className="composer-send">
               <button
                 className={`toggle-chip ${useVision ? 'on' : ''}`}
                 onClick={() => setUseVision((value) => !value)}
@@ -523,38 +561,25 @@ export function AgentPanel({
                 {useVision ? <Eye size={13} /> : <EyeOff size={13} />}
                 Vision
               </button>
-              {models.length > 0 && (
-                <label className="option-field" title="Use a different model for this run only. Settings keeps its own default.">
-                  Model
-                  <select value={model} onChange={(e) => setModel(e.target.value)} disabled={running}>
-                    <option value="">Default</option>
-                    {models.map((entry) => (
-                      <option key={entry.id} value={entry.id} title={entry.note || ''}>{entry.id}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <label className="option-field" title="How hard the model thinks about each step. Faster is cheaper; more thorough handles crowded screens better.">
-                Speed
-                <select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={running}>
-                  <option value="">Default</option>
-                  <option value="low">Fast</option>
-                  <option value="medium">Balanced</option>
-                  <option value="high">Thorough</option>
-                </select>
-              </label>
+              <span className="composer-spacer" />
               {timeline.length > 0 && !running && (
-                <button className="btn btn-ghost btn-sm" onClick={onReset}>New run</button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={onReset}
+                  title="Clear this conversation and go back to the suggestions"
+                >
+                  <Eraser size={13} /> Clear
+                </button>
               )}
+              <button
+                className="btn btn-primary btn-icon"
+                onClick={submit}
+                disabled={running || (mode === 'drive' && !goal.trim()) || (mode === 'run' && !knownSet)}
+                title={MODES.find((m) => m.id === mode)?.hint}
+              >
+                <ArrowUp size={17} />
+              </button>
             </div>
-            <button
-              className="btn btn-primary btn-icon"
-              onClick={submit}
-              disabled={running || (mode === 'drive' && !goal.trim()) || (mode === 'run' && !knownSet)}
-              title={MODES.find((m) => m.id === mode)?.hint}
-            >
-              <ArrowUp size={17} />
-            </button>
           </div>
         </div>
       </div>
