@@ -73,6 +73,74 @@ def _event(kind: str, **payload) -> str:
     return json.dumps({"event": kind, **payload}, ensure_ascii=False) + "\n"
 
 
+class _RunControl:
+    """The handle a running execution can be stopped by.
+
+    An execution runs detached from whoever started it, which is what stopped
+    runs dying with the client's stream — but it also meant nothing held a
+    reference to one, so "stop" could only ever have meant hiding it. This is
+    that reference: the flag pending cases check before they open a browser,
+    the tasks to cut short if a case will not wind down, and the agent states
+    of mobile cases, which run on a throwaway session the usual cancel cannot
+    reach.
+    """
+
+    def __init__(self) -> None:
+        self.stop = asyncio.Event()
+        self.tasks: List[asyncio.Task] = []
+        self.states: List[Any] = []
+
+
+# suite_run_id -> control. Only while the run is actually in flight.
+_RUNNING: Dict[str, _RunControl] = {}
+
+# How long a case is given to stop of its own accord before its task is cut.
+# An agent checks for cancellation between steps, and a step is mostly one
+# model call, so a clean stop usually lands within a few seconds — but a
+# gateway that has stopped answering would otherwise hold the execution open
+# for its whole timeout.
+STOP_GRACE_S = 15
+
+
+def is_running(suite_run_id: str) -> bool:
+    return suite_run_id in _RUNNING
+
+
+async def cancel(suite_run_id: str) -> bool:
+    """Stop an execution for real: no more cases, and the live ones wound down.
+
+    Returns False when the run is not in flight here — already finished, or
+    started by a process that is no longer around.
+    """
+    control = _RUNNING.get(suite_run_id)
+    if control is None:
+        return False
+
+    control.stop.set()
+
+    # Every browser this run has open belongs to a case mid-flight. Asking its
+    # agent to stop is the clean route: it finishes the call it is waiting on
+    # and closes the run properly, with its steps recorded.
+    for session_id in list(drivers.all_targets()):
+        owner = drivers.owner(session_id)
+        if owner and owner.get("suiteRunId") == suite_run_id:
+            agent.cancel(session_id)
+
+    # A mobile case runs on a throwaway agent session that is in no registry,
+    # so it is cancelled through the state itself.
+    for state in control.states:
+        state.cancel.set()
+
+    async def cut_off() -> None:
+        await asyncio.sleep(STOP_GRACE_S)
+        for task in control.tasks:
+            if not task.done():
+                task.cancel()
+
+    asyncio.create_task(cut_off())
+    return True
+
+
 def _record_unstarted_case(
     case: Dict[str, Any],
     suite_run_id: str,
@@ -131,6 +199,17 @@ async def _execute_one(
     status = "failed"
     error: Optional[str] = None
     started = time.time()
+
+    # Checked before anything is opened: a stopped execution must not spend a
+    # browser, a model call or a row on the cases still queued behind it.
+    control = options.get("control")
+    if control is not None and control.stop.is_set():
+        result = {
+            "caseId": case["id"], "runId": None, "label": label,
+            "status": "cancelled", "error": None, "durationMs": 0,
+        }
+        await emit.put(_event("case_finished", **result))
+        return result
 
     await emit.put(_event("case_started", case=case["id"], label=label, url=url))
 
@@ -209,6 +288,13 @@ async def _execute_one(
             # only the case's own outcome is forwarded.
             if payload.get("event") == "finished":
                 last_status = payload.get("status")
+            # A scenario the tester stopped is not one that failed. Without
+            # this the `cancelled` event went unread, last_status stayed None
+            # and the case fell through to "failed" — a stopped run reported
+            # as a broken one.
+            elif payload.get("event") == "cancelled":
+                last_status = "cancelled"
+                error = payload.get("message")
             elif payload.get("event") == "error":
                 error = payload.get("message")
 
@@ -295,6 +381,17 @@ async def _run_mobile_case(
     error: Optional[str] = None
     started = time.time()
 
+    # Checked before anything is opened: a stopped execution must not spend a
+    # browser, a model call or a row on the cases still queued behind it.
+    control = options.get("control")
+    if control is not None and control.stop.is_set():
+        result = {
+            "caseId": case["id"], "runId": None, "label": label,
+            "status": "cancelled", "error": None, "durationMs": 0,
+        }
+        await emit.put(_event("case_finished", **result))
+        return result
+
     await emit.put(_event("case_started", case=case["id"], label=label, url=None))
 
     try:
@@ -306,11 +403,16 @@ async def _run_mobile_case(
         # device — every case failing instantly, with no run ever created,
         # which is the bug this replaces — or, once past that, silently
         # overwrite the outer run's history/run_id/cancel mid-flight.
+        # Handed to the control as well, because a state kept in no registry is
+        # a state Stop cannot reach.
+        case_state = agent.AgentSession()
+        if control is not None:
+            control.states.append(case_state)
         async for line in agent.run_agent(
             target, goal,
             max_steps=options.get("max_steps"),  # scaled to the steps — see the web path
             use_vision=options.get("use_vision", True),
-            session_state=agent.AgentSession(),
+            session_state=case_state,
             steps=case.get("steps") or None,
         ):
             try:
@@ -328,6 +430,13 @@ async def _run_mobile_case(
                 )
             if payload.get("event") == "finished":
                 last_status = payload.get("status")
+            # A scenario the tester stopped is not one that failed. Without
+            # this the `cancelled` event went unread, last_status stayed None
+            # and the case fell through to "failed" — a stopped run reported
+            # as a broken one.
+            elif payload.get("event") == "cancelled":
+                last_status = "cancelled"
+                error = payload.get("message")
             elif payload.get("event") == "error":
                 error = payload.get("message")
         status = last_status or "failed"
@@ -473,7 +582,9 @@ async def run_suite(
     # Carried down to each case so a watchable session can name the execution
     # it belongs to — the session list is all the workspace has to go on.
     execution_name = name or suite.get("name")
-    options = {**options, "execution_name": execution_name}
+    control = _RunControl()
+    _RUNNING[suite_run_id] = control
+    options = {**options, "execution_name": execution_name, "control": control}
 
     yield _event(
         "suite_started", suiteRunId=suite_run_id, suite=suite["name"],
@@ -500,6 +611,7 @@ async def run_suite(
         tasks = [asyncio.create_task(sequential())]
     else:
         tasks = [asyncio.create_task(guarded(execution)) for execution in executions]
+    control.tasks = tasks
     gathered = asyncio.gather(*tasks, return_exceptions=True)
 
     # Drain the queue while the workers run so progress is live rather than
@@ -519,14 +631,23 @@ async def run_suite(
         elif isinstance(outcome, list):
             results.extend(item for item in outcome if isinstance(item, dict))
 
+    _RUNNING.pop(suite_run_id, None)
+
     passed = sum(1 for r in results if r["status"] == "passed")
-    failed = len(results) - passed
-    status = "passed" if failed == 0 and results else "failed"
-    storage.finish_suite_run(suite_run_id, status)
+    cancelled = sum(1 for r in results if r["status"] == "cancelled")
+    failed = len(results) - passed - cancelled
+    if control.stop.is_set():
+        status = "cancelled"
+    else:
+        status = "passed" if failed == 0 and results else "failed"
+    storage.finish_suite_run(
+        suite_run_id, status,
+        error="Stopped by the user." if status == "cancelled" else None,
+    )
 
     yield _event(
         "suite_finished", suiteRunId=suite_run_id, status=status,
-        total=len(results), passed=passed, failed=failed,
+        total=len(results), passed=passed, failed=failed, cancelled=cancelled,
         results=results,
     )
 

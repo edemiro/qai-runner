@@ -487,6 +487,20 @@ export default function App() {
     setWatchSessionId(null);
   }, []);
 
+  /* Stops the run itself, as opposed to stopping watching it. Both belong in
+     the watch header: someone sitting in front of a run going wrong wants to
+     end it there, not go and find the execution first. */
+  const stopExecution = useCallback(async (suiteRunId) => {
+    try {
+      const data = await api.cancelSuiteRun(suiteRunId);
+      toast.info(data.live
+        ? 'Stopping — the scenarios still running are finishing their current step.'
+        : 'Marked stopped. The run was no longer in flight on the server.');
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }, [toast]);
+
   // Stable, so ExecutionsPage's load callback keeps its identity and the list
   // is not refetched on every unrelated re-render of App.
   const clearExecutionFocus = useCallback(() => setFocusExecutionId(null), []);
@@ -552,6 +566,7 @@ export default function App() {
             finished: watchList.length === 0 && watchSeen,
             onPick: setWatchSessionId,
             onOpenExecution: () => openExecution(watchExecutionId),
+            onStop: () => stopExecution(watchExecutionId),
             onExit: stopWatching,
           } : null}
           onOpenExecution={openExecution}

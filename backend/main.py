@@ -1708,6 +1708,33 @@ async def get_suite_run(suite_run_id: str):
     return suite_run
 
 
+@app.post("/api/suite-runs/{suite_run_id}/cancel")
+async def cancel_suite_run(suite_run_id: str):
+    """Stop an execution that is still going.
+
+    The cases not yet started never open a browser; the ones in flight are
+    asked to stop and wind down with their steps recorded, and are cut short if
+    they will not. An execution that is no longer in flight here — already
+    finished, or left over from a previous server process — is marked stopped
+    rather than refused, so a row can never sit at "running" forever with no
+    way to clear it.
+    """
+    stopped = await suite_runner.cancel(suite_run_id)
+    if stopped:
+        return {"stopping": True, "live": True}
+
+    execution = storage.get_suite_run(suite_run_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found.")
+    if execution["status"] == "running":
+        storage.finish_suite_run(
+            suite_run_id, "cancelled",
+            error="Stopped by the user; the run was no longer in flight on this server.",
+        )
+        return {"stopping": True, "live": False}
+    return {"stopping": False, "live": False, "status": execution["status"]}
+
+
 @app.delete("/api/suite-runs/{suite_run_id}")
 async def remove_suite_run(suite_run_id: str):
     if not storage.delete_suite_run(suite_run_id):

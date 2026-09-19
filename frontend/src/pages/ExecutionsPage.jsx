@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Trash2, XCircle,
+  Ban, CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Square, Trash2, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
@@ -24,6 +24,9 @@ const VERDICT = {
   passed: { icon: CheckCircle2, className: 'verdict-pass', label: 'Pass' },
   failed: { icon: XCircle, className: 'verdict-fail', label: 'Fail' },
   running: { icon: Loader2, className: 'verdict-running', label: 'Running' },
+  // Its own state, not a failure: someone ended this run on purpose, and
+  // reporting it red would have people chasing a break that never happened.
+  cancelled: { icon: Ban, className: 'verdict-cancelled', label: 'Stopped' },
 };
 
 function Verdict({ status }) {
@@ -103,6 +106,28 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
       toast.success('Execution deleted.');
     } catch (err) {
       toast.error(err.message);
+    }
+  };
+
+  const [stopping, setStopping] = useState(false);
+
+  /* Stops the run on the server, not just on screen. The cases still queued
+     never open a browser; the ones in flight are asked to stop and wind down
+     with their steps recorded. That takes a few seconds — an agent checks
+     between steps and a step is mostly one model call — so the button says so
+     rather than appearing to do nothing. */
+  const stopExecution = async (id) => {
+    setStopping(true);
+    try {
+      const data = await api.cancelSuiteRun(id);
+      toast.info(data.live
+        ? 'Stopping — the scenarios still running are finishing their current step.'
+        : 'Marked stopped. The run was no longer in flight on the server.');
+      await load();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -259,6 +284,19 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
                       <Radio size={14} /> Watch
                     </button>
                   )}
+                  {execution.status === 'running' && (
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => stopExecution(execution.id)}
+                      disabled={stopping}
+                      title="Stop the run on the server — queued scenarios are dropped"
+                    >
+                      {stopping
+                        ? <Loader2 size={14} className="spin" />
+                        : <Square size={14} />}
+                      {stopping ? 'Stopping…' : 'Stop'}
+                    </button>
+                  )}
                   <a
                     className="btn btn-sm"
                     href={api.suiteReportUrl(execution.id, 'junit')}
@@ -284,7 +322,14 @@ export function ExecutionsPage({ onOpenRun, onWatch = null, focusId = null, onFo
                 </div>
               </div>
 
-              {execution.error && <p className="execution-error">{execution.error}</p>}
+              {/* A stopped run explains itself in the same place a failed one
+                  does, but not in the same colour: red here would read as a
+                  break, and nothing broke. */}
+              {execution.error && (
+                <p className={`execution-error ${execution.status === 'cancelled' ? 'is-note' : ''}`}>
+                  {execution.error}
+                </p>
+              )}
 
               {/* An execution with no scenario rows is not a normal empty list
                   — it means the run never got as far as recording one, and the

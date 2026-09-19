@@ -4393,6 +4393,12 @@ a.scan-row-url {
   font-size: 12px;
 }
 
+/* Same banner, stated rather than alarmed — it matches the Stopped chip. */
+.execution-error.is-note {
+  background: rgba(205, 155, 70, 0.12);
+  color: #d2a259;
+}
+
 .scenario-results { list-style: none; margin: 4px 0 0; padding: 0; }
 
 .scenario-result {
@@ -4433,6 +4439,8 @@ a.scan-row-url {
 .verdict-fail    { background: rgba(214, 69, 69, 0.16); color: #e06a6a; }
 .verdict-running { background: rgba(79, 127, 208, 0.16); color: #6f9ee0; }
 .verdict-other   { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+/* Amber, not red: a run someone stopped is not a broken build. */
+.verdict-cancelled { background: rgba(205, 155, 70, 0.16); color: #d2a259; }
 
 /* --- pass rate by priority ------------------------------------------------ */
 

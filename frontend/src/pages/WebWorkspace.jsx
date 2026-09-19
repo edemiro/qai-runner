@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Globe, Loader2, Maximize2, Minimize2,
-  PanelRightClose, PanelRightOpen, Radio, RefreshCw, RotateCcw, Wrench, X,
+  PanelRightClose, PanelRightOpen, Radio, RefreshCw, RotateCcw, Square, Wrench, X,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -524,6 +524,13 @@ export function WebWorkspace({
             {watch.onOpenExecution && (
               <button className="btn btn-ghost btn-sm" onClick={watch.onOpenExecution}>
                 Open execution
+              </button>
+            )}
+            {/* Two different stops, so both say which one they are: one ends
+                the run, the other only leaves this view. */}
+            {watch.onStop && !watch.finished && (
+              <button className="btn btn-danger btn-sm" onClick={watch.onStop}>
+                <Square size={13} /> Stop run
               </button>
             )}
             <button className="btn btn-ghost btn-sm" onClick={watch.onExit}>
