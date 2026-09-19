@@ -5192,15 +5192,22 @@ textarea,
   gap: 2px;
 }
 
+/* The action and its expected result are one step, stacked — wrapping them
+   side by side put the expected result on its own line at the same indent as
+   the next action, so it read as another numbered step. */
 .case-steps li {
   counter-increment: qai-step;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 1px 6px;
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-tertiary);
+  padding: 3px 0;
 }
+
+.case-steps li + li { border-top: 1px solid var(--border-subtle); }
+.case-step-action { grid-column: 2; color: var(--text-secondary); }
 
 .case-steps li::before {
   content: counter(qai-step) '.';
@@ -5210,13 +5217,31 @@ textarea,
   opacity: 0.7;
 }
 
-.case-step-expected { color: var(--accent); opacity: 0.85; }
-
-.steps-pill {
-  background: var(--accent-soft);
+/* Marked with an arrow rather than a number: it is what the step must prove,
+   not another thing to do. */
+.case-step-expected {
+  grid-column: 2;
   color: var(--accent);
-  border: 1px solid var(--accent-border);
+  opacity: 0.85;
 }
+
+.case-step-expected::before { content: '→ '; }
+
+/* Opens a scenario's steps. Quiet until wanted. */
+.case-steps-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.case-steps-toggle:hover { color: var(--accent); }
 
 /* --- the scenario, judged step by step ---------------------------------- */
 

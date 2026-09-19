@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
+  ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
@@ -126,6 +127,17 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
 
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState([]);
+  // Which scenarios have their steps open. Collapsed by default so the set
+  // reads as a list of scenarios rather than a wall of steps.
+  const [openSteps, setOpenSteps] = useState(() => new Set());
+
+  const toggleSteps = (caseId) => {
+    setOpenSteps((current) => {
+      const next = new Set(current);
+      if (next.has(caseId)) next.delete(caseId); else next.add(caseId);
+      return next;
+    });
+  };
 
   const counts = {
     all: suites.length,
@@ -738,28 +750,42 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
                       <div className="case-main">
                         <span className="case-name">{item.name}</span>
                         <span className="case-goal">{item.goal}</span>
-                        {/* Steps change how the scenario is judged, not just
-                            how it reads, so the list says which scenarios have
-                            them rather than making you open each one. */}
+                        {/* Steps are opened per scenario rather than printed
+                            under every one: ten scenarios at ten steps each
+                            filled the page and left the set impossible to
+                            scan. The count stays visible; the detail is a
+                            click away. */}
                         {item.steps?.length > 0 && (
-                          <ol className="case-steps">
-                            {item.steps.map((step, i) => (
-                              <li key={i}>
-                                <span className="case-step-action">{step.action}</span>
-                                {step.expected && (
-                                  <span className="case-step-expected">→ {step.expected}</span>
-                                )}
-                              </li>
-                            ))}
-                          </ol>
+                          <>
+                            <button
+                              type="button"
+                              className="case-steps-toggle"
+                              onClick={() => toggleSteps(item.id)}
+                              aria-expanded={openSteps.has(item.id)}
+                            >
+                              {openSteps.has(item.id)
+                                ? <ChevronDown size={12} />
+                                : <ChevronRight size={12} />}
+                              {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
+                            </button>
+                            {openSteps.has(item.id) && (
+                              <ol className="case-steps">
+                                {item.steps.map((step, i) => (
+                                  <li key={i}>
+                                    <span className="case-step-action">{step.action}</span>
+                                    {step.expected && (
+                                      <span className="case-step-expected">{step.expected}</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </>
                         )}
                       </div>
                       <div className="case-meta">
-                        {item.steps?.length > 0 && (
-                          <span className="pill steps-pill" title="Run and reported step by step">
-                            {item.steps.length} steps
-                          </span>
-                        )}
+                        {/* The step count lives on the toggle now, so it is not
+                            repeated here. */}
                         {item.priority && (
                           <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
                             {item.priority}

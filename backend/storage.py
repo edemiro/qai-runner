@@ -609,6 +609,25 @@ def delete_run(run_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def delete_suite_run(suite_run_id: str) -> bool:
+    """Remove an execution and the runs recorded under it.
+
+    The runs go with it: a run's report is read through the execution it
+    belongs to, so leaving them behind would orphan rows nothing can reach.
+    """
+    with _connect() as conn:
+        run_ids = [
+            row["id"] for row in
+            conn.execute("SELECT id FROM runs WHERE suite_run_id = ?", (suite_run_id,))
+        ]
+        for run_id in run_ids:
+            conn.execute("DELETE FROM steps WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM runs WHERE suite_run_id = ?", (suite_run_id,))
+        conn.execute("DELETE FROM suite_run_sources WHERE suite_run_id = ?", (suite_run_id,))
+        cursor = conn.execute("DELETE FROM suite_runs WHERE id = ?", (suite_run_id,))
+        return cursor.rowcount > 0
+
+
 def rename_run(run_id: str, title: str) -> bool:
     with _connect() as conn:
         cursor = conn.execute("UPDATE runs SET title = ? WHERE id = ?", (title[:120], run_id))

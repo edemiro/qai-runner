@@ -270,6 +270,8 @@ export const api = {
   suiteRuns: (suiteId = null, limit = 50) =>
     request(`/api/suite-runs?limit=${limit}${suiteId ? `&suite_id=${suiteId}` : ''}`),
   suiteRun: (suiteRunId) => request(`/api/suite-runs/${suiteRunId}`),
+  deleteSuiteRun: (suiteRunId) =>
+    request(`/api/suite-runs/${suiteRunId}`, { method: 'DELETE' }),
 
   // Reports and artifacts are files, so they are linked rather than fetched.
   suiteReportUrl: (suiteRunId, format) =>

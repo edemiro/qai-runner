@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, XCircle,
+  CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Trash2, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
@@ -94,6 +94,18 @@ export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) 
     return () => { cancelled = true; };
   }, [load]);
 
+  const removeExecution = async (id) => {
+    try {
+      await api.deleteSuiteRun(id);
+      setSelectedId((current) => (current === id ? null : current));
+      setExecution((current) => (current?.id === id ? null : current));
+      await load();
+      toast.success('Execution deleted.');
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
   // A running execution is watched, not refreshed by hand: poll while it is
   // still going and stop the moment it settles.
   const isRunning = execution?.status === 'running';
@@ -174,6 +186,10 @@ export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) 
                         {whenShort(item.started_at)}
                       </span>
                     </div>
+                    {/* Status, not just a score: a failed execution that never
+                        got a scenario off the ground reads 0/0, exactly like
+                        one that is still starting. */}
+                    <Verdict status={item.status} />
                     <span className={`score ${item.passed === item.total ? 'all-pass' : 'has-fail'}`}>
                       {item.passed}/{item.total}
                     </span>
@@ -246,6 +262,14 @@ export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) 
                   >
                     <Download size={14} /> JSON
                   </a>
+                  <button
+                    className="btn-icon danger"
+                    onClick={() => removeExecution(execution.id)}
+                    title="Delete this execution and its runs"
+                    aria-label="Delete this execution"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
 

@@ -1704,6 +1704,13 @@ async def get_suite_run(suite_run_id: str):
     return suite_run
 
 
+@app.delete("/api/suite-runs/{suite_run_id}")
+async def remove_suite_run(suite_run_id: str):
+    if not storage.delete_suite_run(suite_run_id):
+        raise HTTPException(status_code=404, detail="Execution not found.")
+    return {"deleted": True}
+
+
 @app.get("/api/suite-runs/{suite_run_id}/report")
 async def get_suite_report(suite_run_id: str, format: str = "junit"):
     """The CI-shaped report for a finished suite run."""
