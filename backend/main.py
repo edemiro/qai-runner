@@ -1358,6 +1358,12 @@ class SuiteRunBody(BaseModel):
     width: int = 1440
     height: int = 900
     failOnPageError: bool = True
+    # Which stack to run against, and which phone. The environment replaces the
+    # origin of every scenario's stored address, keeping its path; the device is
+    # a session the tester already opened in the Mobile workspace, so the app it
+    # is running — and the permissions it was granted — are the ones they chose.
+    envUrl: Optional[str] = None
+    deviceSessionId: Optional[str] = None
 
 
 @app.get("/api/suites")
@@ -1441,6 +1447,12 @@ class ExecutionBody(BaseModel):
     trace: bool = False
     recordVideo: bool = False
     failOnPageError: bool = True
+    # Which stack to run against, and which phone. The environment replaces the
+    # origin of every scenario's stored address, keeping its path; the device is
+    # a session the tester already opened in the Mobile workspace, so the app it
+    # is running — and the permissions it was granted — are the ones they chose.
+    envUrl: Optional[str] = None
+    deviceSessionId: Optional[str] = None
 
 
 # Executions started server-side. Held only so a running task is not collected
@@ -1470,6 +1482,8 @@ def _execution_stream(body: ExecutionBody):
         trace=body.trace,
         record_video=body.recordVideo,
         fail_on_page_error=body.failOnPageError,
+        env_url=body.envUrl,
+        device_session_id=body.deviceSessionId,
     )
 
 
@@ -1690,6 +1704,8 @@ def _suite_run_stream(suite_id: str, body: SuiteRunBody):
         width=body.width,
         height=body.height,
         fail_on_page_error=body.failOnPageError,
+        env_url=body.envUrl,
+        device_session_id=body.deviceSessionId,
     )
 
 

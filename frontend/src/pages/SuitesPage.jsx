@@ -21,6 +21,7 @@ import { ScenarioGenerator } from '../components/ScenarioGenerator';
 const MOVE_NEW = '__new__';
 import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
+import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
 import { useToast } from '../hooks/useToast';
 
 const EMPTY_CASE = { name: '', goal: '', url: '', tags: '', dataset: '', steps: [] };
@@ -85,7 +86,13 @@ function PriorityStrip({ cases }) {
   );
 }
 
-export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
+export function SuitesPage({
+  onRunHere, onOpenExecution, onWatchExecution,
+  // The phones already connected, and the way to connect another. A mobile
+  // execution runs on a session the tester opened, so the build on it — and
+  // the permissions it was granted — are the ones they picked.
+  sessions = [], onConnectDevice = null,
+}) {
   const toast = useToast();
 
   const [suites, setSuites] = useState([]);
@@ -115,6 +122,15 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
   const [moveNewModule, setMoveNewModule] = useState('');
   const [moving, setMoving] = useState(false);
   const [executionName, setExecutionName] = useState('');
+
+  // Where the run points. For web that is an environment whose origin replaces
+  // each scenario's own; for mobile it is a device and the build to open on it.
+  const [envUrl, setEnvUrl] = useState(DEFAULT_ENV_URL);
+  const [deviceUdid, setDeviceUdid] = useState('');
+  const [deviceAppId, setDeviceAppId] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const [devices, setDevices] = useState([]);
+  const [deviceBuilds, setDeviceBuilds] = useState([]);
 
   const [options, setOptions] = useState({
     workers: 2,
@@ -374,6 +390,86 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
    *  — not in the workspace session — so Test Executions, not the Web or Mobile
    *  screen, is where the run is actually visible.
    */
+  /* What to send as the run's target. For a mobile set this may have to open a
+     session first: the tester picks a phone and a build, and the execution runs
+     on a session — opening it through the same path the Mobile workspace uses
+     means the permission prompts are answered and the app is in front before
+     the first scenario starts. Returns null when the run must not go ahead. */
+  const resolveTarget = async (kind) => {
+    if (kind !== 'mobile') return { envUrl: envUrl || null };
+
+    const open = sessions.find((item) => item.device?.udid === deviceUdid);
+    if (open && (!deviceAppId || open.device?.appId === deviceAppId)) {
+      return { deviceSessionId: open.sessionId };
+    }
+    if (!deviceUdid) {
+      toast.warning('Pick the device this execution should run on.');
+      return null;
+    }
+    if (!onConnectDevice) {
+      toast.warning('Connect the device in the Mobile workspace first.');
+      return null;
+    }
+    setConnecting(true);
+    try {
+      const device = open?.device || devices.find((d) => d.udid === deviceUdid);
+      if (!device) {
+        toast.error('That device is no longer listed. Rescan in the Mobile workspace.');
+        return null;
+      }
+      const session = await onConnectDevice(device, deviceAppId || null);
+      if (!session) return null;
+      return { deviceSessionId: session.sessionId };
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  /* Only for a mobile set, and only once one is open: the cloud catalogue is
+     hundreds of devices and there is no reason to fetch it for someone running
+     a web suite. */
+  const isMobileSet = (suite?.kind || 'web') === 'mobile';
+
+  useEffect(() => {
+    if (!isMobileSet) return undefined;
+    let cancelled = false;
+    (async () => {
+      const found = [];
+      for (const load of [api.devices, api.browserstackDevices]) {
+        try {
+          const data = await load();
+          found.push(...(data.devices || []));
+        } catch {
+          /* one source being unavailable must not hide the other */
+        }
+      }
+      if (!cancelled) setDevices(found);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isMobileSet]);
+
+  // The builds on the chosen phone, matched to ThyDev / ThyTest / ThyReg by the
+  // backend — the same list the Mobile workspace offers.
+  useEffect(() => {
+    if (!isMobileSet || !deviceUdid) return undefined;
+    const device = devices.find((d) => d.udid === deviceUdid);
+    if (!device) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.deviceApps(device.udid, device.platform);
+        if (!cancelled) setDeviceBuilds(data.environments || []);
+      } catch {
+        if (!cancelled) setDeviceBuilds([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isMobileSet, deviceUdid, devices]);
+
   const runPicked = async () => {
     if (!picked.size || running) return;
     if (!executionName.trim()) {
@@ -382,6 +478,8 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
     }
     setRunning(true);
     try {
+      const target = await resolveTarget(suite?.kind || 'web');
+      if (!target) return;
       const { suiteRunId } = await api.startExecution({
         caseIds: [...picked.keys()],
         name: executionName.trim(),
@@ -390,6 +488,7 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
         trace: options.trace,
         recordVideo: options.recordVideo,
         failOnPageError: options.failOnPageError,
+        ...target,
       });
       toast.success(`“${executionName.trim()}” started.`);
       setPicked(new Map());
@@ -411,6 +510,8 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
     if (!suite || running) return;
     setRunning(true);
     try {
+      const target = await resolveTarget(suite?.kind || 'web');
+      if (!target) return;
       const { suiteRunId } = await api.startSuiteRun(suite.id, {
         workers: Number(options.workers) || 1,
         tags: parseTags(options.tags).length ? parseTags(options.tags) : null,
@@ -418,6 +519,7 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
         trace: options.trace,
         recordVideo: options.recordVideo,
         failOnPageError: options.failOnPageError,
+        ...target,
       });
       toast.success(`“${suite.name}” started.`);
       if (onWatchExecution) onWatchExecution(suiteRunId, suite?.kind || 'web');
@@ -608,7 +710,7 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={runPicked}
-                    disabled={running || !executionName.trim()}
+                    disabled={running || connecting || !executionName.trim()}
                     title={executionName.trim() ? undefined : 'Name the execution first'}
                   >
                     <Play size={14} /> Run execution
@@ -886,6 +988,87 @@ export function SuitesPage({ onRunHere, onOpenExecution, onWatchExecution }) {
                   >
                     <Play size={14} /> Run suite
                   </button>
+                )}
+              </div>
+
+              {/* Where this run points. A set carries the address each scenario
+                  was written against and whatever phone happened to be plugged
+                  in; neither is a choice anyone made at the moment they pressed
+                  Run, which is when it matters. */}
+              <div className="run-target">
+                {isMobileSet ? (
+                  <>
+                    <label>
+                      Device
+                      <select
+                        value={deviceUdid}
+                        onChange={(e) => {
+                          setDeviceUdid(e.target.value);
+                          setDeviceAppId('');
+                          setDeviceBuilds([]);
+                        }}
+                      >
+                        <option value="">
+                          {devices.length ? 'Pick a device' : 'No device found'}
+                        </option>
+                        {sessions.length > 0 && (
+                          <optgroup label="Already connected">
+                            {sessions.map((item) => (
+                              <option key={item.sessionId} value={item.device.udid}>
+                                {item.device.name} · {item.device.platform}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {devices.filter((d) => !sessions.some((s2) => s2.device?.udid === d.udid)).length > 0 && (
+                          <optgroup label="Available">
+                            {devices
+                              .filter((d) => !sessions.some((s2) => s2.device?.udid === d.udid))
+                              .map((d) => (
+                                <option key={d.udid} value={d.udid}>
+                                  {d.name} · {d.platform}{d.source === 'browserstack' ? ' · cloud' : ''}
+                                </option>
+                              ))}
+                          </optgroup>
+                        )}
+                      </select>
+                    </label>
+                    <label>
+                      Build
+                      <select
+                        value={deviceAppId}
+                        onChange={(e) => setDeviceAppId(e.target.value)}
+                        disabled={!deviceUdid}
+                      >
+                        <option value="">
+                          {deviceUdid
+                            ? (deviceBuilds.length ? 'Whatever is open' : 'No TK build on this device')
+                            : 'Pick a device first'}
+                        </option>
+                        {deviceBuilds.map((build) => (
+                          <option key={build.id || build.name} value={build.id}>
+                            {build.label || build.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <label className="run-target-env">
+                    Environment
+                    <select value={envUrl} onChange={(e) => setEnvUrl(e.target.value)}>
+                      <option value="">Each scenario's own address</option>
+                      {ENV_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.items.map((item) => (
+                            <option key={item.name} value={item.url} title={item.url}>
+                              {item.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </label>
                 )}
               </div>
 

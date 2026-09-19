@@ -77,6 +77,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         tags=tags or None,
         headless=not args.headed,
         base_url=args.base_url,
+        env_url=args.env,
         auth_profile=args.auth,
         record_video=args.video,
         trace=args.trace,
@@ -233,6 +234,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--workers", type=int, default=1, help="How many cases to run at once.")
     run.add_argument("--headed", action="store_true", help="Show the browser (default: headless).")
     run.add_argument("--base-url", help="URL for cases that do not carry their own.")
+    run.add_argument(
+        "--env",
+        help=(
+            "Run against this environment: its origin replaces each case's own, "
+            "keeping the path. e.g. https://nsit.turkishairlines.com/"
+        ),
+    )
     run.add_argument("--auth", help="Saved sign-in profile to start every case from.")
     run.add_argument("--video", action="store_true", help="Record a video per case.")
     run.add_argument("--trace", action="store_true", help="Record a Playwright trace per case.")

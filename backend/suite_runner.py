@@ -18,6 +18,7 @@ import shutil
 import time
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from urllib.parse import urljoin, urlparse, urlunparse
 from uuid import uuid4
 
 import agent
@@ -67,6 +68,41 @@ def expand_cases(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "label": f"{case['name']} [{hint or index}]",
             })
     return executions
+
+
+def apply_environment(url: Optional[str], env_url: Optional[str]) -> Optional[str]:
+    """Point a case at the chosen environment, keeping the path it carries.
+
+    A scenario stores the address it was written against, and the same scenario
+    has to be runnable on test, preprod and prod without editing forty of them.
+    The environment replaces the origin and nothing else: `/tr-tr/flights` on
+    nuat becomes `/tr-tr/flights` on whichever stack was picked.
+
+    Anything it cannot parse it leaves alone, so a case with an odd address
+    fails exactly as loudly as it does today rather than quietly running
+    somewhere else.
+    """
+    if not env_url:
+        return url
+    if not url:
+        return env_url
+    chosen = urlparse(env_url)
+    if not chosen.scheme or not chosen.netloc:
+        return url
+    if url.startswith("/"):
+        # Stored as a path rather than a full address.
+        return urljoin(env_url, url)
+    current = urlparse(url)
+    if not current.scheme:
+        # "nuat.turkishairlines.com/tr-tr" parses as all-path, so the host has
+        # to be rescued before the origin can be swapped for it.
+        current = urlparse("https://" + url)
+    if not current.netloc:
+        return url
+    return urlunparse((
+        chosen.scheme, chosen.netloc, current.path,
+        current.params, current.query, current.fragment,
+    ))
 
 
 def _event(kind: str, **payload) -> str:
@@ -192,7 +228,10 @@ async def _execute_one(
     label = execution["label"]
 
     goal = substitute(case["goal"], row) or case["goal"]
-    url = substitute(case.get("url") or options.get("base_url"), row)
+    url = apply_environment(
+        substitute(case.get("url") or options.get("base_url"), row),
+        options.get("env_url"),
+    )
 
     run_id: Optional[str] = None
     target: Optional[WebTarget] = None
@@ -565,7 +604,25 @@ async def run_suite(
     is_mobile = (suite.get("kind") or "web") == "mobile"
     device = None
     if is_mobile:
-        device = _connected_device()
+        # The tester can name the phone when they start the run. It has to be
+        # one they already opened, so the app on it and the permissions it was
+        # granted are the ones they picked — opening a second session against
+        # the same device collides on WebDriverAgent's port.
+        chosen = options.get("device_session_id")
+        if chosen:
+            candidate = drivers.get(chosen)
+            if candidate is None or getattr(candidate, "kind", None) != "mobile":
+                yield _event(
+                    "error",
+                    message=(
+                        "Seçilen cihaz oturumu artık açık değil. Mobile ekranından "
+                        "cihazı yeniden bağlayıp tekrar koşturun."
+                    ),
+                )
+                return
+            device = candidate
+        else:
+            device = _connected_device()
         if device is None:
             yield _event(
                 "error",

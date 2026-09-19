@@ -64,6 +64,13 @@ export default function App() {
   // outside React, which is where it should be read.
   const [watchSeen, setWatchSeen] = useState(false);
 
+  // Read by connectDevice, which must see the current sessions without taking
+  // them as a dependency — that would rebuild the callback on every change.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
   const activeSession = useMemo(
     () => sessions.find((session) => session.sessionId === activeSessionId) || null,
     [sessions, activeSessionId],
@@ -252,8 +259,22 @@ export default function App() {
   }, [activeTab, agentSubTab, activeSessionId, tree, toast]);
 
   // --------------------------------------------------------------- sessions -
+  /* Returns the new session, or null. Callers that need to run something on the
+     phone they just connected — starting an execution against a chosen build —
+     have no other way to learn its id. */
   const connectDevice = useCallback(
     async (device, appId) => {
+      // A session already open on this phone has to be closed, not just
+      // dropped from the list: two Appium sessions against one device collide
+      // on WebDriverAgent's port, and the orphan holds it.
+      const previous = sessionsRef.current.find((s) => s.device.udid === device.udid);
+      if (previous) {
+        try {
+          await api.deleteSession(previous.sessionId);
+        } catch {
+          /* already gone on the backend, which is the outcome we wanted */
+        }
+      }
       try {
         const data = await api.createSession(device, appId);
         const session = { sessionId: data.sessionId, device: data.device };
@@ -262,8 +283,10 @@ export default function App() {
         setTree(null);
         setSelectedElement(null);
         toast.success(`Connected to ${device.name}.`);
+        return session;
       } catch (err) {
         toast.error(err.message);
+        return null;
       }
     },
     [toast],
@@ -540,6 +563,8 @@ export default function App() {
           onRunHere={runCaseHere}
           onOpenExecution={openExecution}
           onWatchExecution={watchExecution}
+          sessions={mobileSessions}
+          onConnectDevice={connectDevice}
         />
       );
     }

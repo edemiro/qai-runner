@@ -5828,3 +5828,46 @@ textarea,
 /* Nothing here is clickable, and saying so is better than a dead cursor. */
 .browser-viewport.watching { cursor: default; }
 .browser-viewport.watching .browser-image { pointer-events: none; user-select: none; }
+
+/* Where a run points — the environment for a web set, the phone and the build
+   for a mobile one. Its own row above the options, because it is a decision
+   about the run rather than a setting of it. */
+.run-target {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-3, 12px);
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.run-target > label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 220px;
+  flex: 1 1 220px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.run-target select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.run-target select:focus { outline: none; border-color: var(--accent); }
+.run-target select:disabled { opacity: 0.55; }
