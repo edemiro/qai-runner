@@ -70,6 +70,31 @@ export function InsightsPage() {
     [trend],
   );
 
+  /* Spend is the one figure here with a ceiling, so it is worth drawing rather
+     than listing. The gateway sends its own labels and formatting, which are
+     shown verbatim — this only reads the two numbers back out to size the bar,
+     and shows nothing if they do not parse. */
+  const spend = useMemo(() => {
+    if (!budget?.available) return null;
+    const find = (label) => budget.items.find(
+      (item) => item.label.toLowerCase() === label,
+    )?.value;
+    const num = (value) => {
+      const parsed = parseFloat(String(value ?? '').replace(/[^0-9.]/g, ''));
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const used = num(find('spend'));
+    const limit = num(find('budget'));
+    if (used == null || limit == null || limit <= 0) return null;
+    return {
+      used, limit,
+      share: Math.min(1, used / limit),
+      usedLabel: find('spend'),
+      limitLabel: find('budget'),
+      period: find('period'),
+    };
+  }, [budget]);
+
   return (
     <main className="page">
       <header className="page-header">
@@ -94,26 +119,39 @@ export function InsightsPage() {
         <p className="muted">Loading…</p>
       ) : (
         <>
+          {/* Each figure carries what it is out of. A pass rate with no
+              denominator reads the same at 3 runs as at 300, and the two mean
+              very different things. */}
           <div className="stat-row">
             <div className="stat-card">
               <span className="stat-label">Runs</span>
               <span className="stat-value">{totals.total}</span>
+              <span className="stat-note">
+                over {days} day{days === 1 ? '' : 's'}
+              </span>
             </div>
             <div className="stat-card">
               <span className="stat-label">Pass rate</span>
               <span className={`stat-value ${totals.rate != null && totals.rate < 0.8 ? 'bad' : 'ok'}`}>
                 {totals.rate == null ? '—' : `${Math.round(totals.rate * 100)}%`}
               </span>
+              <span className="stat-note">
+                {totals.total ? `${totals.passed} of ${totals.total} passed` : 'nothing run yet'}
+              </span>
             </div>
             <div className="stat-card">
               <span className="stat-label">Failed</span>
-              <span className="stat-value">{totals.failed}</span>
+              <span className={`stat-value ${totals.failed ? 'bad' : ''}`}>{totals.failed}</span>
+              <span className="stat-note">
+                {totals.failed ? 'needs a look' : 'nothing outstanding'}
+              </span>
             </div>
             <div className="stat-card">
               <span className="stat-label">Avg duration</span>
               <span className="stat-value">
                 {totals.avgMs == null ? '—' : `${(totals.avgMs / 1000).toFixed(1)}s`}
               </span>
+              <span className="stat-note">per scenario</span>
             </div>
           </div>
 
@@ -133,7 +171,28 @@ export function InsightsPage() {
             {/* Straight from the gateway, which is the only place the figure
                 exists — the key is the gateway's, not Anthropic's. Its own
                 labels are shown verbatim rather than reworded here. */}
-            {budget?.available && (
+            {spend ? (
+              <div className="spend-meter">
+                <div className="spend-head">
+                  <span className="stat-label">Spend this period</span>
+                  <span className="spend-figures">
+                    <strong>{spend.usedLabel}</strong>
+                    <span className="muted"> of {spend.limitLabel}</span>
+                    {spend.period && <span className="muted"> · {spend.period}</span>}
+                  </span>
+                </div>
+                <div
+                  className="spend-bar"
+                  role="img"
+                  aria-label={`${spend.usedLabel} of ${spend.limitLabel} spent`}
+                >
+                  <div
+                    className={`spend-bar-fill ${spend.share > 0.85 ? 'hot' : ''}`}
+                    style={{ width: `${spend.share * 100}%` }}
+                  />
+                </div>
+              </div>
+            ) : budget?.available ? (
               <ul className="budget-row">
                 {budget.items.map((item) => (
                   <li key={item.label}>
@@ -142,7 +201,7 @@ export function InsightsPage() {
                   </li>
                 ))}
               </ul>
-            )}
+            ) : null}
 
             {!usage || !usage.calls ? (
               <p className="muted small">
@@ -176,11 +235,17 @@ export function InsightsPage() {
             )}
           </section>
 
+          {/* Two narrow charts side by side rather than a full-width row each:
+              on a desktop that read as a column of mostly empty boxes. */}
+          <div className="insights-grid">
           <section className="card">
             <div className="card-head">
               <h2 className="card-title">
                 <TrendingUp size={16} /> Pass / fail per day
               </h2>
+              <span className="muted small">
+                {totals.total ? `${totals.total} scenario${totals.total === 1 ? '' : 's'}` : ''}
+              </span>
             </div>
 
             {trend.length === 0 ? (
@@ -256,6 +321,7 @@ export function InsightsPage() {
               </ul>
             )}
           </section>
+          </div>
 
           <section className="card">
             <div className="card-head stacked">

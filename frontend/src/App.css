@@ -512,6 +512,19 @@
   gap: 20px;
 }
 
+/* A page is a scrolling column, so its blocks keep their own height and the
+   page scrolls past them. Without this they are flex children that shrink to
+   fit the viewport, and `.card`'s overflow:hidden then cuts the content off
+   mid-row — a token breakdown with its numbers sliced in half, a priority
+   table missing its last band, and no scrollbar to say anything was there.
+   Scoped to blocks rather than every child: a viewer pane is meant to flex. */
+.page > .card,
+.page > .stat-row,
+.page > section,
+.page > .suites-layout {
+  flex-shrink: 0;
+}
+
 .page-flush {
   overflow: hidden;
   padding-bottom: 0;
@@ -5871,3 +5884,68 @@ textarea,
 
 .run-target select:focus { outline: none; border-color: var(--accent); }
 .run-target select:disabled { opacity: 0.55; }
+
+/* --- insights: a report page ---------------------------------------------- */
+
+/* Trend and priority are both short. Side by side they fill the width and read
+   as one picture of the window; stacked they were two mostly-empty rows. */
+.insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+/* What a headline figure is out of. A pass rate with no denominator reads the
+   same at 3 runs as at 300. */
+.stat-card .stat-note {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+/* Spend is the one number here with a ceiling, so it is drawn rather than
+   listed. The gateway's own labels are shown verbatim; only the ratio is read
+   back out, and nothing is drawn if it cannot be. */
+.spend-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 14px;
+  padding: 12px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+}
+
+.spend-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.spend-figures { font-size: 13px; }
+.spend-figures strong { font-size: 16px; font-weight: 650; color: var(--text-primary); }
+
+.spend-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.spend-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+
+/* Near the ceiling it stops being information and starts being a warning. */
+.spend-bar-fill.hot { background: #d2a259; }
+
+/* A window with two busy days should not draw two hairlines across a wide
+   card: columns keep a readable width and the chart starts from the left. */
+.trend-chart { justify-content: flex-start; }
+.trend-col { min-width: 34px; max-width: 72px; flex: 1 1 34px; }

@@ -79,19 +79,34 @@ class WritingScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(outcome["ok"])
         self.assertIn("could not be read", outcome["message"])
 
-    async def test_a_missing_test_set_is_created_rather_than_refused(self):
-        with patch.object(authoring.storage, "list_suites", lambda: []), \
-             patch.object(authoring.storage, "create_suite", lambda **k: "new") as _c, \
-             patch.object(authoring.storage, "get_suite", lambda i: {"id": "new", "name": "Homepage"}), \
-             patch.object(authoring.storage, "add_case", lambda *a, **k: "case"), \
-             patch.object(authoring.scenario_writer, "generate", AsyncMock(return_value=WRITTEN)):
+    async def test_nothing_is_saved_until_a_reviewer_has_seen_it(self):
+        """Scenarios come back as a proposal, not as rows.
+
+        A set of scenarios that files itself gets copied by the next person,
+        mistakes included — so the tester ticks, edits and names them first,
+        and saving happens from that review.
+        """
+        saved = []
+        with patch.object(authoring.storage, "list_suites", lambda: []),              patch.object(authoring.storage, "create_suite",
+                          lambda **k: saved.append(("suite", k)) or "new"),              patch.object(authoring.storage, "add_case",
+                          lambda *a, **k: saved.append(("case", k)) or "case"),              patch.object(authoring.scenario_writer, "generate", AsyncMock(return_value=WRITTEN)):
             outcome = await authoring.write_scenarios(
                 name="Homepage", tree=TREE, screenshot=None, kind="mobile",
             )
         self.assertTrue(outcome["ok"])
-        self.assertEqual(outcome["written"], 1)
-        self.assertIn("new Test Set", outcome["message"])
+        self.assertTrue(outcome["proposed"])
+        self.assertEqual(len(outcome["scenarios"]), 1)
+        self.assertEqual(saved, [], "write_scenarios must not touch storage")
 
+    async def test_a_name_that_matches_no_set_is_suggested_not_refused(self):
+        """Naming a set that does not exist yet is the normal way to start one."""
+        with patch.object(authoring.storage, "list_suites", lambda: []),              patch.object(authoring.scenario_writer, "generate", AsyncMock(return_value=WRITTEN)):
+            outcome = await authoring.write_scenarios(
+                name="Homepage", tree=TREE, screenshot=None, kind="mobile",
+            )
+        self.assertTrue(outcome["ok"])
+        self.assertEqual(outcome["suggestedName"], "Homepage")
+        self.assertEqual(outcome["kind"], "mobile")
     async def test_questions_come_back_instead_of_invented_scenarios(self):
         asked = {"scenarios": [], "rejected": [], "questions": ["Hangi rota?"]}
         with patch.object(authoring.storage, "list_suites", lambda: [{"id": "a", "name": "X"}]), \
@@ -103,18 +118,17 @@ class WritingScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(outcome["ok"])
         self.assertEqual(outcome["questions"], ["Hangi rota?"])
 
-    async def test_every_scenario_is_saved_with_its_priority_and_layer(self):
-        saved = []
-        with patch.object(authoring.storage, "list_suites", lambda: [{"id": "a", "name": "X"}]), \
-             patch.object(authoring.storage, "get_suite", lambda i: {"id": "a", "name": "X"}), \
-             patch.object(authoring.storage, "add_case",
-                          lambda *a, **k: saved.append(k) or "case"), \
-             patch.object(authoring.scenario_writer, "generate", AsyncMock(return_value=WRITTEN)):
-            await authoring.write_scenarios(name="X", tree=TREE, screenshot=None, kind="web")
-        self.assertEqual(saved[0]["priority"], "Critical")
-        self.assertEqual(saved[0]["layer"], "E2E")
-
-
+    async def test_every_scenario_carries_its_priority_and_layer_into_review(self):
+        """What a failure would cost, and which layer it is written at, are the
+        two things the standard asks every scenario to carry. They have to
+        survive as far as the reviewer, or they are lost before anyone can
+        correct them."""
+        with patch.object(authoring.storage, "list_suites", lambda: [{"id": "a", "name": "X"}]),              patch.object(authoring.scenario_writer, "generate", AsyncMock(return_value=WRITTEN)):
+            outcome = await authoring.write_scenarios(
+                name="X", tree=TREE, screenshot=None, kind="web",
+            )
+        self.assertEqual(outcome["scenarios"][0]["priority"], "Critical")
+        self.assertEqual(outcome["scenarios"][0]["layer"], "E2E")
 class RunningATestSet(unittest.IsolatedAsyncioTestCase):
     async def test_an_unknown_name_lists_what_does_exist(self):
         with patch.object(authoring.storage, "list_suites",
