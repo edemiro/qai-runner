@@ -468,6 +468,33 @@ class WebSnapshot:
                     return True
         return needle_norm in self._running_text()
 
+    def locate_text(self, needle: str) -> Optional["WebElement"]:
+        """Which element a text assertion landed on, for drawing a box on it.
+
+        Best-effort and deliberately separate from `contains_text`: the
+        assertion's verdict must not depend on whether a box can be drawn, so
+        this may return None for a phrase that genuinely is on screen.
+
+        When the phrase spans siblings — the case `contains_text` exists for —
+        there is no single element to point at, so it points at the first one
+        that contributes to the phrase. That is where a reader's eye lands.
+        """
+        needle_norm = " ".join(needle.split()).lower()
+        if not needle_norm:
+            return None
+        for element in self._flat:
+            for value in (element.text, element.name):
+                if value and needle_norm in " ".join(value.split()).lower():
+                    return element
+        if needle_norm not in self._running_text():
+            return None
+        for element in self._flat:
+            for value in (element.text, element.name):
+                piece = " ".join((value or "").split()).lower()
+                if piece and piece in needle_norm:
+                    return element
+        return None
+
     def _running_text(self) -> str:
         """Every node's text as one whitespace-normalised, lowercased string.
 

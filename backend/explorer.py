@@ -475,7 +475,10 @@ async def _probe(
 
     blocking, noise = [], []
     for event in new_events:
-        if event.get("level") != "error":
+        # Someone else's server failing is not this control's fault, the same
+        # rule a run's verdict uses. Without it a Google Sign-In widget having
+        # a bad moment condemned whatever button happened to be clicked next.
+        if event.get("level") != "error" or event.get("thirdParty"):
             noise.append(event)
         elif signature(event) in baseline:
             # The page was already raising this before anything was clicked, so

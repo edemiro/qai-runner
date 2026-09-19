@@ -183,23 +183,35 @@ def _append_event(sink: List[Dict[str, Any]], event: Dict[str, Any]) -> None:
         del sink[0 : len(sink) - MAX_PAGE_EVENTS]
 
 
-# Requests whose failure says something about the feature under test. A missing
-# font or a 404 on an analytics beacon is a fact about the page, but it is not
-# evidence that the button you just clicked is broken — and treating it as such
-# marks working controls as failures on any real site, which is exactly what
-# happened on the first real-world crawl.
-SIGNIFICANT_RESOURCES = {"document", "xhr", "fetch", "script"}
-
-
 def _network_level(resource_type: Optional[str], status: Optional[int]) -> str:
-    """`error` when the failure plausibly breaks the page, `warning` otherwise.
+    """`error` only for a failure that is unambiguously the application's.
 
-    Both are recorded either way; the level only decides whether a run's
-    verdict is allowed to turn on it.
+    Both levels are recorded either way; the level decides whether a run's
+    verdict is allowed to turn on the event, and warnings are shown to the
+    tester as notices instead.
+
+    The line is drawn at who is at fault and how certainly:
+
+      * 5xx — the server broke. Nothing else it could mean.
+      * a net-level failure of the document itself — the page never loaded.
+      * everything else, including every 4xx — a warning.
+
+    4xx used to be an error whenever it hit a document, xhr, fetch or script,
+    and that classification failed real runs constantly. A live airline site
+    answers 4xx all through a perfectly good booking: 404 on a bot-protection
+    script, 404 on a RUM beacon, 400 on a probe, 428 on an API that then
+    retries with the token it was being asked for, 410 on a challenge-loader
+    document. One measured run logged 34 such events while every one of its
+    steps passed and the flights were actually booked. A 4xx is the server
+    answering deliberately; whether that answer mattered to the feature is
+    what the scenario's own assertions are for.
     """
-    if resource_type in SIGNIFICANT_RESOURCES:
-        return "error"
-    return "warning"
+    if status is not None:
+        return "error" if status >= 500 else "warning"
+    # No status means the request never completed. That only decides a verdict
+    # when it was the page itself: a sub-resource that never arrived is the
+    # same class of fact as one that arrived as a 404.
+    return "error" if resource_type == "document" else "warning"
 
 
 def _is_third_party(page, url: Optional[str]) -> bool:
@@ -240,9 +252,16 @@ def attach_page_listeners(page, sink: List[Dict[str, Any]]) -> None:
         # widget, a TikTok pixel or an mPulse beacon complaining in someone
         # else's script counted against the run — which is the opposite of
         # what _is_third_party exists to prevent.
+        # Advisory, never a verdict. Two thirds of what arrives here is the
+        # browser narrating a network event already recorded ("Failed to load
+        # resource: … 404"), counted a second time; the rest is the app's own
+        # console.error, which real code uses for things as harmless as
+        # "Provider's accounts list is empty." An uncaught exception — the one
+        # console signal that is unambiguous — does not come through here at
+        # all, it arrives as `pageerror` and stays an error.
         _append_event(sink, {
             "kind": "console",
-            "level": message.type,
+            "level": "warning",
             "text": message.text[:2000],
             "url": location.get("url"),
             "thirdParty": _is_third_party(page, location.get("url")),

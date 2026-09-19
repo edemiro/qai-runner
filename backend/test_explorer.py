@@ -325,19 +325,33 @@ def test_a_baseline_is_built_from_the_page_load():
     assert explorer.signature(_console("C")) not in baseline
 
 
-def test_a_network_failure_on_a_document_is_significant():
+def test_a_server_error_is_significant_whatever_asked_for_it():
+    """5xx is the one answer that can only mean the server broke."""
     from drivers.web import _network_level
-    assert _network_level("document", 500) == "error"
-    assert _network_level("xhr", 404) == "error"
-    assert _network_level("fetch", 503) == "error"
+    for resource in ("document", "xhr", "fetch", "script", "image", "other"):
+        assert _network_level(resource, 500) == "error"
+        assert _network_level(resource, 503) == "error"
 
 
-def test_a_failed_image_or_beacon_is_only_a_notice():
-    """A 404 on a tracking pixel is a fact about the page, not evidence that
-    the button just clicked is broken."""
+def test_a_document_that_never_arrived_is_significant():
+    """No status at all means the request never completed. That decides a
+    verdict only when it was the page itself."""
     from drivers.web import _network_level
-    for resource in ("image", "font", "media", "stylesheet", "other"):
-        assert _network_level(resource, 404) == "warning"
+    assert _network_level("document", None) == "error"
+    for resource in ("xhr", "fetch", "script", "image"):
+        assert _network_level(resource, None) == "warning"
+
+
+def test_a_4xx_is_only_a_notice():
+    """A 4xx is the server answering deliberately, and a live site answers
+    plenty of them through a working flow: a 404 on a bot-protection script,
+    a 404 on a RUM beacon, a 428 on an API that then retries with the token it
+    was being asked for, a 410 on a challenge-loader document. Whether that
+    answer mattered to the feature is what the scenario's assertions are for."""
+    from drivers.web import _network_level
+    for resource in ("document", "xhr", "fetch", "script", "image", "font", "stylesheet"):
+        for status in (400, 401, 403, 404, 410, 428, 429):
+            assert _network_level(resource, status) == "warning"
 
 
 def test_describe_event_names_what_went_wrong():

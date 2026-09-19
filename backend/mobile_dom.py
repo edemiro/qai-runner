@@ -444,6 +444,31 @@ class MobileDOMManager:
                     parts.append(normalised)
         return needle_norm in " ".join(parts).lower()
 
+    def locate_text(self, needle: str):
+        """Which view a text assertion landed on, for drawing a box on it.
+
+        Best-effort, and deliberately separate from `contains_text`: the
+        assertion's verdict must not depend on whether a box can be drawn.
+        A phrase spanning two views points at the first one that contributes.
+        """
+        needle_norm = " ".join(needle.split()).lower()
+        if not needle_norm:
+            return None
+        visible = [
+            elem for elem in self.get_all_elements()
+            if elem.displayed and elem.visible
+        ]
+        for elem in visible:
+            for value in (elem.text, elem.name):
+                if value and needle_norm in " ".join(value.split()).lower():
+                    return elem
+        for elem in visible:
+            for value in (elem.text, elem.name):
+                piece = " ".join((value or "").split()).lower()
+                if piece and piece in needle_norm:
+                    return elem
+        return None
+
     def visible_text(self) -> List[str]:
         """All visible strings on screen, for assertion failure messages."""
         out = []

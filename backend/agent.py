@@ -391,6 +391,169 @@ def _shrink_for_mirror(screenshot: Optional[str]) -> Optional[str]:
     return _shrink_to(screenshot, _MIRROR_IMAGE_MAX_EDGE, fmt="jpeg")
 
 
+# A frame this uniform is a page mid-navigation — white, or the flat colour of
+# a splash. Steps used to store these, and a report full of blank rectangles is
+# worse than one with gaps: it looks like evidence and shows nothing.
+_BLANK_SPREAD = 10
+
+
+def _is_blank_frame(screenshot: Optional[str]) -> bool:
+    """Is this frame a single flat colour — a page that had not painted yet?
+
+    Judged on a thumbnail, so it costs about a millisecond: the question is
+    whether the whole frame is one tone, and that survives downsampling.
+    """
+    if not screenshot:
+        return True
+    try:
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(base64.b64decode(screenshot))).convert("L")
+        image.thumbnail((64, 64))
+        low, high = image.getextrema()
+        if (high - low) < _BLANK_SPREAD:
+            return True
+        # A loading page is not always perfectly uniform — a white field with a
+        # spinner in the middle has a full-range extrema and is still nothing
+        # worth storing. Judge it by how much of the frame is one shade.
+        pixels = image.width * image.height
+        return pixels > 0 and max(image.histogram()) >= 0.995 * pixels
+    except Exception:
+        # Unreadable is not the same as blank; keep the frame and let the
+        # tester see whatever it is.
+        return False
+
+
+def _element_info(element: Any) -> Optional[Dict[str, Any]]:
+    """A snapshot element in the shape a step record carries.
+
+    The drivers build this inline when they act on an element; an assertion
+    that only read the screen has no driver call to build it, so it is built
+    here. Without bounds there is nothing to draw and nothing worth storing.
+    """
+    bounds = getattr(element, "bounds", None) if element is not None else None
+    if not bounds:
+        return None
+    describe = getattr(element, "describe", None)
+    return {
+        "label": describe() if callable(describe) else None,
+        "text": getattr(element, "text", None),
+        "content-desc": getattr(element, "name", None),
+        "role": getattr(element, "role", None),
+        "bounds": bounds,
+    }
+
+
+def _step_frame(
+    kind: str,
+    result: Dict[str, Any],
+    before_shot: Optional[str],
+    after_shot: Optional[str],
+    snapshot: Optional[Snapshot],
+) -> Optional[str]:
+    """The frame stored with one step — or None when there is nothing worth storing.
+
+    Which frame depends on what the step did. An interaction is photographed
+    *before* it runs: a click that navigates leaves nothing of the thing it
+    clicked on screen, so a box drawn on the frame after it would point at a
+    page the element was never on. An assertion is photographed after, because
+    the screen it just verified is the evidence.
+
+    A frame that is one flat colour is dropped rather than stored. Those are
+    pages caught mid-navigation, and a report full of white rectangles looks
+    like evidence while showing nothing.
+    """
+    if kind == "wait":
+        # Nothing happened to see. The steps on either side already show it.
+        return None
+
+    frame = before_shot if before_shot is not None else after_shot
+    if _is_blank_frame(frame):
+        frame = after_shot if frame is before_shot else before_shot
+        if _is_blank_frame(frame):
+            return None
+
+    screen = None
+    if snapshot is not None:
+        screen = {"width": snapshot.screen_width, "height": snapshot.screen_height}
+    return _annotate_element(frame, result.get("element"), screen, ok=bool(result.get("ok")))
+
+
+def _annotate_element(
+    screenshot: Optional[str],
+    element: Optional[Dict[str, Any]],
+    screen: Optional[Dict[str, int]] = None,
+    ok: bool = True,
+) -> Optional[str]:
+    """Outline the element this step acted on, on the step's own frame.
+
+    A report that says `Clicked "button"` over a screenshot of a whole page
+    leaves the reader hunting for which button. The box is the answer, and it
+    is the same gesture for a click and for an assertion — green where the step
+    proved something, amber where it did not.
+
+    `screen` is the size the bounds were measured in. It is normally the frame's
+    own size, but a shrunk frame or a device pixel ratio makes them differ, so
+    the box is scaled rather than assumed to line up.
+    """
+    bounds = (element or {}).get("bounds") or {}
+    if not screenshot or not bounds:
+        return screenshot
+    try:
+        import io
+
+        from PIL import Image, ImageDraw
+
+        image = Image.open(io.BytesIO(base64.b64decode(screenshot))).convert("RGB")
+        measured_w = (screen or {}).get("width") or image.width
+        measured_h = (screen or {}).get("height") or image.height
+        scale_x = image.width / measured_w
+        scale_y = image.height / measured_h
+
+        x1 = int(bounds.get("x1", 0) * scale_x)
+        y1 = int(bounds.get("y1", 0) * scale_y)
+        x2 = x1 + int(bounds.get("width", 0) * scale_x)
+        y2 = y1 + int(bounds.get("height", 0) * scale_y)
+        if x2 <= x1 or y2 <= y1:
+            return screenshot
+
+        # The tree carries elements up to a viewport below the fold, so a
+        # target can be off-screen in this frame. Clamping one of those would
+        # draw a sliver along an edge and point at the wrong thing, so a box
+        # that is mostly outside is not drawn at all — the frame is still
+        # worth storing, just without a claim about where to look.
+        visible = (
+            max(0, min(x2, image.width) - max(x1, 0))
+            * max(0, min(y2, image.height) - max(y1, 0))
+        )
+        if visible < 0.5 * max(1, (x2 - x1) * (y2 - y1)):
+            return screenshot
+
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(image.width - 1, x2), min(image.height - 1, y2)
+        if x2 <= x1 or y2 <= y1:
+            return screenshot
+
+        colour = (34, 197, 94) if ok else (234, 179, 8)
+        draw = ImageDraw.Draw(image, "RGBA")
+        # A translucent wash so the box reads at a glance, then a hard edge so
+        # it stays legible over a busy page.
+        draw.rectangle([x1, y1, x2, y2], fill=colour + (48,))
+        for width, inset in ((4, 0), (2, -3)):
+            draw.rectangle(
+                [x1 - inset, y1 - inset, x2 + inset, y2 + inset],
+                outline=colour, width=width,
+            )
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=80)
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return screenshot
+
+
 # The live mirror's only source while a run is in progress. An agent run
 # already pulls a screenshot before and after every action; having the mirror
 # poll the device on its own timer on top of that just makes both slower, so it
@@ -610,7 +773,16 @@ async def _execute_action(
         if fresh is None:
             return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
         if fresh.contains_text(needle):
-            return {"ok": True, "message": f'Found "{needle}" on screen', "element": None}
+            # Carried back so the step's frame can box what was verified. The
+            # locate is best-effort — a phrase split across siblings has no one
+            # element — and a miss costs the box, never the verdict.
+            return {
+                "ok": True,
+                "message": f'Found "{needle}" on screen',
+                "element": _element_info(
+                    fresh.locate_text(needle) if hasattr(fresh, "locate_text") else None
+                ),
+            }
         visible = ", ".join(fresh.visible_text()[:12])
         return {
             "ok": False,
@@ -992,6 +1164,14 @@ async def run_agent(
                 value=action.get("value"), reason=reason,
             )
 
+            # An interaction is photographed before it runs, so the box drawn
+            # on its frame sits over the thing it actually acted on rather than
+            # over whatever the click navigated to. Assertions need no such
+            # frame: the screen they verified is the one that comes after.
+            before_shot = None
+            if action.get("elementId") and kind not in ASSERTION_ACTIONS:
+                before_shot = await _fast_screenshot(target)
+
             if kind in AUTHORING_ACTIONS:
                 # These need the screen as material, not as a place to click,
                 # so they are handled here where the snapshot is still in hand.
@@ -1019,7 +1199,7 @@ async def run_agent(
                 reason=reason,
                 message=result["message"],
                 element=result.get("element"),
-                screenshot=after_shot,
+                screenshot=_step_frame(kind, result, before_shot, after_shot, snapshot),
                 duration_ms=duration_ms,
             )
 

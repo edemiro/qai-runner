@@ -502,10 +502,12 @@ def list_runs(
                       (SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count,
                       (SELECT COUNT(*) FROM steps s
                         WHERE s.run_id = r.id AND s.status = 'failed') AS failed_count,
-                      -- page_events holds warnings as well; counting the lot
-                      -- made the list claim errors the detail view did not.
+                      -- page_events holds warnings as well, and third-party
+                      -- failures, and counting either made this list disagree
+                      -- with both the detail view and the run's own verdict.
                       (SELECT COUNT(*) FROM page_events e
-                        WHERE e.run_id = r.id AND e.level = 'error') AS page_error_count
+                        WHERE e.run_id = r.id AND e.level = 'error'
+                          AND e.third_party = 0) AS page_error_count
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id"""
     where, params = [], []

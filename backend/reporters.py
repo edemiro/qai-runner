@@ -50,7 +50,10 @@ def _failure_text(run: Dict[str, Any]) -> str:
             target = f" [{step['target']}]" if step.get("target") else ""
             lines.append(f"Step {step['idx']} {step['action']}{target}: {step.get('message') or ''}")
 
-    errors = [e for e in run.get("pageEvents", []) if e.get("level") == "error"]
+    errors = [
+        e for e in run.get("pageEvents", [])
+        if e.get("level") == "error" and not e.get("thirdParty")
+    ]
     if errors:
         lines.append("")
         lines.append(f"Page errors ({len(errors)}):")
@@ -167,7 +170,10 @@ def json_report(runs: List[Dict[str, Any]], suite_name: str = "QAi") -> Dict[str
     """The full detail, for anything that wants more than pass/fail."""
     cases = []
     for run in runs:
-        page_errors = [e for e in run.get("pageEvents", []) if e.get("level") == "error"]
+        page_errors = [
+            e for e in run.get("pageEvents", [])
+            if e.get("level") == "error" and not e.get("thirdParty")
+        ]
         cases.append({
             "id": run.get("id"),
             "title": run.get("title"),
