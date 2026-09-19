@@ -165,9 +165,15 @@ export const api = {
       body: { username, accessKey },
     }),
 
+  // A cloud device can sit in a queue before it is handed over, and the
+  // backend then spends a few more seconds answering the app's first-launch
+  // permission prompts before it answers. The 60s default cut that off while
+  // the session was live on the other side, leaving a device booked and a
+  // tester told it had failed.
   createSession: (device, appId) =>
     request('/api/appium/session', {
       method: 'POST',
+      timeoutMs: 300000,
       body: { udid: device.udid, platform: device.platform, name: device.name, appId: appId || null },
     }),
   createWebSession: (url, viewport, browser, headless = true, size = null) =>

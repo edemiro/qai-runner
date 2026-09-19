@@ -37,6 +37,7 @@ import agent
 import appium_client as appium
 import authoring
 import browserstack
+import mobile_session
 import config
 import devices as device_discovery
 import drivers
@@ -419,6 +420,10 @@ async def create_appium_session(req: SessionRequest):
 
     payload = response.json()
     session_id = payload.get("value", {}).get("sessionId")
+    # What the driver actually negotiated. It carries the bundle id / package
+    # of the app it installed, which is the only place a bs:// upload handle
+    # turns into a name the device understands.
+    session_caps = payload.get("value", {}).get("capabilities") or {}
     if not session_id:
         raise HTTPException(status_code=500, detail="Appium returned no sessionId.")
 
@@ -429,22 +434,31 @@ async def create_appium_session(req: SessionRequest):
 
     platform_cache[session_id] = req.platform
 
-    # A prompt that was already up when the session attached — a first-launch
-    # location or notification dialog — is not covered by the auto-accept
-    # capability, which only handles alerts raised afterwards. Clear it here, a
-    # few times over for stacked prompts, so the first frame the tester (and the
-    # agent) sees is the app's own screen. Deterministic; no model call.
+    # First-launch prompts are not covered by the auto-accept capability, which
+    # only handles alerts raised while a command is in flight — and a session
+    # that has just attached is not running commands. They are answered here,
+    # for as long as they keep coming, and the app is then confirmed to be the
+    # thing on screen: accepting a location prompt on iOS can hand the screen
+    # to SpringBoard, and a tester has no way back from there.
+    #
+    # This used to be three shots that gave up the first time they saw nothing,
+    # so a prompt that appeared a second after the session attached — which is
+    # most of them — was never answered at all.
+    resolved_app_id = req.appId
     if config.MOBILE_AUTO_PERMISSIONS:
-        for _ in range(3):
-            if not await appium.accept_alert(session_id):
-                break
-            await asyncio.sleep(0.6)
+        resolved_app_id = await mobile_session.prepare_session(
+            session_id, req.platform, req.appId, session_caps,
+        ) or req.appId
 
     device = {
         "udid": req.udid,
         "platform": req.platform,
         "name": req.name or req.udid,
         "appId": req.appId,
+        # What the app is called on the device. `appId` stays the tester's own
+        # choice, which on a cloud device is an upload handle that names
+        # nothing; this is what a report and a re-launch can actually use.
+        "bundleId": resolved_app_id,
         "kind": "mobile",
         "source": "browserstack" if on_cloud else "local",
     }
