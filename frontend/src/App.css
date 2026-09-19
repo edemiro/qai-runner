@@ -5638,3 +5638,22 @@ textarea,
 }
 
 .budget-row strong { font-size: 17px; font-weight: 650; color: var(--text-primary); }
+
+/* Environment picker, left of the address. Sized to the longest name it holds
+   so the row does not shift when a different environment is chosen. */
+.env-select {
+  flex: none;
+  width: 168px;
+  height: var(--control-h);
+  padding: 0 var(--control-px-sm);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--control-font-sm);
+  cursor: pointer;
+}
+
+.env-select:hover:not(:disabled) { color: var(--text-primary); }
+.env-select:focus { outline: none; border-color: var(--accent); }
+.env-select:disabled { opacity: 0.5; }

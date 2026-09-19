@@ -16,6 +16,7 @@ import { useFullscreen } from '../hooks/useFullscreen';
 import { useScreenStream } from '../hooks/useScreenStream';
 import { useToast } from '../hooks/useToast';
 import { parseBounds, roleColor } from '../lib/elements';
+import { DEFAULT_ENV_URL, ENV_GROUPS, matchEnv } from '../lib/environments';
 
 const VIEWPORTS = [
   { id: 'desktop', label: 'Desktop', w: 1440, h: 900 },
@@ -33,7 +34,9 @@ const DRAG_PX = 6;
 
 /** The address bar: open a page, navigate, or close the session. */
 function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
-  const [url, setUrl] = useState('');
+  // Opens on NUAT, the environment most work starts from, so the common case
+  // is one click. The box stays editable for a path or a one-off host.
+  const [url, setUrl] = useState(DEFAULT_ENV_URL);
   const [viewport, setViewport] = useState('desktop');
   // Headed by default: the sites people point QAi at tend to refuse a headless
   // browser, and the window is kept off-screen so headed costs nothing visible.
@@ -47,6 +50,27 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
 
   return (
     <div className="address-bar">
+      {/* The environments differ by a single token, and picking the wrong one
+          produces a run against the wrong stack that still reads as plausible.
+          Choosing from the list fills the address; typing over it still works. */}
+      <select
+        className="env-select"
+        value={matchEnv(url)?.url || ''}
+        onChange={(event) => event.target.value && setUrl(event.target.value)}
+        disabled={busy}
+        aria-label="Environment"
+        title="TK web environments"
+      >
+        {!matchEnv(url) && <option value="">Custom</option>}
+        {ENV_GROUPS.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.items.map((item) => (
+              <option key={item.name} value={item.url} title={item.url}>{item.name}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+
       <div className="address-input">
         <Globe size={15} />
         <input
