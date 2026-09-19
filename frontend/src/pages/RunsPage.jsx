@@ -95,7 +95,9 @@ function StepScreenshot({ runId, stepId }) {
   if (failed) return <span className="muted small">{failed}</span>;
 
   if (image) {
-    const src = `data:image/png;base64,${image}`;
+    // Read off the payload rather than assumed: a browser step is captured as
+    // JPEG (a sixth of the bytes, 200ms cheaper) while a phone still sends PNG.
+    const src = `data:${image.startsWith('/9j/') ? 'image/jpeg' : 'image/png'};base64,${image}`;
     return (
       <>
         <img

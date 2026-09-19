@@ -5,7 +5,7 @@ import base64
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from .base import ProviderError, Turn
+from .base import ProviderError, Turn, image_media_type
 
 _SENTINEL = object()
 
@@ -33,7 +33,10 @@ def _import_sdk():
 def _parts(turn: Turn, types) -> List[Any]:
     parts: List[Any] = [{"text": turn.text}]
     if turn.image_b64:
-        parts.append(types.Part.from_bytes(data=base64.b64decode(turn.image_b64), mime_type="image/png"))
+        parts.append(types.Part.from_bytes(
+            data=base64.b64decode(turn.image_b64),
+            mime_type=image_media_type(turn.image_b64),
+        ))
     return parts
 
 

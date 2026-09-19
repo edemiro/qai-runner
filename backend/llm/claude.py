@@ -3,7 +3,7 @@
 import os
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from .base import ProviderError, Turn, add_usage
+from .base import ProviderError, Turn, add_usage, image_media_type
 
 # Models whose refusals can be rescued by the server-side fallback chain.
 _FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
@@ -88,7 +88,7 @@ def _content(turn: Turn) -> Any:
             "type": "image",
             "source": {
                 "type": "base64",
-                "media_type": "image/png",
+                "media_type": image_media_type(turn.image_b64),
                 "data": turn.image_b64,
             },
         },

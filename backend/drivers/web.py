@@ -751,6 +751,12 @@ class WebTarget:
         return self._snapshots[-1] if self._snapshots else None
 
     async def screenshot(self) -> Optional[str]:
+        """An exact frame. PNG because visual regression compares this pixel
+        for pixel: JPEG's compression artifacts alone differ on 2.2% of pixels,
+        eleven times the default 0.2% tolerance, so every baseline check would
+        fail on the codec. The agent loop wants speed rather than exactness and
+        uses `mirror_frame` instead.
+        """
         try:
             data = await self.page.screenshot(type="png")
             return base64.b64encode(data).decode()

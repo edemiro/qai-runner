@@ -334,7 +334,12 @@ def _event(kind: str, **payload) -> str:
 # 3969 image tokens and 2.7MB on the wire; capped at this edge it is 1469 and
 # under 1MB, and every control is still legible. The frame stored with the step
 # is taken separately and stays full resolution, so reports do not degrade.
-_LLM_IMAGE_MAX_EDGE = 1568
+#
+# 1024 rather than the 1568 the API tops out at: a 1440x900 desktop page fell
+# *under* 1568, so it was sent untouched as a 1062KB PNG — measured at 6.7s a
+# call against the gateway, where the same frame as a 103KB JPEG at this edge
+# took 5.5s. 1.3s a step, for pixels that read identically.
+_LLM_IMAGE_MAX_EDGE = 1024
 
 # The live mirror is scaled to fit the panel, so a frame capped at 480px was
 # being blown up several times over and looked soft. A desktop-width cap keeps a
@@ -372,7 +377,10 @@ def _shrink_to(screenshot: Optional[str], max_edge: int, fmt: str = "png") -> Op
 
 
 def _shrink_for_llm(screenshot: Optional[str]) -> Optional[str]:
-    return _shrink_to(screenshot, _LLM_IMAGE_MAX_EDGE)
+    # JPEG, not PNG: a screenshot PNG is six times the bytes for pixels the
+    # model reads the same way, and the whole payload crosses the gateway on
+    # every single step.
+    return _shrink_to(screenshot, _LLM_IMAGE_MAX_EDGE, fmt="jpeg")
 
 
 def _shrink_for_mirror(screenshot: Optional[str]) -> Optional[str]:
@@ -395,6 +403,25 @@ def get_live_frame(session_id: str) -> Optional[str]:
     return _live_frames.get(session_id)
 
 
+async def _fast_screenshot(target: UITarget) -> Optional[str]:
+    """A frame for the model and the step record, as cheaply as the target allows.
+
+    A run captures two of these a step, and on the web a full-page PNG measured
+    266ms and 1062KB against 61ms and 176KB for the same frame as JPEG — about
+    400ms a step for a report image nobody reads pixel by pixel. Visual
+    baselines are the one thing that does, and they keep `screenshot()`: JPEG's
+    artifacts alone differ on 2.2% of pixels, eleven times the tolerance.
+
+    A phone has no cheaper path and falls through to its own screenshot.
+    """
+    fast = getattr(target, "mirror_frame", None)
+    if fast is not None:
+        shot = await fast()
+        if shot:
+            return shot
+    return await target.screenshot()
+
+
 async def _screen_context(target: UITarget, use_vision: bool = True):
     """Snapshot the target and return (snapshot, llm json, screenshot base64).
 
@@ -408,7 +435,7 @@ async def _screen_context(target: UITarget, use_vision: bool = True):
     """
     snapshot = await target.snapshot()
     if use_vision:
-        screenshot = await asyncio.to_thread(_shrink_for_llm, await target.screenshot())
+        screenshot = await asyncio.to_thread(_shrink_for_llm, await _fast_screenshot(target))
     else:
         screenshot = None
     if snapshot is None:
@@ -966,7 +993,7 @@ async def run_agent(
                 )
             else:
                 result = await _execute_action(target, action, snapshot)
-            after_shot = await target.screenshot()
+            after_shot = await _fast_screenshot(target)
             publish_live_frame(target.session_id, after_shot)
             duration_ms = int((time.monotonic() - started) * 1000)
 

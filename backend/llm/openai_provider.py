@@ -2,7 +2,7 @@
 
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from .base import ProviderError, Turn
+from .base import ProviderError, Turn, image_media_type
 
 
 def _import_sdk():
@@ -42,7 +42,7 @@ def _content(turn: Turn) -> Any:
         {"type": "text", "text": turn.text},
         {
             "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{turn.image_b64}"},
+            "image_url": {"url": f"data:{image_media_type(turn.image_b64)};base64,{turn.image_b64}"},
         },
     ]
 

@@ -25,6 +25,28 @@ def add_usage(sink: Optional[Dict[str, Any]], **counts: int) -> None:
     sink["calls"] = sink.get("calls", 0) + 1
 
 
+def image_media_type(image_b64: Optional[str]) -> str:
+    """The format of a base64 image, read off its first bytes.
+
+    Not assumed: the web target encodes JPEG (a screenshot PNG costs six times
+    the bytes and 200ms more to capture, for pixels a model reads identically)
+    while a phone hands back whatever Appium produced, which is PNG. Declaring
+    the wrong one is a hard 400 from the API, not a silent downgrade, so this
+    sniffs rather than guesses. Base64 preserves leading bytes, so the prefix is
+    enough and the payload never has to be decoded.
+    """
+    if not image_b64:
+        return "image/png"
+    head = image_b64[:8]
+    if head.startswith("/9j/"):
+        return "image/jpeg"
+    if head.startswith("R0lGOD"):
+        return "image/gif"
+    if head.startswith("UklGR"):
+        return "image/webp"
+    return "image/png"
+
+
 @dataclass
 class Turn:
     """One conversational turn.
