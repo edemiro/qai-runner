@@ -2983,10 +2983,12 @@ select:disabled {
 
 .suite-item {
   display: flex;
-  align-items: center;
+  /* Top, not centre: the name wraps to two lines on a set like "Çoklu Uçuş
+     Arama Ekranı" and the badge should stay level with its first line. */
+  align-items: flex-start;
   gap: 9px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   text-align: left;
@@ -3002,12 +3004,15 @@ select:disabled {
   color: var(--accent);
 }
 
+/* Wraps rather than truncating. "Çoklu Uçuş Arama Ekranı" and "Çoklu Uçuş
+   Arama Sonuçları" are the same 12 characters until the last word, so an
+   ellipsis hid the only part that distinguished them. */
 .suite-item-name {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
   font-weight: 550;
 }
 
@@ -3045,22 +3050,51 @@ select:disabled {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 10px;
 }
 
-.case-row {
+/* One scenario, one card. A shared hairline between flush rows was not enough
+   separation once every scenario also shows its steps: where one ends and the
+   next begins had to be readable at a glance, so each gets its own surface,
+   border and breathing room. */
+.case-card {
+  --case-gutter: 66px;
   display: flex;
-  align-items: flex-start;
-  flex-wrap: nowrap;
-  gap: 12px;
-  padding: 12px 10px;
-  border-radius: var(--radius-sm);
-  border-bottom: 1px solid var(--border-subtle);
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 14px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface, rgba(255, 255, 255, 0.015));
 }
 
-.case-row > input[type='checkbox'],
-.case-row .case-idx {
+.case-card:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.case-card.disabled {
+  opacity: 0.5;
+}
+
+/* Head: the pickers and number, the title, then the chips and the actions.
+   The title takes every pixel the other three do not. */
+.case-card-head {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.case-card-head > input[type='checkbox'] {
+  margin-top: 3px;
+}
+
+/* Fixed width so #1 and #21 occupy the same column and every title in the set
+   starts at the same x. */
+.case-card-head .case-idx {
   margin-top: 2px;
+  min-width: 30px;
 }
 
 /* Actions stay a fixed cluster on the right, never wrapping under the row. */
@@ -3069,39 +3103,29 @@ select:disabled {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: 4px;
 }
 
-.case-row:last-child {
-  border-bottom: none;
-}
-
-.case-row:hover {
-  background: var(--bg-hover);
-}
-
-.case-row.disabled {
-  opacity: 0.5;
-}
-
-.case-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+/* The title wraps to as many lines as it needs. These are written in a company
+   standard that puts the distinguishing part — the route, the cabin, the
+   passenger mix — at the end, so clipping the tail clipped the meaning. */
 .case-name {
-  font-weight: 550;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
+/* The goal is a sentence, not a label: it wraps too, and sits indented under
+   the title so it reads as belonging to it rather than as another field. */
 .case-goal {
+  margin: 0;
+  padding-left: var(--case-gutter);
   font-size: 12px;
+  line-height: 1.55;
   color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .case-meta {
@@ -3610,8 +3634,14 @@ select:disabled {
 }
 
 @media (max-width: 1100px) {
+  /* Stacked, the two panels become two rows — and the grid, which is a flex
+     child allowed to shrink below its content, was handing the first row 30px
+     and letting the 400px-tall set list spill over the detail panel beneath
+     it. Content-sized rows, and the page scrolls instead of overlapping. */
   .suites-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: min-content;
+    min-height: auto;
   }
 
   .suite-list {
@@ -4303,27 +4333,43 @@ a.scan-row-url {
 
 /* --- test executions ------------------------------------------------------ */
 
-.execution-list { list-style: none; margin: 0; padding: 0; }
+.execution-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
+/* Each execution is its own card, not a flush row: the list is what a tester
+   scans after a run, and "which of these two is the one I just started" was
+   being answered by a timestamp alone. */
 .execution-item {
   display: flex;
-  align-items: center;
+  /* Top, not centre: the Test Set name wraps and the chevron stays level with
+     its first line. */
+  align-items: flex-start;
   gap: 10px;
   width: 100%;
-  padding: 9px 11px;
-  border: none;
-  border-radius: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   text-align: left;
 }
 
-.execution-item:hover { background: var(--bg-raised); }
-.execution-item.active { background: var(--bg-raised); color: var(--text-primary); }
+.execution-item:hover { background: var(--bg-raised); border-color: var(--border); }
+.execution-item.active {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
 
 .execution-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.execution-name { font-size: 12.5px; font-weight: 600; }
+.execution-name { font-size: 12.5px; font-weight: 600; line-height: 1.4; }
 .execution-when { font-size: 10.5px; color: var(--text-tertiary); }
 
 .score {
@@ -4479,20 +4525,15 @@ a.scan-row-url {
 .execution-score-text strong { color: #5cbb86; font-weight: 600; }
 .execution-score-text strong.fail { color: #e06a6a; }
 
-/* Case rows carry a long standard-format title, so the row has to give the
-   text the space and let the badges sit tight on the right. */
-.case-row .case-main { flex: 1 1 auto; min-width: 0; }
-.case-row .case-name { overflow-wrap: anywhere; line-height: 1.5; }
 /* Chips get a bounded lane on the right and wrap within it, so a scenario with
    several tags never shoves the action buttons onto a second line. */
-.case-row .case-meta {
-  flex: 0 1 auto;
+.case-card .case-meta {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
-  max-width: 45%;
   margin-top: 2px;
 }
 
@@ -4936,18 +4977,10 @@ textarea,
 .scenario-result:hover { background: var(--bg-hover); border-radius: var(--radius-sm); }
 .scenario-result:hover .btn-ghost { opacity: 1; }
 
-/* Test Set rows carry the same shape of information, so they get the same
-   treatment rather than a second look. */
-.case-row {
-  display: grid;
-  grid-template-columns: 20px 34px minmax(0, 1fr) auto 30px 30px;
-  align-items: center;
-  gap: var(--gap-3);
-}
-
-.case-row .case-meta { justify-content: flex-end; }
-.case-row .layer-tag { min-width: 78px; text-align: center; }
-.case-row .priority-tag { min-width: 66px; text-align: center; }
+/* The chips keep a fixed width so Critical/High/Medium and the layer line up
+   down the column instead of jittering with the length of each word. */
+.case-card .layer-tag { min-width: 78px; text-align: center; }
+.case-card .priority-tag { min-width: 66px; text-align: center; }
 
 /* ==========================================================================
    Picking scenarios for an execution
@@ -5103,12 +5136,18 @@ textarea,
 
 /* Room for the platform badge without the name being squeezed out. */
 .suite-item-name { flex: 1 1 auto; min-width: 0; }
+/* The badge and count sit on the name's first line while it wraps beneath. */
+.suite-item > .platform-badge,
+.suite-item > .pill,
+.suite-item-chevron { margin-top: 1px; flex: none; }
 .execution-when { display: inline-flex; align-items: center; gap: 6px; }
 .execution-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 
-/* The name gets the width; the badge and short date share one line under it. */
-.execution-item-main { min-width: 0; gap: 3px; }
-.execution-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The name gets the width; the badge and short date share one line under it.
+   It wraps rather than truncating — every execution here is named after the
+   same Test Set, so the tail is the only part that tells two runs apart. */
+.execution-item-main { min-width: 0; gap: 4px; }
+.execution-name { white-space: normal; overflow-wrap: anywhere; }
 .execution-when { white-space: nowrap; }
 
 /* Name, platform, Add: the name takes the row and the other two share the next
@@ -5184,7 +5223,7 @@ textarea,
 
 .case-steps {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 7px 0 0;
   padding: 0;
   counter-reset: qai-step;
   display: flex;
@@ -5199,11 +5238,11 @@ textarea,
   counter-increment: qai-step;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
-  gap: 1px 6px;
-  font-size: 11px;
-  line-height: 1.5;
+  gap: 2px 7px;
+  font-size: 11.5px;
+  line-height: 1.55;
   color: var(--text-tertiary);
-  padding: 3px 0;
+  padding: 5px 0;
 }
 
 .case-steps li + li { border-top: 1px solid var(--border-subtle); }
@@ -5227,14 +5266,25 @@ textarea,
 
 .case-step-expected::before { content: '→ '; }
 
-/* Opens a scenario's steps. Quiet until wanted. */
+/* The steps are a zone of their own inside the card: inset, on its own ground,
+   with the count as its heading. Open by default — this is the scenario. */
+.case-steps-block {
+  margin-left: var(--case-gutter);
+  padding: 8px 11px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.16);
+}
+
 .case-steps-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 5px;
-  padding: 2px 4px;
-  font-size: 11px;
+  gap: 5px;
+  padding: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--text-tertiary);
   background: none;
   border: none;

@@ -129,12 +129,14 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
 
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState([]);
-  // Which scenarios have their steps open. Collapsed by default so the set
-  // reads as a list of scenarios rather than a wall of steps.
-  const [openSteps, setOpenSteps] = useState(() => new Set());
+  // Which scenarios have their steps *closed* — the set is empty to begin with,
+  // so every scenario opens showing its steps. Tracking the exception rather
+  // than the rule is what makes open the default without having to seed this
+  // from the cases each time they load.
+  const [closedSteps, setClosedSteps] = useState(() => new Set());
 
   const toggleSteps = (caseId) => {
-    setOpenSteps((current) => {
+    setClosedSteps((current) => {
       const next = new Set(current);
       if (next.has(caseId)) next.delete(caseId); else next.add(caseId);
       return next;
@@ -745,74 +747,46 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
               ) : (
                 <ul className="case-list">
                   {suite.cases.map((item) => (
-                    <li key={item.id} className={`case-row ${item.enabled ? '' : 'disabled'}`}>
-                      <input
-                        type="checkbox"
-                        checked={picked.has(item.id)}
-                        onChange={() => togglePick(item)}
-                        aria-label={`Select ${item.name}`}
-                        title="Pick this scenario for an execution"
-                      />
-                      <span className="case-idx" title="Scenario number in this Test Set">
-                        #{item.idx}
-                      </span>
-                      <div className="case-main">
-                        <span className="case-name">{item.name}</span>
-                        <span className="case-goal">{item.goal}</span>
-                        {/* Steps are opened per scenario rather than printed
-                            under every one: ten scenarios at ten steps each
-                            filled the page and left the set impossible to
-                            scan. The count stays visible; the detail is a
-                            click away. */}
-                        {item.steps?.length > 0 && (
-                          <>
-                            <button
-                              type="button"
-                              className="case-steps-toggle"
-                              onClick={() => toggleSteps(item.id)}
-                              aria-expanded={openSteps.has(item.id)}
-                            >
-                              {openSteps.has(item.id)
-                                ? <ChevronDown size={12} />
-                                : <ChevronRight size={12} />}
-                              {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
-                            </button>
-                            {openSteps.has(item.id) && (
-                              <ol className="case-steps">
-                                {item.steps.map((step, i) => (
-                                  <li key={i}>
-                                    <span className="case-step-action">{step.action}</span>
-                                    {step.expected && (
-                                      <span className="case-step-expected">{step.expected}</span>
-                                    )}
-                                  </li>
-                                ))}
-                              </ol>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      <div className="case-meta">
-                        {/* The step count lives on the toggle now, so it is not
-                            repeated here. */}
-                        {item.priority && (
-                          <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
-                            {item.priority}
-                          </span>
-                        )}
-                        {item.layer && <span className="layer-tag">{item.layer}</span>}
-                        {item.dataset && <span className="pill">×{item.dataset.length}</span>}
-                        {/* A tag that just repeats the layer is noise — the layer
-                            chip already says it, so it is dropped here. */}
-                        {item.tags
-                          .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
-                          .map((tag) => (
-                            <span key={tag} className="tag">{tag}</span>
-                          ))}
-                      </div>
-                      {/* Actions stay grouped on the right so a long title or a
-                          stack of chips never pushes them onto their own line. */}
-                      <div className="case-actions">
+                    /* A card per scenario rather than a table row. These titles
+                       are a full standard-format sentence; on one line they were
+                       clipped to an ellipsis, which hides exactly the part that
+                       tells two scenarios apart. Given its own block the title
+                       wraps in full, and every scenario is bounded by its own
+                       edge instead of a hairline shared with its neighbour. */
+                    <li key={item.id} className={`case-card ${item.enabled ? '' : 'disabled'}`}>
+                      <div className="case-card-head">
+                        <input
+                          type="checkbox"
+                          checked={picked.has(item.id)}
+                          onChange={() => togglePick(item)}
+                          aria-label={`Select ${item.name}`}
+                          title="Pick this scenario for an execution"
+                        />
+                        <span className="case-idx" title="Scenario number in this Test Set">
+                          #{item.idx}
+                        </span>
+                        <h3 className="case-name">{item.name}</h3>
+                        <div className="case-meta">
+                          {/* The step count lives on the toggle now, so it is not
+                              repeated here. */}
+                          {item.priority && (
+                            <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
+                              {item.priority}
+                            </span>
+                          )}
+                          {item.layer && <span className="layer-tag">{item.layer}</span>}
+                          {item.dataset && <span className="pill">×{item.dataset.length}</span>}
+                          {/* A tag that just repeats the layer is noise — the layer
+                              chip already says it, so it is dropped here. */}
+                          {item.tags
+                            .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
+                            .map((tag) => (
+                              <span key={tag} className="tag">{tag}</span>
+                            ))}
+                        </div>
+                        {/* Actions stay grouped on the right so a long title or a
+                            stack of chips never pushes them onto their own line. */}
+                        <div className="case-actions">
                         {/* Trying one scenario against the browser or device
                             already open, without waiting for a whole Test Set
                             run — this is how a scenario gets debugged while it
@@ -842,14 +816,50 @@ export function SuitesPage({ onRunHere, onOpenExecution }) {
                         >
                           {item.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
                         </button>
-                        <button
-                          className="btn-icon danger"
-                          onClick={() => removeCase(item.id)}
-                          aria-label={`Delete ${item.name}`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                          <button
+                            className="btn-icon danger"
+                            onClick={() => removeCase(item.id)}
+                            aria-label={`Delete ${item.name}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
+
+                      {item.goal && <p className="case-goal">{item.goal}</p>}
+
+                      {/* Open by default. The steps are the scenario — what a
+                          reviewer checks, and what the run is judged against —
+                          so keeping them behind a click made the page look
+                          tidier and the work harder. Collapsing stays, for a
+                          set being scanned rather than read. */}
+                      {item.steps?.length > 0 && (
+                        <div className="case-steps-block">
+                          <button
+                            type="button"
+                            className="case-steps-toggle"
+                            onClick={() => toggleSteps(item.id)}
+                            aria-expanded={!closedSteps.has(item.id)}
+                          >
+                            {closedSteps.has(item.id)
+                              ? <ChevronRight size={12} />
+                              : <ChevronDown size={12} />}
+                            {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
+                          </button>
+                          {!closedSteps.has(item.id) && (
+                            <ol className="case-steps">
+                              {item.steps.map((step, i) => (
+                                <li key={i}>
+                                  <span className="case-step-action">{step.action}</span>
+                                  {step.expected && (
+                                    <span className="case-step-expected">{step.expected}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
