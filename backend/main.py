@@ -1457,17 +1457,15 @@ async def post_execution(body: ExecutionBody):
     return StreamingResponse(_execution_stream(body), media_type="application/x-ndjson")
 
 
-@app.post("/api/executions/start")
-async def post_execution_start(body: ExecutionBody):
-    """Start an execution and return as soon as it has an id.
+async def _start_in_background(stream) -> Dict[str, Any]:
+    """Run an execution on the server, answering once it has an id.
 
-    The streaming endpoint above ties the run to the caller's connection: a
-    caller that starts a run and then closes — the review dialog does exactly
-    that — drops the stream, and the run dies after its first event with the
-    execution left sitting at "running" and no scenarios in it. This runs it on
-    the server instead, so the answer is an id to watch in Test Executions.
+    A streamed run is tied to the caller's connection: a caller that starts one
+    and then navigates away — the review dialog, the Test Sets page — drops the
+    stream, and the run dies after its first event with the execution left
+    sitting at "running" and nothing in it. Draining it here instead means the
+    answer is an id to watch, and the run outlives whoever asked for it.
     """
-    stream = _execution_stream(body)
     started: asyncio.Future = asyncio.get_running_loop().create_future()
 
     async def drain() -> None:
@@ -1499,9 +1497,17 @@ async def post_execution_start(body: ExecutionBody):
         suite_run_id = await asyncio.wait_for(asyncio.shield(started), timeout=60)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="The execution did not start within 60s.")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"suiteRunId": suite_run_id, "started": True}
+
+
+@app.post("/api/executions/start")
+async def post_execution_start(body: ExecutionBody):
+    """Start a hand-picked execution and return its id."""
+    return await _start_in_background(_execution_stream(body))
 
 
 @app.post("/api/scenarios/generate")
@@ -1648,13 +1654,10 @@ async def save_run_as_case(run_id: str, suite_id: str, name: Optional[str] = Non
     return storage.get_case(case_id)
 
 
-@app.post("/api/suites/{suite_id}/run")
-async def post_suite_run(suite_id: str, body: SuiteRunBody):
-    """Run a suite, streaming per-case progress as NDJSON."""
+def _suite_run_stream(suite_id: str, body: SuiteRunBody):
     if storage.get_suite(suite_id) is None:
         raise HTTPException(status_code=404, detail="Suite not found.")
-
-    stream = suite_runner.run_suite(
+    return suite_runner.run_suite(
         suite_id,
         workers=body.workers,
         tags=body.tags,
@@ -1667,7 +1670,25 @@ async def post_suite_run(suite_id: str, body: SuiteRunBody):
         height=body.height,
         fail_on_page_error=body.failOnPageError,
     )
-    return StreamingResponse(stream, media_type="application/x-ndjson")
+
+
+@app.post("/api/suites/{suite_id}/run")
+async def post_suite_run(suite_id: str, body: SuiteRunBody):
+    """Run a suite, streaming per-case progress as NDJSON."""
+    return StreamingResponse(
+        _suite_run_stream(suite_id, body), media_type="application/x-ndjson",
+    )
+
+
+@app.post("/api/suites/{suite_id}/run/start")
+async def post_suite_run_start(suite_id: str, body: SuiteRunBody):
+    """Run a suite on the server, answering with the execution's id.
+
+    Same reasoning as the hand-picked variant: a run tied to the caller's
+    connection dies the moment they navigate away, leaving the execution at
+    "running" with nothing in it.
+    """
+    return await _start_in_background(_suite_run_stream(suite_id, body))
 
 
 @app.get("/api/suite-runs")

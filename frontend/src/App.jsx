@@ -47,6 +47,9 @@ export default function App() {
 
   const [fps, setFps] = useState(2);
   const [selectedRunId, setSelectedRunId] = useState(null);
+  // An execution just started elsewhere, to open and follow on the Executions
+  // page — starting one should land you where you can watch it.
+  const [focusExecutionId, setFocusExecutionId] = useState(null);
   // A brief from the composer's "write scenarios" mode, awaiting review in a
   // dialog. null = closed.
   const [writeBrief, setWriteBrief] = useState(null);
@@ -408,11 +411,26 @@ export default function App() {
     }
 
     if (activeTab === 'executions') {
-      return <ExecutionsPage onOpenRun={openRunReport} />;
+      return (
+        <ExecutionsPage
+          onOpenRun={openRunReport}
+          focusId={focusExecutionId}
+          onFocused={() => setFocusExecutionId(null)}
+        />
+      );
     }
 
     if (activeTab === 'suites') {
-      return <SuitesPage onOpenRun={openRunReport} onRunHere={runCaseHere} />;
+      return (
+        <SuitesPage
+          onOpenRun={openRunReport}
+          onRunHere={runCaseHere}
+          onOpenExecution={(id) => {
+            setFocusExecutionId(id);
+            setActiveTab('executions');
+          }}
+        />
+      );
     }
 
     if (activeTab === 'insights') {

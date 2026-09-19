@@ -1,17 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   ChevronRight,
-  Download,
   Eye,
   EyeOff,
-  FileCode2,
   Layers,
   Loader2,
   Play,
   Plus,
   Sparkles,
-  Square,
   Trash2,
 } from 'lucide-react';
 
@@ -87,7 +84,7 @@ function PriorityStrip({ cases }) {
   );
 }
 
-export function SuitesPage({ onOpenRun, onRunHere }) {
+export function SuitesPage({ onRunHere, onOpenExecution }) {
   const toast = useToast();
 
   const [suites, setSuites] = useState([]);
@@ -128,10 +125,7 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
   });
 
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState([]);
-  const [summary, setSummary] = useState(null);
   const [history, setHistory] = useState([]);
-  const abortRef = useRef(null);
 
   const counts = {
     all: suites.length,
@@ -206,7 +200,6 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
     };
   }, [shownId, toast]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
 
   const createSuite = async (event) => {
     event.preventDefault();
@@ -357,98 +350,62 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
     }
   };
 
+  /** Start the picked scenarios as an execution and go watch it.
+   *
+   *  Started on the server rather than streamed to this page: a streamed run
+   *  dies the moment you navigate away, which is what left executions sitting
+   *  at "running" with nothing in them. The scenarios run in their own browsers
+   *  — not in the workspace session — so Test Executions, not the Web or Mobile
+   *  screen, is where the run is actually visible.
+   */
   const runPicked = async () => {
     if (!picked.size || running) return;
-    const controller = new AbortController();
-    abortRef.current = controller;
+    if (!executionName.trim()) {
+      toast.warning('Name the execution so it can be told apart in the list.');
+      return;
+    }
     setRunning(true);
-    setProgress([]);
-    setSummary(null);
     try {
-      await api.createExecution(
-        {
-          caseIds: [...picked.keys()],
-          name: executionName.trim() || null,
-          workers: Number(options.workers) || 1,
-          headless: options.headless,
-          trace: options.trace,
-          recordVideo: options.recordVideo,
-          failOnPageError: options.failOnPageError,
-        },
-        (event) => {
-          if (event.event === 'case_started') {
-            setProgress((current) => [...current, { ...event, status: 'running' }]);
-          } else if (event.event === 'case_finished') {
-            setProgress((current) => current.map((row) => (
-              row.case === event.caseId && row.status === 'running'
-                ? { ...row, ...event, status: event.status } : row)));
-          } else if (event.event === 'suite_finished') {
-            setSummary(event);
-          } else if (event.event === 'error') {
-            toast.error(event.message);
-          }
-        },
-        controller.signal,
-      );
+      const { suiteRunId } = await api.startExecution({
+        caseIds: [...picked.keys()],
+        name: executionName.trim(),
+        workers: Number(options.workers) || 1,
+        headless: options.headless,
+        trace: options.trace,
+        recordVideo: options.recordVideo,
+        failOnPageError: options.failOnPageError,
+      });
+      toast.success(`“${executionName.trim()}” started.`);
       setPicked(new Map());
       setExecutionName('');
-      const runs = await api.suiteRuns(selectedId, 10);
-      setHistory(runs.suiteRuns);
+      onOpenExecution?.(suiteRunId);
     } catch (err) {
-      if (err.name !== 'AbortError') toast.error(err.message);
+      toast.error(`Execution could not start: ${err.message}`);
     } finally {
       setRunning(false);
-      abortRef.current = null;
     }
   };
 
+  /** Run the whole set — same server-side start as a hand-picked execution,
+   *  so it survives leaving this page, and lands where it can be watched. */
   const runSuite = async () => {
     if (!suite || running) return;
-    const controller = new AbortController();
-    abortRef.current = controller;
-
     setRunning(true);
-    setProgress([]);
-    setSummary(null);
-
     try {
-      await api.runSuite(
-        suite.id,
-        {
-          workers: Number(options.workers) || 1,
-          tags: parseTags(options.tags).length ? parseTags(options.tags) : null,
-          headless: options.headless,
-          trace: options.trace,
-          recordVideo: options.recordVideo,
-          failOnPageError: options.failOnPageError,
-        },
-        (event) => {
-          if (event.event === 'case_started') {
-            setProgress((current) => [...current, { ...event, status: 'running' }]);
-          } else if (event.event === 'case_finished') {
-            setProgress((current) =>
-              current.map((row) => (row.case === event.caseId && row.status === 'running'
-                ? { ...row, ...event, status: event.status }
-                : row)),
-            );
-          } else if (event.event === 'suite_finished') {
-            setSummary(event);
-          } else if (event.event === 'error') {
-            toast.error(event.message);
-          }
-        },
-        controller.signal,
-      );
+      const { suiteRunId } = await api.startSuiteRun(suite.id, {
+        workers: Number(options.workers) || 1,
+        tags: parseTags(options.tags).length ? parseTags(options.tags) : null,
+        headless: options.headless,
+        trace: options.trace,
+        recordVideo: options.recordVideo,
+        failOnPageError: options.failOnPageError,
+      });
+      toast.success(`“${suite.name}” started.`);
+      onOpenExecution?.(suiteRunId);
     } catch (err) {
-      if (err.name !== 'AbortError') toast.error(err.message);
+      toast.error(`Execution could not start: ${err.message}`);
     } finally {
       setRunning(false);
-      abortRef.current = null;
-      try {
-        setHistory((await api.suiteRuns(suite.id, 10)).suiteRuns);
-      } catch {
-        /* the history strip is not worth an error toast */
-      }
     }
   };
 
@@ -869,8 +826,8 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
               <div className="card-head">
                 <h2 className="card-title">Run</h2>
                 {running ? (
-                  <button className="btn btn-danger btn-sm" onClick={() => abortRef.current?.abort()}>
-                    <Square size={14} /> Stop
+                  <button className="btn btn-sm" disabled>
+                    <Loader2 size={14} className="spin" /> Starting…
                   </button>
                 ) : (
                   <button
@@ -936,51 +893,9 @@ export function SuitesPage({ onOpenRun, onRunHere }) {
                 </label>
               </div>
 
-              {progress.length > 0 && (
-                <ul className="progress-list">
-                  {progress.map((row, index) => (
-                    <li key={`${row.case}-${index}`} className={`progress-row ${row.status}`}>
-                      <span className="progress-dot" />
-                      <span className="progress-label">{row.label}</span>
-                      {row.durationMs != null && (
-                        <span className="progress-time">{(row.durationMs / 1000).toFixed(1)}s</span>
-                      )}
-                      {row.runId && (
-                        <button className="btn-link" onClick={() => onOpenRun?.(row.runId)}>
-                          report
-                        </button>
-                      )}
-                      {row.error && <span className="progress-error">{row.error}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
 
-              {summary && (
-                <div className={`suite-summary ${summary.failed ? 'failed' : 'passed'}`}>
-                  <strong>
-                    {summary.passed} passed · {summary.failed} failed
-                  </strong>
-                  <div className="row-actions">
-                    <a
-                      className="btn btn-sm"
-                      href={api.suiteReportUrl(summary.suiteRunId, 'junit')}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <FileCode2 size={14} /> JUnit XML
-                    </a>
-                    <a
-                      className="btn btn-sm"
-                      href={api.suiteReportUrl(summary.suiteRunId, 'json')}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <Download size={14} /> JSON
-                    </a>
-                  </div>
-                </div>
-              )}
+              {/* Progress and the report live on Test Executions now, which is
+                  where a run is opened the moment it starts. */}
             </div>
 
             {/* --------------------------------------------- CI recipe ----- */}

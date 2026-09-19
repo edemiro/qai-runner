@@ -264,6 +264,9 @@ export const api = {
 
   runSuite: (suiteId, body, onEvent, signal) =>
     streamNdjson(`/api/suites/${suiteId}/run`, { body, onEvent, signal }),
+  // Runs the whole set on the server and returns the execution's id.
+  startSuiteRun: (suiteId, body) =>
+    request(`/api/suites/${suiteId}/run/start`, { method: 'POST', body, timeoutMs: 90000 }),
   suiteRuns: (suiteId = null, limit = 50) =>
     request(`/api/suite-runs?limit=${limit}${suiteId ? `&suite_id=${suiteId}` : ''}`),
   suiteRun: (suiteRunId) => request(`/api/suite-runs/${suiteRunId}`),

@@ -56,7 +56,7 @@ function duration(ms) {
   return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-export function ExecutionsPage({ onOpenRun }) {
+export function ExecutionsPage({ onOpenRun, focusId = null, onFocused = null }) {
   const toast = useToast();
   const [executions, setExecutions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -77,19 +77,44 @@ export function ExecutionsPage({ onOpenRun }) {
     try {
       const data = await api.suiteRuns(null, 50);
       setExecutions(data.suiteRuns);
-      setSelectedId((current) => current || data.suiteRuns[0]?.id || null);
+      // An execution just started elsewhere wins the selection, so starting one
+      // lands on it rather than on whatever ran last.
+      setSelectedId((current) => focusId || current || data.suiteRuns[0]?.id || null);
+      if (focusId) onFocused?.();
     } catch (err) {
       toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, focusId, onFocused]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => { if (!cancelled) await load(); })();
     return () => { cancelled = true; };
   }, [load]);
+
+  // A running execution is watched, not refreshed by hand: poll while it is
+  // still going and stop the moment it settles.
+  const isRunning = execution?.status === 'running';
+  useEffect(() => {
+    if (!isRunning || !selectedId) return undefined;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const [detail, list] = await Promise.all([
+          api.suiteRun(selectedId),
+          api.suiteRuns(null, 50),
+        ]);
+        if (cancelled) return;
+        setExecution(detail);
+        setExecutions(list.suiteRuns);
+      } catch {
+        /* a dropped poll is not worth interrupting the watch for */
+      }
+    }, 4000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [isRunning, selectedId]);
 
   useEffect(() => {
     let cancelled = false;
