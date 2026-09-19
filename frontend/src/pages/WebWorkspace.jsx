@@ -145,7 +145,11 @@ export function WebWorkspace({
   const sessionId = session?.sessionId ?? null;
 
   const [busy, setBusy] = useState(false);
-  const [fps, setFps] = useState(4);
+  // Chromium pushes a frame when the page paints, not on a timer, so a higher
+  // ceiling costs nothing on a still page and buys real smoothness on a moving
+  // one. Four was the old polling rate, chosen when every frame meant a full
+  // screenshot capture.
+  const [fps, setFps] = useState(12);
   const [tree, setTree] = useState(null);
   const [snapshotId, setSnapshotId] = useState(null);
   const [screen, setScreen] = useState({ width: 1440, height: 900 });
@@ -189,7 +193,7 @@ export function WebWorkspace({
   // the stream is temporarily sped up — otherwise the mirror lags a step behind
   // and the interaction feels unresponsive.
   const { screenshot, connection, lostReason, retry: retryStream } = useScreenStream(
-    sessionId, holding || wheeling ? Math.max(fps, 15) : fps, Boolean(sessionId),
+    sessionId, holding || wheeling ? Math.max(fps, 24) : fps, Boolean(sessionId),
   );
   const pageLost = connection === 'lost';
 
@@ -897,7 +901,7 @@ export function WebWorkspace({
                 <input
                   type="range"
                   min="1"
-                  max="15"
+                  max="30"
                   value={fps}
                   onChange={(event) => setFps(Number(event.target.value))}
                   aria-label="Stream rate"

@@ -695,8 +695,17 @@ async def get_session_screenshot(session_id: str):
 # workspace's own slider goes up to 15 for a Playwright page, which is cheap
 # enough to actually sustain that. This ceiling only guards against a runaway
 # client asking for more than either one would.
-_MIRROR_MAX_FPS = 15.0
+# Raised with the screencast: frames arrive as the page paints rather than on a
+# timer, so a high ceiling costs nothing while the page is still and is the
+# whole difference between a slideshow and a browser while it is moving.
+_MIRROR_MAX_FPS = 30.0
 _MIRROR_DEFAULT_FPS = 2.0
+
+# What a screencast frame is encoded at. Higher than the old polled frames were
+# re-encoded to: those went through JPEG twice — once out of Chromium, once
+# through Pillow — which cost 21ms, made the file *larger*, and shifted 0.8% of
+# pixels. One pass at a higher quality is both sharper and cheaper.
+_MIRROR_QUALITY = 85
 
 
 @app.websocket("/ws/session/{session_id}/screen")
@@ -716,6 +725,45 @@ async def stream_screen(websocket: WebSocket, session_id: str):
     interval = 1 / _MIRROR_DEFAULT_FPS
     last_digest = None
 
+    async def pump_screencast(target) -> bool:
+        """Forward Chromium's own frames for as long as the page is alive.
+
+        Returns False when the target cannot screencast, so the caller falls
+        back to polling. This is the path a browser session takes: frames
+        arrive as the page paints — around fifteen a second while something is
+        moving — instead of one screenshot per timer tick, which is what made
+        the mirror read as a slideshow while an agent was driving it.
+        """
+        # Small on purpose: a viewer that falls behind should see the newest
+        # frame, not work through a backlog of stale ones.
+        frames: "asyncio.Queue[str]" = asyncio.Queue(maxsize=2)
+        if not await target.start_screencast(frames, quality=_MIRROR_QUALITY):
+            return False
+        try:
+            while True:
+                if drivers.get(session_id) is None:
+                    await websocket.send_text(json.dumps({"dead": True, "reason": "session closed"}))
+                    return True
+                try:
+                    frame = await asyncio.wait_for(frames.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Nothing painted. That is the normal state of a still page,
+                    # but it is also what a dead one looks like, so check.
+                    if not target.is_alive():
+                        await websocket.send_text(json.dumps({
+                            "dead": True, "reason": "the page was closed or crashed",
+                        }))
+                        return True
+                    await websocket.send_text(json.dumps({"unchanged": True}))
+                    continue
+                await websocket.send_text(json.dumps({"screenshot": frame}))
+                # Honour the rate the client asked for: the socket can push
+                # every painted frame, but a viewer that wants 4 fps should not
+                # be made to decode fifteen.
+                await asyncio.sleep(max(0.0, interval - 0.005))
+        finally:
+            await target.stop_screencast()
+
     async def read_control():
         nonlocal interval
         try:
@@ -731,6 +779,11 @@ async def stream_screen(websocket: WebSocket, session_id: str):
 
     control_task = asyncio.create_task(read_control())
     try:
+        first = drivers.get(session_id)
+        if first is not None and hasattr(first, "start_screencast"):
+            if await pump_screencast(first):
+                return
+
         while True:
             target = drivers.get(session_id)
             if target is None:

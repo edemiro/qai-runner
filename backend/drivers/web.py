@@ -429,6 +429,19 @@ class WebTarget:
         self._events: List[Dict[str, Any]] = events if events is not None else []
         self._tracing = False
         self._routes: List[Dict[str, Any]] = []
+        # The screencast, when a viewer is watching. Chromium pushes a frame
+        # every time the page paints, which is what makes the mirror move like
+        # a browser rather than like a slideshow of polled screenshots.
+        self._cdp = None
+        self._screencasting = False
+        self._frames: "Optional[asyncio.Queue]" = None
+        self._frame_listener = False
+        # Acks are fire-and-forget tasks, and a task nothing holds can be
+        # collected before it runs. Chromium sends no further frame until the
+        # last one is acknowledged, so a collected ack does not drop a frame —
+        # it stops the stream. Measured: 14.8 fps, then 2.0, then 0.2 across
+        # three viewers until these were kept.
+        self._acks: set = set()
 
     # --- what the page complained about ---------------------------------- #
 
@@ -726,6 +739,7 @@ class WebTarget:
         return size
 
     async def close(self) -> None:
+        await self.stop_screencast()
         # An unstopped trace is discarded when the context goes, so drop it
         # rather than leaving the recorder running into a closed browser.
         if self._tracing:
@@ -788,6 +802,118 @@ class WebTarget:
         except Exception as exc:
             print(f"[web] screenshot failed: {exc}")
             return None
+
+    # --- the live mirror ------------------------------------------------- #
+
+    async def start_screencast(
+        self,
+        queue: "asyncio.Queue",
+        quality: int = 85,
+        max_width: Optional[int] = None,
+        max_height: Optional[int] = None,
+    ) -> bool:
+        """Have Chromium push a frame whenever the page paints.
+
+        Polling for screenshots costs a full capture per frame whether or not
+        anything changed, and while an agent is driving the page it falls to
+        two frames a step — which is why the mirror read as a slideshow. This
+        is the mechanism devtools' own device preview uses: frames arrive as
+        the page paints, around fifteen a second while something moves.
+
+        Returns False when the browser has no CDP (a non-Chromium engine), and
+        the caller falls back to polling.
+        """
+        self._frames = queue
+        if self._screencasting:
+            return True
+        try:
+            if self._cdp is None:
+                self._cdp = await self._context.new_cdp_session(self.page)
+        except Exception as exc:
+            print(f"[web] screencast unavailable: {exc}")
+            self._frames = None
+            return False
+
+        cdp = self._cdp
+
+        async def ack(session_id: Any) -> None:
+            try:
+                await cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
+            except Exception:
+                pass
+
+        def on_frame(params: Dict[str, Any]) -> None:
+            session = params.get("sessionId")
+            if session is not None:
+                # Chromium sends nothing further until each frame is
+                # acknowledged, so this happens even for one about to be
+                # dropped for being late — and the task is held until it has,
+                # or it can be collected mid-flight and stall the stream.
+                task = asyncio.create_task(ack(session))
+                self._acks.add(task)
+                task.add_done_callback(self._acks.discard)
+            queue_now = self._frames
+            data = params.get("data")
+            if queue_now is None or not data:
+                return
+            try:
+                queue_now.put_nowait(data)
+            except asyncio.QueueFull:
+                # A viewer that has fallen behind wants the newest frame, not a
+                # backlog of stale ones, so the oldest goes.
+                try:
+                    queue_now.get_nowait()
+                    queue_now.put_nowait(data)
+                except Exception:
+                    pass
+
+        # Registered once for the life of the target, reading the current queue
+        # each time rather than closing over one: removing and re-adding a CDP
+        # listener between viewers failed silently, and every frame after the
+        # first viewer left went to a queue nobody was reading.
+        if not self._frame_listener:
+            cdp.on("Page.screencastFrame", on_frame)
+            self._frame_listener = True
+
+        size = self.config or {}
+        try:
+            await cdp.send("Page.startScreencast", {
+                "format": "jpeg",
+                "quality": max(30, min(int(quality), 95)),
+                "maxWidth": int(max_width or size.get("width") or 1440),
+                "maxHeight": int(max_height or size.get("height") or 900),
+                "everyNthFrame": 1,
+            })
+        except Exception as exc:
+            print(f"[web] could not start the screencast: {exc}")
+            self._frames = None
+            return False
+        self._screencasting = True
+        return True
+
+    async def stop_screencast(self) -> None:
+        """Stop the push and drop the CDP session with it.
+
+        Restarting a screencast on a session that has already run one does not
+        resume: measured across four viewers on the same session it fell 14.2
+        fps, 1.5, 0.2, 0.2. A session costs a millisecond to make, so each
+        viewer gets a fresh one rather than inheriting whatever state the last
+        one left behind.
+        """
+        self._frames = None
+        cdp, self._cdp = self._cdp, None
+        self._frame_listener = False
+        if not self._screencasting or cdp is None:
+            return
+        self._screencasting = False
+        try:
+            await cdp.send("Page.stopScreencast")
+        except Exception:
+            pass
+        try:
+            await cdp.detach()
+        except Exception:
+            pass
 
     async def mirror_frame(self) -> Optional[str]:
         """A fast frame for the live panel: JPEG straight from Chromium, no
