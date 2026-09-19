@@ -5,6 +5,7 @@ import {
   Loader2, Play, RefreshCw, Search, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 import { api } from '../api';
+import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { formatTokens } from '../lib/format';
 
@@ -591,6 +592,11 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
   const toast = useToast();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  /* Counted on the server over every run, not over the page just fetched: this
+     list pages fifty at a time, so a count taken from what is loaded would say
+     "Mobile 0" until the tester scrolled far enough to prove otherwise. */
+  const [platformCounts, setPlatformCounts] = useState(null);
   const [filter, setFilter] = useState('all');
   const [priority, setPriority] = useState('all');
   const [search, setSearch] = useState('');
@@ -615,10 +621,11 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
     let cancelled = false;
     (async () => {
       try {
-        const data = await api.runs(PAGE_SIZE, debounced);
+        const data = await api.runs(PAGE_SIZE, debounced, 0, platform);
         if (!cancelled) {
           setRuns(data.runs || []);
           setHasMore(Boolean(data.hasMore));
+          setPlatformCounts(data.counts || null);
         }
       } catch (err) {
         if (!cancelled) toast.error(err.message);
@@ -630,12 +637,12 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, debounced, toast]);
+  }, [reloadKey, debounced, platform, toast]);
 
   const loadMore = async () => {
     setLoadingMore(true);
     try {
-      const data = await api.runs(PAGE_SIZE, debounced, runs.length);
+      const data = await api.runs(PAGE_SIZE, debounced, runs.length, platform);
       setRuns((current) => [...current, ...(data.runs || [])]);
       setHasMore(Boolean(data.hasMore));
     } catch (err) {
@@ -682,6 +689,7 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
           <RefreshCw size={15} className={loading ? 'spin' : ''} />
           Refresh
         </button>
+        <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
       </header>
 
       <div className="run-search">

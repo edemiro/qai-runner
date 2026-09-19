@@ -13,6 +13,32 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from config import DB_PATH
 
+# The two platforms everything is read one at a time through: a tester is
+# working on web or on mobile, and mixing the two into one pass rate describes
+# neither. Anything else — an empty filter, a stray query string — means "both".
+PLATFORMS = ("web", "mobile")
+
+
+def clean_kind(value: Optional[str]) -> Optional[str]:
+    """A platform filter, or None for no filter at all."""
+    kind = (value or "").strip().lower()
+    return kind if kind in PLATFORMS else None
+
+
+def _kind_filter(column: str, kind: Optional[str], where: List[str], params: List[Any]) -> None:
+    """Add `column` = this platform to a query being assembled.
+
+    Compared through COALESCE because `kind` was added to these tables after
+    the fact: every row that predates it is NULL, and every one of them is a
+    web run, because web is all there was. Matching on the bare column would
+    hide that history from both tabs.
+    """
+    kind = clean_kind(kind)
+    if kind:
+        where.append(f"COALESCE({column}, 'web') = ?")
+        params.append(kind)
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id           TEXT PRIMARY KEY,
@@ -178,6 +204,9 @@ CREATE TABLE IF NOT EXISTS bugs (
     url         TEXT,
     screenshot  TEXT,
     note        TEXT,
+    -- Which platform the failure was found on. Copied from the run rather than
+    -- joined, for the same reason as the names above: a bug outlives its run.
+    kind        TEXT NOT NULL DEFAULT 'web',
     created_at  REAL NOT NULL,
     updated_at  REAL
 );
@@ -243,6 +272,9 @@ MIGRATIONS = [
     # the moment it starts rather than joined back later: a set can be deleted,
     # and an execution assembled from several sets has no single set to ask.
     ("suite_runs", "kind", "TEXT"),
+    # Which platform the bug was found on, so Bug Report can be read one
+    # platform at a time like every other page.
+    ("bugs", "kind", "TEXT"),
     # The scenario written out as ordered steps, each with what it expects to
     # see. Stored as JSON on the case: a step has no identity of its own and is
     # only ever read with the scenario it belongs to.
@@ -305,6 +337,17 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
     _detach_executions_from_suites(conn)
     _backfill_execution_kind(conn)
+    _backfill_bug_kind(conn)
+
+
+def _backfill_bug_kind(conn: sqlite3.Connection) -> None:
+    """Give bugs raised before the column existed the platform of their run."""
+    conn.execute(
+        """UPDATE bugs SET kind = COALESCE(
+               (SELECT r.kind FROM runs r WHERE r.id = bugs.run_id),
+               'web')
+           WHERE kind IS NULL"""
+    )
 
 
 def _backfill_execution_kind(conn: sqlite3.Connection) -> None:
@@ -438,20 +481,22 @@ def record_run_usage(run_id: str, usage: Optional[Dict[str, Any]]) -> None:
         )
 
 
-def usage_totals(days: int = 14) -> Dict[str, Any]:
+def usage_totals(days: int = 14, kind: Optional[str] = None) -> Dict[str, Any]:
     """What the model has been asked for lately, across every run."""
-    since = time.time() - days * 86400
+    where = ["started_at >= ?", "llm_calls IS NOT NULL"]
+    params: List[Any] = [time.time() - days * 86400]
+    _kind_filter("kind", kind, where, params)
     with _connect() as conn:
         row = conn.execute(
-            """SELECT COUNT(*) AS runs,
+            f"""SELECT COUNT(*) AS runs,
                       COALESCE(SUM(llm_calls), 0)          AS calls,
                       COALESCE(SUM(input_tokens), 0)       AS input_tokens,
                       COALESCE(SUM(output_tokens), 0)      AS output_tokens,
                       COALESCE(SUM(cache_read_tokens), 0)  AS cache_read_tokens,
                       COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
                  FROM runs
-                WHERE started_at >= ? AND llm_calls IS NOT NULL""",
-            (since,),
+                WHERE {' AND '.join(where)}""",
+            params,
         ).fetchone()
     totals = dict(row) if row else {}
     totals["days"] = days
@@ -536,6 +581,29 @@ def _row_to_step(row: sqlite3.Row, include_screenshot: bool = True) -> Dict[str,
     return step
 
 
+# Tables the platform tabs are drawn over. Named explicitly because the table
+# goes into the SQL text: a whitelist is the difference between a helper and an
+# injection point.
+_PLATFORM_TABLES = ("runs", "bugs", "suites", "suite_runs")
+
+
+def platform_counts(table: str) -> Dict[str, int]:
+    """How much each tab would have to show, so a tab can say so before it is
+    opened — an empty Mobile tab should look empty from the Web tab."""
+    if table not in _PLATFORM_TABLES:
+        raise ValueError(f"No platform counts for {table!r}.")
+    counts = {kind: 0 for kind in PLATFORMS}
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT COALESCE(kind, 'web') AS kind, COUNT(*) AS n"
+            f"  FROM {table} GROUP BY 1"
+        ).fetchall()
+    for row in rows:
+        if row["kind"] in counts:
+            counts[row["kind"]] = row["n"]
+    return counts
+
+
 def list_runs(
     limit: int = 50,
     tag: Optional[str] = None,
@@ -544,6 +612,7 @@ def list_runs(
     priority: Optional[str] = None,
     search: Optional[str] = None,
     offset: int = 0,
+    kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     # Priority and layer come from the run's own snapshot first: the columns
     # exist so a report survives its Test Set being deleted, and reading the
@@ -563,6 +632,7 @@ def list_runs(
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id"""
     where, params = [], []
+    _kind_filter("r.kind", kind, where, params)
     if priority:
         # Not `c.priority = ?`, which would also turn the LEFT JOIN into an
         # inner one and drop every run whose case has since been deleted.
@@ -759,20 +829,26 @@ def create_bug(
     url: Optional[str] = None,
     screenshot: Optional[str] = None,
     status: str = "open",
+    kind: Optional[str] = None,
 ) -> str:
     bug_id = uuid.uuid4().hex[:16]
     now = time.time()
     with _connect() as conn:
+        # Read from the run when the caller did not say, so a bug raised from a
+        # failed scenario lands on the right tab without the UI having to know.
+        if clean_kind(kind) is None and run_id:
+            row = conn.execute("SELECT kind FROM runs WHERE id = ?", (run_id,)).fetchone()
+            kind = row["kind"] if row else None
         conn.execute(
             """INSERT INTO bugs (id, title, detail, code, severity, status, run_id,
                                  suite_run_id, case_id, case_name, suite_name, url,
-                                 screenshot, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 screenshot, kind, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 bug_id, title[:300], detail, code, severity,
                 status if status in BUG_STATUSES else "open",
                 run_id, suite_run_id, case_id, case_name, suite_name, url,
-                screenshot, now, now,
+                screenshot, clean_kind(kind) or "web", now, now,
             ),
         )
     return bug_id
@@ -791,9 +867,11 @@ def list_bugs(
     code: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 200,
+    kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     query = "SELECT * FROM bugs"
     where, params = [], []
+    _kind_filter("kind", kind, where, params)
     if status:
         where.append("status = ?")
         params.append(status)
@@ -858,9 +936,19 @@ def bug_for_run(run_id: str) -> Optional[Dict[str, Any]]:
     return _row_to_bug(row) if row else None
 
 
-def bug_counts() -> Dict[str, int]:
+def bug_counts(kind: Optional[str] = None) -> Dict[str, int]:
+    # Counted within the platform being viewed: the status filter sits under
+    # the platform tab, so "12 open" has to mean 12 on this tab.
+    where: List[str] = []
+    params: List[Any] = []
+    _kind_filter("kind", kind, where, params)
     with _connect() as conn:
-        rows = conn.execute("SELECT status, COUNT(*) AS n FROM bugs GROUP BY status").fetchall()
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM bugs"
+            + (" WHERE " + " AND ".join(where) if where else "")
+            + " GROUP BY status",
+            params,
+        ).fetchall()
     counts = {row["status"]: row["n"] for row in rows}
     counts["all"] = sum(counts.values())
     return counts
@@ -1442,17 +1530,27 @@ def case_history(case_id: str, limit: int = 30) -> List[Dict[str, Any]]:
     return [_row_to_run(row) for row in rows]
 
 
-def flakiness_report(limit: int = 40, window: int = 20) -> List[Dict[str, Any]]:
+def flakiness_report(
+    limit: int = 40, window: int = 20, kind: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Which cases change their mind.
 
     A case that always fails is broken and easy to see; a case that passes most
     of the time and fails occasionally is the one that erodes trust in the
     suite, so both the rate and the alternation count are reported.
     """
+    # Filtered on the Test Set rather than on the runs: a case belongs to one
+    # platform for its whole life, and reading it from the set keeps a case
+    # whose runs all predate the column on the tab it actually belongs to.
+    where: List[str] = []
+    params: List[Any] = []
+    _kind_filter("s.kind", kind, where, params)
     with _connect() as conn:
         case_rows = conn.execute(
             """SELECT c.id, c.name, c.suite_id, s.name AS suite_name
                FROM suite_cases c LEFT JOIN suites s ON s.id = c.suite_id"""
+            + (" WHERE " + " AND ".join(where) if where else ""),
+            params,
         ).fetchall()
 
         report = []
@@ -1488,7 +1586,7 @@ def flakiness_report(limit: int = 40, window: int = 20) -> List[Dict[str, Any]]:
 PRIORITY_ORDER = ("Critical", "High", "Medium", "Low")
 
 
-def priority_breakdown(days: int = 14) -> List[Dict[str, Any]]:
+def priority_breakdown(days: int = 14, kind: Optional[str] = None) -> List[Dict[str, Any]]:
     """Pass/fail per priority band.
 
     A pass rate on its own does not say whether the team is in trouble: the same
@@ -1500,22 +1598,24 @@ def priority_breakdown(days: int = 14) -> List[Dict[str, Any]]:
     from the chat are counted separately rather than silently bucketed as
     Medium, which would misreport both groups.
     """
-    since = time.time() - days * 86400
+    where = ["r.started_at >= ?"]
+    params: List[Any] = [time.time() - days * 86400]
+    _kind_filter("r.kind", kind, where, params)
     with _connect() as conn:
         rows = conn.execute(
             # Grouped on the run's own snapshot first, falling back to the case
             # only while it still exists: reading the join alone dropped every
             # run whose Test Set had since been deleted into "unclassified",
             # losing the band it actually ran at.
-            """SELECT COALESCE(r.case_priority, c.priority) AS priority,
+            f"""SELECT COALESCE(r.case_priority, c.priority) AS priority,
                       SUM(r.status = 'passed') AS passed,
                       SUM(r.status = 'failed') AS failed,
                       COUNT(*) AS total
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id
-               WHERE r.started_at >= ?
+               WHERE {' AND '.join(where)}
                GROUP BY COALESCE(r.case_priority, c.priority)""",
-            (since,),
+            params,
         ).fetchall()
 
     counts = {row["priority"]: row for row in rows}
@@ -1545,19 +1645,22 @@ def priority_breakdown(days: int = 14) -> List[Dict[str, Any]]:
     return breakdown
 
 
-def trend(days: int = 14) -> List[Dict[str, Any]]:
+def trend(days: int = 14, kind: Optional[str] = None) -> List[Dict[str, Any]]:
     """Pass/fail counts per day, for the report's sparkline."""
-    since = time.time() - days * 86400
+    where = ["started_at >= ?"]
+    params: List[Any] = [time.time() - days * 86400]
+    _kind_filter("kind", kind, where, params)
     with _connect() as conn:
         rows = conn.execute(
-            """SELECT date(started_at, 'unixepoch', 'localtime') AS day,
+            f"""SELECT date(started_at, 'unixepoch', 'localtime') AS day,
                       SUM(status = 'passed') AS passed,
                       SUM(status = 'failed') AS failed,
                       COUNT(*) AS total,
                       AVG(CASE WHEN finished_at IS NOT NULL
                                THEN (finished_at - started_at) * 1000 END) AS avg_ms
-               FROM runs WHERE started_at >= ? GROUP BY day ORDER BY day ASC""",
-            (since,),
+               FROM runs WHERE {' AND '.join(where)}
+               GROUP BY day ORDER BY day ASC""",
+            params,
         ).fetchall()
     return [
         {

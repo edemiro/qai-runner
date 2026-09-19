@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
-import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
+import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { ScenarioGenerator } from '../components/ScenarioGenerator';
 
 // Sentinel for "a Test Set that does not exist yet" in the move-to picker.
@@ -97,8 +97,12 @@ export function SuitesPage({
 
   const [suites, setSuites] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [platform, setPlatform] = useState('all');
-  const [newSuiteKind, setNewSuiteKind] = useState('web');
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  // null while nobody has touched the picker, which means "whichever platform
+  // the page is on". Held as an override rather than synced to the tab from an
+  // effect: a set created on the Mobile tab should be a mobile set without
+  // having to say so twice, and saying so once should still win.
+  const [newSuiteKind, setNewSuiteKind] = useState(null);
   const [suite, setSuite] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -165,13 +169,11 @@ export function SuitesPage({
   };
 
   const counts = {
-    all: suites.length,
     web: suites.filter((item) => (item.kind || 'web') !== 'mobile').length,
     mobile: suites.filter((item) => item.kind === 'mobile').length,
   };
-  const visible = platform === 'all'
-    ? suites
-    : suites.filter((item) => (item.kind || 'web') === platform);
+  const visible = suites.filter((item) => (item.kind || 'web') === platform);
+  const suiteKind = newSuiteKind || platform;
 
   /* Derived rather than synced through an effect: filtering to a platform the
      selected set is not on used to leave that set open on the right while the
@@ -244,10 +246,14 @@ export function SuitesPage({
     if (!name) return;
     try {
       const created = await api.createSuite({
-        name, kind: newSuiteKind, tags: [], module: newSuiteModule.trim() || null,
+        name, kind: suiteKind, tags: [], module: newSuiteModule.trim() || null,
       });
       setNewSuiteName('');
       setNewSuiteModule('');
+      setNewSuiteKind(null);
+      // Follow the new set to its own tab rather than leaving it filtered out
+      // of the list it was just added to.
+      setPlatform(suiteKind);
       setSelectedId(created.id);
       await loadSuites();
       toast.success(`Test set “${name}” created.`);
@@ -583,6 +589,7 @@ export function SuitesPage({
             Scenarios live here. Pull them into an execution to run them — locally or from CI.
           </p>
         </div>
+        <PlatformTabs value={platform} onChange={setPlatform} counts={counts} />
       </header>
 
       <div className="suites-layout">
@@ -607,7 +614,7 @@ export function SuitesPage({
                 scenarios can go in and which device can run them, so a set
                 that changed platform afterwards would strand its own cases. */}
             <select
-              value={newSuiteKind}
+              value={suiteKind}
               onChange={(event) => setNewSuiteKind(event.target.value)}
               aria-label="Platform for the new test set"
             >
@@ -618,8 +625,6 @@ export function SuitesPage({
               <Plus size={14} /> Add
             </button>
           </form>
-
-          <PlatformFilter value={platform} onChange={setPlatform} counts={counts} />
 
           {suites.length === 0 ? (
             <EmptyState icon={Layers} title="No Test Sets yet" compact>
@@ -659,8 +664,11 @@ export function SuitesPage({
                             onClick={() => setSelectedId(item.id)}
                           >
                             <Layers size={15} />
+                            {/* No platform badge on the row: the list is one
+                                platform now, so it said the same thing on every
+                                line and took the width off the name — which is
+                                the one thing on the row that differs. */}
                             <span className="suite-item-name">{item.name}</span>
-                            <PlatformTag kind={item.kind} />
                             <span className="pill">{item.case_count}</span>
                             <ChevronRight size={14} className="suite-item-chevron" />
                           </button>

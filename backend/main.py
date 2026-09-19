@@ -1166,11 +1166,18 @@ async def get_runs(
     priority: Optional[str] = None,
     q: Optional[str] = None,
     offset: int = 0,
+    kind: Optional[str] = None,
 ):
-    runs = storage.list_runs(limit, priority=priority, search=q, offset=offset)
+    runs = storage.list_runs(limit, priority=priority, search=q, offset=offset, kind=kind)
     # Whether another page exists, so the UI can hide "Load more" at the end
     # rather than offering a button that returns nothing.
-    return {"runs": runs, "hasMore": len(runs) == limit}
+    return {
+        "runs": runs,
+        "hasMore": len(runs) == limit,
+        # Counted over every run, not the page just returned: the platform tabs
+        # are above the paging, so their numbers cannot come from one page of it.
+        "counts": storage.platform_counts("runs"),
+    }
 
 
 @app.get("/api/runs/{run_id}")
@@ -1894,10 +1901,13 @@ async def list_bugs(
     code: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 200,
+    kind: Optional[str] = None,
 ):
     return {
-        "bugs": storage.list_bugs(status=status, code=code, search=search, limit=limit),
-        "counts": storage.bug_counts(),
+        "bugs": storage.list_bugs(status=status, code=code, search=search,
+                                  limit=limit, kind=kind),
+        "counts": storage.bug_counts(kind),
+        "platformCounts": storage.platform_counts("bugs"),
         "codes": bug_report.CODES,
         "notAppDefects": sorted(bug_report.NOT_APP_DEFECTS),
         "statuses": list(storage.BUG_STATUSES),
@@ -2047,14 +2057,17 @@ async def download_artifact(artifact_id: int):
 
 
 @app.get("/api/insights/trend")
-async def get_trend(days: int = 14):
-    return {"trend": storage.trend(days)}
+async def get_trend(days: int = 14, kind: Optional[str] = None):
+    # Every insight is read one platform at a time. A pass rate that averages a
+    # mature web suite with a handful of mobile runs describes neither of them.
+    return {"trend": storage.trend(days, kind=kind),
+            "counts": storage.platform_counts("runs")}
 
 
 @app.get("/api/insights/priority")
-async def get_priority_breakdown(days: int = 14):
+async def get_priority_breakdown(days: int = 14, kind: Optional[str] = None):
     """How the history looks through the priority standard, not just in total."""
-    return {"breakdown": storage.priority_breakdown(days)}
+    return {"breakdown": storage.priority_breakdown(days, kind=kind)}
 
 
 @app.get("/api/insights/budget")
@@ -2106,19 +2119,19 @@ async def get_budget():
 
 
 @app.get("/api/insights/usage")
-async def get_usage(days: int = 14):
+async def get_usage(days: int = 14, kind: Optional[str] = None):
     """What the runs in this window asked of the model.
 
     QAi cannot see the quota left on the key — that lives with whoever issues
     it — but it can say what it spent, which is the half of the question it is
     in a position to answer.
     """
-    return {"usage": storage.usage_totals(days)}
+    return {"usage": storage.usage_totals(days, kind=kind)}
 
 
 @app.get("/api/insights/flaky")
-async def get_flaky(limit: int = 20, window: int = 20):
-    return {"flaky": storage.flakiness_report(limit, window)}
+async def get_flaky(limit: int = 20, window: int = 20, kind: Optional[str] = None):
+    return {"flaky": storage.flakiness_report(limit, window, kind=kind)}
 
 
 # --------------------------------------------------------------------------- #

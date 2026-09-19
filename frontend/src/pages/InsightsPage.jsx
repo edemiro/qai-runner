@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, Coins, ShieldAlert, TrendingUp } from 'lucide-react';
 
 import { api } from '../api';
+import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { formatTokens } from '../lib/format';
 
@@ -18,6 +19,12 @@ export function InsightsPage() {
   const [usage, setUsage] = useState(null);
   const [budget, setBudget] = useState(null);
   const [days, setDays] = useState(14);
+  /* Read one platform at a time, like every other page. Averaged together, a
+     mature web suite and a handful of mobile runs produce a pass rate that is
+     true of neither — and the flaky table would rank cases from both against
+     each other as though they shared a device, a driver and a failure mode. */
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  const [platformCounts, setPlatformCounts] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,10 +33,10 @@ export function InsightsPage() {
       // Awaited first so nothing sets state during the same commit that
       // scheduled this effect.
       const [trendData, flakyData, priorityData, usageData, budgetData] = await Promise.all([
-        api.trend(days).catch((err) => ({ error: err })),
-        api.flaky(20).catch((err) => ({ error: err })),
-        api.priorityBreakdown(days).catch((err) => ({ error: err })),
-        api.usage(days).catch((err) => ({ error: err })),
+        api.trend(days, platform).catch((err) => ({ error: err })),
+        api.flaky(20, platform).catch((err) => ({ error: err })),
+        api.priorityBreakdown(days, platform).catch((err) => ({ error: err })),
+        api.usage(days, platform).catch((err) => ({ error: err })),
         // The gateway may be unreachable or not offer this; the rest of the
         // page must not fail with it, so its error stays local.
         api.budget().catch(() => null),
@@ -39,6 +46,7 @@ export function InsightsPage() {
       const failure = trendData.error || flakyData.error || priorityData.error || usageData.error;
       if (failure) toast.error(failure.message);
       if (trendData.trend) setTrend(trendData.trend);
+      if (trendData.counts) setPlatformCounts(trendData.counts);
       if (flakyData.flaky) setFlaky(flakyData.flaky);
       if (priorityData.breakdown) setBreakdown(priorityData.breakdown);
       if (usageData.usage) setUsage(usageData.usage);
@@ -47,7 +55,7 @@ export function InsightsPage() {
     return () => {
       cancelled = true;
     };
-  }, [days, toast]);
+  }, [days, platform, toast]);
 
   const totals = useMemo(() => {
     const passed = trend.reduce((sum, day) => sum + day.passed, 0);
@@ -113,6 +121,7 @@ export function InsightsPage() {
             </button>
           ))}
         </div>
+        <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
       </header>
 
       {loading ? (

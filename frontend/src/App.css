@@ -5039,45 +5039,104 @@ textarea,
 }
 
 /* ==========================================================================
-   Platform filter + empty states
+   Platform tabs — which platform the page is about
+   A tester works on web or on mobile and rarely on both in one sitting, so
+   this is the page's mode, not one of its filters. It borrows the marker the
+   sidebar uses for the PLATFORM group — a solid accent bar — rather than the
+   chips' tint, so the two read as the same choice made in two places.
    ========================================================================== */
 
-.platform-filter {
+.platform-tabs {
   display: flex;
-  gap: 5px;
-  padding: 0 0 var(--gap-3);
-  margin-bottom: var(--gap-2);
+  align-items: flex-end;
+  gap: var(--gap-1);
+  min-width: 0;
+  /* The rule runs the width of the page: a switch that spans the page belongs
+     to the page, where a pair of chips would belong to the list under them. */
   border-bottom: 1px solid var(--border);
 }
 
-.platform-chip {
+/* Last child of the page header, on a row of its own under the title, so it
+   never fights the header's right-hand control (the 7d/14d/30d switch on
+   Insights, the search on Bug Report) for the same line. */
+.page-header:has(> .platform-tabs) { flex-wrap: wrap; }
+.page-header > .platform-tabs { flex: 1 0 100%; }
+
+.platform-tab {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: var(--control-h-sm);
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 11.5px;
-  font-weight: 550;
-  cursor: pointer;
-  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+  gap: 7px;
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  /* Sits a pixel into the rule so the bar replaces it rather than floating
+     above it — the same overlap .detail-tab uses. */
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: var(--control-font);
+  /* One weight for both states: a label that gets bolder when chosen also
+     gets wider, and a switch that is flipped all day should not wobble. */
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.platform-chip:hover { color: var(--text-secondary); border-color: var(--border-strong); }
+.platform-tab svg { flex: none; opacity: 0.85; }
 
-.platform-chip.active {
+/* Hover previews the bar in border grey; disabled falls through to the
+   global button:disabled fade and keeps whatever bar it had — the page is
+   still on that platform, the tester just cannot leave it right now. */
+.platform-tab:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-bottom-color: var(--border-strong);
+}
+
+/* Chosen: the bar and the glyph carry the colour, the word stays white. A
+   tinted pill is how a filter says "on"; a bar is how a mode says "here". */
+.platform-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.platform-tab.active svg { opacity: 1; color: var(--accent); }
+
+/* Ring inside the tab, not around it: the default 2px offset would cross the
+   rule below and the neighbour beside. */
+.platform-tab:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.platform-tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.platform-tab.active .platform-tab-count {
   background: var(--accent-soft);
-  border-color: var(--accent-border);
   color: var(--accent);
 }
 
-.platform-count {
-  font-variant-numeric: tabular-nums;
-  font-size: 10.5px;
-  opacity: 0.75;
+/* Zero is shown, not hidden: "Mobile 0" says the switch is right and the work
+   is missing, which a bare "Mobile" does not. Drawn hollow so the eye is not
+   pulled to a number that means nothing is there. */
+.platform-tab.is-empty .platform-tab-count {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-tertiary);
+}
+
+/* Under a phone-sized width the two tabs share the strip, so the bar under the
+   chosen one is half of it and the mode reads before the labels do. */
+@media (max-width: 560px) {
+  .platform-tab { flex: 1 1 0; justify-content: center; }
 }
 
 /* The row badge. Colour-coded because the two platforms are read at a glance

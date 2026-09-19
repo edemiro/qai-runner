@@ -216,9 +216,10 @@ export const api = {
   stopAgent: (sessionId) => request(`/api/session/${sessionId}/agent/stop`, { method: 'POST' }),
   agentStatus: (sessionId) => request(`/api/session/${sessionId}/agent/status`),
 
-  runs: (limit = 50, q = '', offset = 0) =>
+  runs: (limit = 50, q = '', offset = 0, kind = null) =>
     request(`/api/runs?limit=${limit}&offset=${offset}`
-      + (q ? `&q=${encodeURIComponent(q)}` : '')),
+      + (q ? `&q=${encodeURIComponent(q)}` : '')
+      + (kind ? `&kind=${kind}` : '')),
   run: (runId) => request(`/api/runs/${runId}`),
   stepScreenshot: (runId, stepId) => request(`/api/runs/${runId}/steps/${stepId}/screenshot`),
   renameRun: (runId, title) => request(`/api/runs/${runId}`, { method: 'PATCH', body: { title } }),
@@ -289,11 +290,12 @@ export const api = {
     request(`/api/cases/${caseId}`, { method: 'PATCH', body: { preconditionData: data } }),
 
   bugDraft: (runId) => request(`/api/runs/${runId}/bug-draft`),
-  bugs: ({ status = null, code = null, search = null } = {}) => {
+  bugs: ({ status = null, code = null, search = null, kind = null } = {}) => {
     const q = new URLSearchParams();
     if (status) q.set('status', status);
     if (code) q.set('code', code);
     if (search) q.set('search', search);
+    if (kind) q.set('kind', kind);
     const query = q.toString();
     return request(`/api/bugs${query ? `?${query}` : ''}`);
   },
@@ -309,12 +311,18 @@ export const api = {
   artifactUrl: (artifactId) => `${BASE}/api/artifacts/${artifactId}/download`,
 
   // --- insights -----------------------------------------------------------
-  trend: (days = 14) => request(`/api/insights/trend?days=${days}`),
-  flaky: (limit = 20) => request(`/api/insights/flaky?limit=${limit}`),
-  priorityBreakdown: (days = 14) => request(`/api/insights/priority?days=${days}`),
+  // All four take a platform, because a pass rate that averages a mature web
+  // suite with a handful of mobile runs describes neither of them.
+  trend: (days = 14, kind = null) =>
+    request(`/api/insights/trend?days=${days}${kind ? `&kind=${kind}` : ''}`),
+  flaky: (limit = 20, kind = null) =>
+    request(`/api/insights/flaky?limit=${limit}${kind ? `&kind=${kind}` : ''}`),
+  priorityBreakdown: (days = 14, kind = null) =>
+    request(`/api/insights/priority?days=${days}${kind ? `&kind=${kind}` : ''}`),
   // What the runs asked of the model. Not the quota left on the key — that
   // lives with whoever issues it — but what QAi itself spent.
-  usage: (days = 14) => request(`/api/insights/usage?days=${days}`),
+  usage: (days = 14, kind = null) =>
+    request(`/api/insights/usage?days=${days}${kind ? `&kind=${kind}` : ''}`),
   // Spend against the monthly limit, straight from the gateway.
   budget: () => request('/api/insights/budget'),
 

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 
 import { api } from '../api';
+import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 
 /**
@@ -61,7 +62,7 @@ function BugShot({ bugId }) {
   );
 }
 
-export function BugsPage({ onOpenRun = null }) {
+export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
   const toast = useToast();
   const [bugs, setBugs] = useState([]);
   const [counts, setCounts] = useState({});
@@ -70,6 +71,12 @@ export function BugsPage({ onOpenRun = null }) {
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
+  /* The platform is above the status filter, not beside it: a web bug and a
+     mobile bug are fixed by different people in different code, so "everything
+     open" is a question worth asking one platform at a time. The status counts
+     below are recounted within it for the same reason. */
+  const [platform, setPlatform] = useState(initialPlatform || DEFAULT_PLATFORM);
+  const [platformCounts, setPlatformCounts] = useState(null);
 
   // Bumped to re-read after a change of our own. The fetch itself lives in the
   // effect rather than in a callback the effect calls, so nothing sets state
@@ -81,10 +88,13 @@ export function BugsPage({ onOpenRun = null }) {
     let cancelled = false;
     (async () => {
       try {
-        const data = await api.bugs({ status: status || null, search: search || null });
+        const data = await api.bugs({
+          status: status || null, search: search || null, kind: platform,
+        });
         if (cancelled) return;
         setBugs(data.bugs || []);
         setCounts(data.counts || {});
+        setPlatformCounts(data.platformCounts || null);
         setMeta({
           codes: data.codes || {},
           notAppDefects: data.notAppDefects || [],
@@ -97,7 +107,7 @@ export function BugsPage({ onOpenRun = null }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [status, search, reload, toast]);
+  }, [status, search, platform, reload, toast]);
 
   const selected = bugs.find((b) => b.id === selectedId) || null;
 
@@ -137,6 +147,7 @@ export function BugsPage({ onOpenRun = null }) {
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search title, body or scenario"
         />
+        <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
       </header>
 
       <div className="segmented">

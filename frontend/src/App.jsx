@@ -26,6 +26,8 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
 
   const [activeTab, setActiveTab] = useState('web');
+  // Which platform Bug Report should open on when a raised bug sends us there.
+  const [bugsPlatform, setBugsPlatform] = useState(null);
   const [agentSubTab, setAgentSubTab] = useState('chat'); // chat | inspector
 
   const [sessions, setSessions] = useState([]);
@@ -571,7 +573,10 @@ export default function App() {
         <ExecutionsPage
           onOpenRun={openRunReport}
           onWatch={watchExecution}
-          onOpenBugs={() => setActiveTab('bugs')}
+          // A bug raised from a mobile scenario has to land on the Mobile tab.
+          // Bug Report opens on Web like every other page, so without this the
+          // tester is sent to a list the bug they just raised is not in.
+          onOpenBugs={(kind) => { setBugsPlatform(kind || null); setActiveTab('bugs'); }}
           focusId={focusExecutionId}
           onFocused={clearExecutionFocus}
         />
@@ -595,7 +600,7 @@ export default function App() {
     }
 
     if (activeTab === 'bugs') {
-      return <BugsPage onOpenRun={openRunReport} />;
+      return <BugsPage onOpenRun={openRunReport} initialPlatform={bugsPlatform} />;
     }
 
     if (activeTab === 'settings') {
@@ -716,6 +721,10 @@ export default function App() {
         onTabChange={(tab) => {
           setActiveTab(tab);
           if (tab === 'runs') setSelectedRunId(null);
+          // Reaching Bug Report from the nav is not following a bug there, so
+          // it opens on the default platform rather than on wherever the last
+          // raised bug happened to be.
+          if (tab === 'bugs') setBugsPlatform(null);
         }}
         theme={theme}
         onToggleTheme={toggleTheme}

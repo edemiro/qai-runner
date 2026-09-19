@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
-import { PlatformFilter, PlatformTag } from '../components/PlatformFilter';
+import { DEFAULT_PLATFORM, PlatformTabs, PlatformTag } from '../components/PlatformTabs';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
 
@@ -71,16 +71,21 @@ export function ExecutionsPage({
   const [selectedId, setSelectedId] = useState(null);
   const [execution, setExecution] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState('all');
+  const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
 
   const counts = {
-    all: executions.length,
     web: executions.filter((e) => (e.kind || 'web') !== 'mobile').length,
     mobile: executions.filter((e) => e.kind === 'mobile').length,
   };
-  const visible = platform === 'all'
-    ? executions
-    : executions.filter((e) => (e.kind || 'web') === platform);
+  const visible = executions.filter((e) => (e.kind || 'web') === platform);
+
+  /* Derived rather than synced through an effect: switching platform with an
+     execution of the other one open used to leave the detail pane reporting a
+     run the list beside it no longer contained. Falling through to the first
+     visible execution keeps the two panes describing the same thing. */
+  const shownId = visible.some((item) => item.id === selectedId)
+    ? selectedId
+    : (visible[0]?.id ?? null);
 
   const load = useCallback(async () => {
     try {
@@ -89,7 +94,13 @@ export function ExecutionsPage({
       // An execution just started elsewhere wins the selection, so starting one
       // lands on it rather than on whatever ran last.
       setSelectedId((current) => focusId || current || data.suiteRuns[0]?.id || null);
-      if (focusId) onFocused?.();
+      if (focusId) {
+        // …and brings its platform with it. Starting a mobile execution and
+        // landing on a page filtered to web would hide the run just started.
+        const focused = data.suiteRuns.find((item) => item.id === focusId);
+        if (focused) setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
+        onFocused?.();
+      }
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -134,7 +145,7 @@ export function ExecutionsPage({
       const data = await api.bugDraft(run.id);
       if (data.existingBugId) {
         toast.info('A bug was already raised for this scenario.');
-        onOpenBugs?.();
+        onOpenBugs?.(execution?.kind);
         return;
       }
       setDraft({ ...data, title: data.title, detail: data.detail });
@@ -162,7 +173,7 @@ export function ExecutionsPage({
       });
       setDraft(null);
       toast.success('Bug raised.');
-      onOpenBugs?.();
+      onOpenBugs?.(execution?.kind);
     } catch (err) {
       toast.error(err.message);
     }
@@ -192,12 +203,12 @@ export function ExecutionsPage({
   // still going and stop the moment it settles.
   const isRunning = execution?.status === 'running';
   useEffect(() => {
-    if (!isRunning || !selectedId) return undefined;
+    if (!isRunning || !shownId) return undefined;
     let cancelled = false;
     const timer = setInterval(async () => {
       try {
         const [detail, list] = await Promise.all([
-          api.suiteRun(selectedId),
+          api.suiteRun(shownId),
           api.suiteRuns(null, 50),
         ]);
         if (cancelled) return;
@@ -208,24 +219,24 @@ export function ExecutionsPage({
       }
     }, 4000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [isRunning, selectedId]);
+  }, [isRunning, shownId]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedId) {
+    if (!shownId) {
       queueMicrotask(() => { if (!cancelled) setExecution(null); });
       return () => { cancelled = true; };
     }
     (async () => {
       try {
-        const detail = await api.suiteRun(selectedId);
+        const detail = await api.suiteRun(shownId);
         if (!cancelled) setExecution(detail);
       } catch (err) {
         if (!cancelled) toast.error(err.message);
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedId, toast]);
+  }, [shownId, toast]);
 
   return (
     <main className="page">
@@ -236,12 +247,18 @@ export function ExecutionsPage({
           Every run of a Test Set, scenario by scenario, with the report a build server reads.
         </p>
         </div>
+        {/* Counts withheld until they mean something: this header renders while
+            the list is still loading, and a pair of hollow zeros would say the
+            platforms are empty a moment before saying they are not. */}
+        <PlatformTabs
+          value={platform}
+          onChange={setPlatform}
+          counts={loading ? null : counts}
+        />
       </header>
 
       <div className="suites-layout">
         <aside className="suite-list card">
-          <PlatformFilter value={platform} onChange={setPlatform} counts={counts} />
-
           {loading ? (
             <p className="muted small">Loading…</p>
           ) : executions.length === 0 ? (
@@ -258,15 +275,15 @@ export function ExecutionsPage({
               {visible.map((item) => (
                 <li key={item.id}>
                   <button
-                    className={`execution-item ${item.id === selectedId ? 'active' : ''}`}
+                    className={`execution-item ${item.id === shownId ? 'active' : ''}`}
                     onClick={() => setSelectedId(item.id)}
                   >
                     <div className="execution-item-main">
                       <span className="execution-name">{item.suite_name || 'Test Set'}</span>
-                      <span className="execution-when">
-                        <PlatformTag kind={item.kind} />
-                        {whenShort(item.started_at)}
-                      </span>
+                      {/* The platform is the tab above, not a badge on every
+                          row — repeated down the list it only crowded the name
+                          and the time, which are what tell the rows apart. */}
+                      <span className="execution-when">{whenShort(item.started_at)}</span>
                     </div>
                     {/* Status, not just a score: a failed execution that never
                         got a scenario off the ground reads 0/0, exactly like
