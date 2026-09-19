@@ -198,10 +198,13 @@ function ModelCard({ onSaved }) {
             </p>
           </div>
         </div>
+        {/* The provider object is always returned, `configured` and all — so
+            keying the green pill on its mere presence showed "connected" with
+            no API key saved. */}
         {active && (
-          <span className="run-status passed">
+          <span className={`run-status ${active.configured ? 'passed' : 'failed'}`}>
             <span className="status-dot" />
-            {active.providerLabel}
+            {active.configured ? active.providerLabel : `${active.providerLabel} — no key`}
           </span>
         )}
       </div>

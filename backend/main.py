@@ -539,14 +539,14 @@ async def create_web_session(req: WebSessionRequest):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
-    note = None
     try:
         # Every site opens the same way: in the background, shown inside QAi.
         # There used to be a fallback here that reopened a refusing site in a
         # visible browser window. It is gone — a second window on the desktop
         # is not what "open this page" should do, and the sites that refuse a
         # background browser serve it a blank shell whether or not the window
-        # is visible, so the window bought nothing.
+        # is visible, so the window bought nothing. Nothing is left to report
+        # about the open, so there is no longer a `note` in the response.
         target = await WebTarget.launch(
             url=url, viewport=req.viewport, headless=req.headless,
             browser_name=req.browser, width=req.width, height=req.height,
@@ -558,7 +558,6 @@ async def create_web_session(req: WebSessionRequest):
     return {
         "status": "success",
         "sessionId": target.session_id,
-        "note": note,
         "device": {
             "udid": target.session_id,
             "platform": "Web",

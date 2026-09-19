@@ -74,18 +74,25 @@ function StepScreenshot({ runId, stepId }) {
   const [loading, setLoading] = useState(false);
   const [zoomed, setZoomed] = useState(false);
 
+  // A step whose frame was never stored 404s. Remembered rather than retried:
+  // the button used to flash its spinner and return to idle with nothing said,
+  // and every further click repeated the round-trip, so it read as broken.
+  const [failed, setFailed] = useState(null);
+
   const load = async () => {
-    if (image || loading) return;
+    if (image || loading || failed) return;
     setLoading(true);
     try {
       const data = await api.stepScreenshot(runId, stepId);
       setImage(data.screenshot);
-    } catch {
-      setImage(null);
+    } catch (err) {
+      setFailed(err.message || 'No screenshot was recorded for this step.');
     } finally {
       setLoading(false);
     }
   };
+
+  if (failed) return <span className="muted small">{failed}</span>;
 
   if (image) {
     const src = `data:image/png;base64,${image}`;

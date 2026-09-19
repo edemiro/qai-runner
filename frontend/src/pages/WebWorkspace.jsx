@@ -105,7 +105,7 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
           <button
             className={`chip-toggle ${visible ? 'on' : ''}`}
             onClick={() => setVisible((value) => !value)}
-            title="Some sites refuse headless browsers. QAi retries visibly on its own."
+            title="Headless is faster but most sites refuse it outright — leave this on unless you are testing that."
           >
             {visible ? <Eye size={13} /> : <EyeOff size={13} />}
             {visible ? 'Visible' : 'Headless'}
@@ -178,7 +178,7 @@ export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmC
   // Holding or scrolling means the page is changing under the user's hand, so
   // the stream is temporarily sped up — otherwise the mirror lags a step behind
   // and the interaction feels unresponsive.
-  const { screenshot, connection, lostReason } = useScreenStream(
+  const { screenshot, connection, lostReason, retry: retryStream } = useScreenStream(
     sessionId, holding || wheeling ? Math.max(fps, 15) : fps, Boolean(sessionId),
   );
   const pageLost = connection === 'lost';
@@ -236,6 +236,9 @@ export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmC
       const data = await api.reopenWebSession(sessionId);
       setTree(null);
       setSelected(null);
+      // The stream stopped for good when the page was declared lost; without
+      // this the viewer keeps showing the banner over a session that is live.
+      retryStream();
       toast.success(`Reopened ${data.title || data.url}.`);
     } catch (err) {
       toast.error(err.message);
@@ -474,6 +477,20 @@ export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmC
     w.stop = setTimeout(() => setWheeling(false), 500);
   };
 
+  // The coalescing frame and the "still scrolling" timer outlive the component
+  // otherwise: closing the page mid-scroll fired a gesture at a session being
+  // torn down and set state after unmount.
+  useEffect(() => {
+    const w = wheelRef.current;
+    return () => {
+      if (w.raf) cancelAnimationFrame(w.raf);
+      clearTimeout(w.stop);
+      w.raf = 0;
+      w.dx = 0;
+      w.dy = 0;
+    };
+  }, []);
+
   const highlight = useMemo(() => {
     const node = hovered || selected;
     if (!node) return null;
@@ -520,13 +537,17 @@ export function WebWorkspace({ session, agent, onOpen, onNavigate, onClose, llmC
             <span className="status-dot" />
             {connection === 'live' ? 'live' : connection === 'lost' ? 'page lost' : connection}
           </span>
+          {/* States what this session is, not a switch that happened: the
+              headless→headed fallback was removed from the backend, but the
+              badge kept claiming the site had refused a background browser —
+              on every page opened with the default toggle. */}
           {session.device.headless === false && (
             <span
               className="badge virtual"
               title={
-                'Bu site ekransız (arka planda çalışan) tarayıcıları kabul etmiyor, '
-                + 'QAi pencereli tam bir tarayıcıya geçti. Pencere ekran dışında '
-                + 'tutuluyor, masaüstünde görünmez. Yapmanız gereken bir şey yok.'
+                'Bu oturum pencereli (headed) bir tarayıcı kullanıyor — çoğu site '
+                + 'ekransız tarayıcıyı reddettiği için varsayılan bu. Pencere ekran '
+                + 'dışında tutuluyor, masaüstünde görünmez.'
               }
             >
               tam tarayıcı

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 
 /**
@@ -16,6 +16,11 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
   const [connection, setConnection] = useState('idle');
   const [lostReason, setLostReason] = useState(null);
   const socketRef = useRef(null);
+  // Bumped to tear the stream down and build it again. Once a session is
+  // declared lost the loop stops for good and the effect's own deps never
+  // change, so reopening the page left the viewer stuck on "page lost" with a
+  // live session behind it.
+  const [attempt, setAttempt] = useState(0);
   // Read through a ref so retuning the rate never tears down the stream.
   const fpsRef = useRef(fps);
 
@@ -43,8 +48,19 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
     let pollTimer = null;
     let socket = null;
 
+    // One failed socket fires both onerror and onclose, and each used to start
+    // its own tick chain — two concurrent loops at double the request rate for
+    // the life of the session.
+    let polling = false;
+    // A page that crashed answers 502 rather than 404. Treated as fatal only
+    // after a few in a row, so a single blip does not tear a live stream down,
+    // but a dead page stops being polled forever and does raise the banner.
+    let consecutiveErrors = 0;
+    const ERROR_LIMIT = 3;
+
     const startPolling = () => {
-      if (cancelled) return;
+      if (cancelled || polling) return;
+      polling = true;
       setConnection('polling');
       const tick = async () => {
         if (cancelled) return;
@@ -52,6 +68,7 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
         try {
           const data = await api.screenshot(sessionId);
           if (!cancelled && data?.screenshot) {
+            consecutiveErrors = 0;
             setScreenshot(data.screenshot);
             setConnection('polling');
           }
@@ -63,12 +80,18 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
             keepPolling = false;
             setConnection('lost');
             setLostReason('the session was closed');
+          } else if ((consecutiveErrors += 1) >= ERROR_LIMIT) {
+            keepPolling = false;
+            setConnection('lost');
+            setLostReason('the page stopped answering');
           } else {
             setConnection('error');
           }
         } finally {
           if (!cancelled && keepPolling) {
             pollTimer = setTimeout(tick, Math.round(1000 / fpsRef.current));
+          } else {
+            polling = false;
           }
         }
       };
@@ -126,7 +149,7 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
     };
     // `fps` is deliberately absent: rate changes are pushed over the open
     // socket by the effect below rather than by reconnecting the stream.
-  }, [sessionId, enabled]);
+  }, [sessionId, enabled, attempt]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -135,7 +158,10 @@ export function useScreenStream(sessionId, fps = 2, enabled = true) {
     }
   }, [fps]);
 
-  return { screenshot, connection, lostReason };
+  // Called after the page has been reopened server-side, to rebuild the stream.
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+  return { screenshot, connection, lostReason, retry };
 }
 
 function connectionIsUnusable(socket) {

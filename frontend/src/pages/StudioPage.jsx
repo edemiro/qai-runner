@@ -360,6 +360,17 @@ export function StudioPage({
             The app under test has to be uploaded to BrowserStack already — QAi picks
             from what is there rather than uploading anything itself.
           </p>
+          {/* The physical-device tab is hidden while nothing is plugged in, so
+              this is the only place left to say that a phone on the desk is
+              also an option. */}
+          <p className="muted-tiny">
+            Or plug in an Android device with USB debugging enabled (<code>adb devices</code>),
+            or an iPhone you have trusted this computer on (<code>idevice_id -l</code>) — booted
+            emulators and simulators are picked up automatically.
+          </p>
+          <button className="btn btn-ghost btn-sm" onClick={scan} disabled={scanning}>
+            {scanning ? 'Scanning…' : 'Scan for a connected device'}
+          </button>
           {onOpenSettings && (
             <button className="btn btn-primary" onClick={onOpenSettings}>
               Open Settings
@@ -383,16 +394,19 @@ export function StudioPage({
           </p>
         </div>
       ) : shown.length === 0 ? (
+        /* Only reachable with a filter that excludes every connected device:
+           with none connected at all, effectiveSource has already fallen
+           through to the cloud. This used to offer adb guidance and a "Scan
+           again" button for a state it could never be in. */
         <div className="empty-state">
           <Boxes size={34} />
-          <h3>No devices detected</h3>
+          <h3>No connected device matches that</h3>
           <p>
-            Plug in an Android device with USB debugging enabled (<code>adb devices</code>), or connect an
-            iPhone and trust this computer (<code>idevice_id -l</code>). Booted emulators and simulators are
-            picked up automatically.
+            {devices.length} device{devices.length === 1 ? ' is' : 's are'} connected.
+            Try the model name on its own, or clear the filter.
           </p>
-          <button className="btn btn-primary" onClick={scan} disabled={scanning}>
-            {scanning ? 'Scanning…' : 'Scan again'}
+          <button className="btn btn-ghost" onClick={() => setFilter('')}>
+            Clear filter
           </button>
         </div>
       ) : (

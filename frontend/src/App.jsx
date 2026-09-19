@@ -215,11 +215,6 @@ export default function App() {
         setTree(null);
         setSelectedElement(null);
         toast.success(`Opened ${data.device.title || data.device.name}.`);
-        // The backend switches to a windowed browser when a site refuses a
-        // screenless one. Worth mentioning — it explains the badge and the
-        // slower open — but it is not a warning: the page loaded, and there is
-        // nothing for the user to do about it.
-        if (data.note) toast.info(data.note);
       } catch (err) {
         toast.error(err.message);
       }

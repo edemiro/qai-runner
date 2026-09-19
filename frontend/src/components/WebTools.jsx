@@ -197,7 +197,12 @@ export function WebTools({ sessionId, onClose }) {
                   <button
                     className="btn-icon danger"
                     onClick={async () => {
-                      await api.deleteAuthProfile(profile.name);
+                      try {
+                        await api.deleteAuthProfile(profile.name);
+                      } catch (err) {
+                        toast.error(err.message);
+                        return;
+                      }
                       refresh();
                     }}
                     aria-label={`Delete ${profile.name}`}
@@ -237,12 +242,18 @@ export function WebTools({ sessionId, onClose }) {
             </button>
             <button
               className="btn btn-sm"
-              onClick={() => {
+              onClick={async () => {
+                try {
+                  await api.setRoutes(sessionId, []);
+                } catch (err) {
+                  // Not cleared optimistically: showing an empty box for rules
+                  // the page is still serving is worse than not clearing it.
+                  toast.error(err.message);
+                  return;
+                }
                 setRulesText('[]');
-                api.setRoutes(sessionId, []).then(() => {
-                  setActiveRules([]);
-                  toast.info('Rules cleared.');
-                });
+                setActiveRules([]);
+                toast.info('Rules cleared.');
               }}
             >
               Clear
@@ -311,7 +322,12 @@ export function WebTools({ sessionId, onClose }) {
                   <button
                     className="btn-icon danger"
                     onClick={async () => {
-                      await api.deleteBaseline(baseline.name);
+                      try {
+                        await api.deleteBaseline(baseline.name);
+                      } catch (err) {
+                        toast.error(err.message);
+                        return;
+                      }
                       refresh();
                     }}
                     aria-label={`Delete ${baseline.name}`}
