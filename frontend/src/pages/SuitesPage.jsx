@@ -9,6 +9,7 @@ import {
   Loader2,
   Play,
   Plus,
+  Repeat,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -1098,6 +1099,28 @@ export function SuitesPage({
                             </span>
                           )}
                           {item.dataset && <span className="pill">×{item.dataset.length}</span>}
+
+                          {/* What the next run already knows how to do. A step
+                              with a recording is replayed rather than reasoned
+                              about, so a fully recorded scenario runs without
+                              costing a single model call — and a tester should
+                              be able to see that on the scenario rather than
+                              work it out from a bill. */}
+                          {item.recordedSteps > 0 && (
+                            <span
+                              className={`recorded-tag ${
+                                item.recordedSteps === item.stepCount ? 'full' : 'partial'
+                              }`}
+                              title={item.recordedSteps === item.stepCount
+                                ? 'Every step was recorded on a green run — the next run replays it and asks the model nothing'
+                                : `${item.recordedSteps} of ${item.stepCount} steps replay from a recording; the rest are worked out again`}
+                            >
+                              <Repeat size={11} />
+                              {item.recordedSteps === item.stepCount
+                                ? 'Recorded'
+                                : `Recorded ${item.recordedSteps}/${item.stepCount}`}
+                            </span>
+                          )}
                           {/* A tag that just repeats the layer is noise — the layer
                               chip already says it, so it is dropped here. */}
                           {item.tags

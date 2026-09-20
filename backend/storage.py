@@ -1319,6 +1319,13 @@ def _row_to_case(row: sqlite3.Row) -> Dict[str, Any]:
             case[field] = json.loads(case[field]) if case.get(field) else empty
         except Exception:
             case[field] = empty
+    # How much of this scenario the next run already knows how to do. A step
+    # with a recording is replayed rather than reasoned about, so this is the
+    # difference between a run that costs a model call per action and one that
+    # costs none — worth saying on the scenario rather than leaving a tester to
+    # infer it from a bill.
+    case["recordedSteps"] = sum(1 for step in case["steps"] if step.get("recorded"))
+    case["stepCount"] = len(case["steps"])
     # Computed rather than stored: the answer changes the moment someone fills
     # a field in, and two copies of it would disagree.
     case["missingData"] = missing_data(case)

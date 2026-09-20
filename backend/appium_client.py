@@ -185,6 +185,23 @@ async def activate_app(session_id: str, app_id: str) -> bool:
     return ok
 
 
+async def terminate_app(session_id: str, app_id: str) -> bool:
+    """Close the app, leaving what it wrote to disk alone.
+
+    This is how one scenario stops handing its leftovers to the next: the form
+    state goes, the saved sign-in stays.
+    """
+    res = await post(
+        f"/session/{session_id}/appium/device/terminate_app", {"appId": app_id}, timeout=20.0,
+    )
+    if res is not None and res.status_code == 200:
+        return True
+    ok, _ = await execute(
+        session_id, "mobile: terminateApp", {"bundleId": app_id, "appId": app_id},
+    )
+    return ok
+
+
 async def active_app_info(session_id: str, platform: str) -> Optional[str]:
     """The id of whatever is on screen right now, when the driver will say."""
     if platform.lower() == "ios":
@@ -224,6 +241,50 @@ async def delete_session(session_id: str) -> bool:
     res = await delete(f"/session/{session_id}")
     release_session(session_id)
     return res is not None and res.status_code == 200
+
+
+async def tap_by_text(session_id: str, platform: str, label: str) -> bool:
+    """Press the control whose own label is exactly this, if it is on screen.
+
+    Exact rather than contains: "Continue" must not press "Continue without
+    saving", and on a screen full of prose a substring match will find a
+    paragraph before it finds a button.
+
+    Returns False when it is not there, which is the ordinary answer — these
+    are screens an app shows once, and most launches will not show them.
+    """
+    quoted = label.replace('"', '\\"')
+    if platform.lower() == "ios":
+        # name, label and value are three attributes iOS fills inconsistently;
+        # a button labelled in the UI can be named in any one of them.
+        xpath = (
+            f'//*[@name="{quoted}" or @label="{quoted}" or @value="{quoted}"]'
+        )
+    else:
+        xpath = f'//*[@text="{quoted}" or @content-desc="{quoted}"]'
+
+    res = await post(f"/session/{session_id}/element",
+                     {"using": "xpath", "value": xpath}, timeout=8.0)
+    if res is None or res.status_code != 200:
+        return False
+    try:
+        value = res.json().get("value") or {}
+        element_id = value.get("ELEMENT") or next(iter(value.values()), None)
+    except Exception:  # noqa: BLE001
+        return False
+    if not element_id:
+        return False
+    clicked = await post(f"/session/{session_id}/element/{element_id}/click",
+                         {}, timeout=12.0)
+    return clicked is not None and clicked.status_code == 200
+
+
+async def screen_has_text(session_id: str, platform: str, needles) -> bool:
+    """Whether any of these appear anywhere on screen. Reads the source once."""
+    source = await get_source(session_id)
+    if not source:
+        return False
+    return any(needle.lower() in source.lower() for needle in needles)
 
 
 async def get_source(session_id: str) -> Optional[str]:

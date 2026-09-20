@@ -8,7 +8,9 @@ sequencing down, which is where the bugs were.
 
 import asyncio
 import time
+import unittest
 from typing import List, Optional
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -226,3 +228,126 @@ def test_prepare_never_raises_when_the_device_stops_answering(driver):
     mobile_session.appium.query_app_state = boom
     # A device that will not answer must still leave the tester with a session.
     assert run(mobile_session.prepare_session("s", "iOS", "com.thy.dev", {}, window_s=2)) is not None
+
+
+class WalkingPastTheWayIn(unittest.IsolatedAsyncioTestCase):
+    """The welcome carousel, the sign-in wall, the "what's new" sheet.
+
+    None of it is the feature under test, and all of it used to be dismissed by
+    the agent: measured on the real app, four model calls and roughly 35,000
+    tokens on the first step of every single mobile run, spent tapping Skip.
+    """
+
+    def _phone(self, screens):
+        """A phone that shows each screen in turn as taps land on it."""
+        state = {"i": 0}
+
+        async def has_text(_sid, _platform, needles):
+            here = screens[min(state["i"], len(screens) - 1)]
+            return any(n.lower() in here.lower() for n in needles)
+
+        async def tap(_sid, _platform, label):
+            here = screens[min(state["i"], len(screens) - 1)]
+            if label in here:
+                state["i"] += 1
+                return True
+            return False
+
+        return state, has_text, tap
+
+    async def _walk(self, screens):
+        state, has_text, tap = self._phone(screens)
+        with patch.object(mobile_session.appium, "screen_has_text", has_text), \
+             patch.object(mobile_session.appium, "tap_by_text", tap), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            return await mobile_session.settle_onboarding("s", "iOS"), state
+
+    async def test_it_walks_a_carousel_to_the_home_screen(self):
+        taps, _ = await self._walk([
+            "Skip Next", "Continue as a guest Sign in", "Got it",
+            "Book a flight Check-in",
+        ])
+        self.assertEqual(taps, 3)
+
+    async def test_a_launch_that_lands_on_the_home_screen_costs_one_look(self):
+        """Every launch after the first. It must not tap anything."""
+        taps, state = await self._walk(["Book a flight Uçuş ara"])
+        self.assertEqual(taps, 0)
+        self.assertEqual(state["i"], 0)
+
+    async def test_it_stops_when_nothing_matches_rather_than_guessing(self):
+        taps, _ = await self._walk(["Bir şey Başka bir şey"])
+        self.assertEqual(taps, 0)
+
+    async def test_it_is_bounded_so_it_cannot_walk_into_the_app(self):
+        """A screen that always offers Continue — a booking form — must not be
+        pressed forever. Four screens is an onboarding; forty is the app."""
+        state, has_text, tap = self._phone(["Continue"])
+        with patch.object(mobile_session.appium, "screen_has_text", has_text), \
+             patch.object(mobile_session.appium, "tap_by_text", tap), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            taps = await mobile_session.settle_onboarding("s", "iOS")
+        self.assertEqual(taps, mobile_session.MAX_SKIPS)
+
+    def test_it_never_signs_in_buys_or_refuses(self):
+        """These are the taps that would change what the run is testing."""
+        labels = " | ".join(mobile_session.SKIP_LABELS).lower()
+        for forbidden in ("sign in", "giriş yap", "register", "üye ol", "pay",
+                          "satın al", "don't allow", "izin verme", "reddet"):
+            self.assertNotIn(forbidden, labels, forbidden)
+
+    def test_the_unambiguous_way_out_is_preferred(self):
+        """A screen offering both "Continue as a guest" and "Continue" must
+        take the door, not the button that may submit something."""
+        order = list(mobile_session.SKIP_LABELS)
+        self.assertLess(order.index("Continue as a guest"), order.index("Continue"))
+        self.assertLess(order.index("Skip"), order.index("OK"))
+
+
+class StartingEachScenarioFromTheSamePlace(unittest.IsolatedAsyncioTestCase):
+    """A web case gets a new browser, so it starts from nothing. Mobile cases
+    share one session, and the app remembers.
+
+    Measured on the real set: a scenario left ESB in the destination and handed
+    it to the next one, which had been written to expect an empty field and
+    failed on a value it never set. That is not flakiness — it is the second
+    scenario reading the first one's leftovers, and it makes every mobile set
+    order-dependent.
+    """
+
+    async def test_the_app_is_closed_and_reopened(self):
+        calls = []
+        with patch.object(mobile_session.appium, "terminate_app",
+                          AsyncMock(side_effect=lambda *a: calls.append("terminate"))), \
+             patch.object(mobile_session.appium, "activate_app",
+                          AsyncMock(side_effect=lambda *a: calls.append("activate"))), \
+             patch.object(mobile_session, "settle_permissions", AsyncMock(return_value=0)), \
+             patch.object(mobile_session, "settle_onboarding", AsyncMock(return_value=0)), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            ok = await mobile_session.restart_app("s", "iOS", "com.thy.app")
+        self.assertTrue(ok)
+        self.assertEqual(calls, ["terminate", "activate"])
+
+    async def test_the_way_in_is_walked_again_afterwards(self):
+        """A restarted app shows its permission prompts and its carousel once
+        more; leaving those to the agent is the cost this whole thing exists
+        to avoid."""
+        walked = AsyncMock(return_value=1)
+        with patch.object(mobile_session.appium, "terminate_app", AsyncMock()), \
+             patch.object(mobile_session.appium, "activate_app", AsyncMock()), \
+             patch.object(mobile_session, "settle_permissions", AsyncMock(return_value=0)), \
+             patch.object(mobile_session, "settle_onboarding", walked), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            await mobile_session.restart_app("s", "iOS", "com.thy.app")
+        walked.assert_awaited()
+
+    async def test_a_session_with_no_app_is_left_alone(self):
+        """Nothing to restart, and terminating whatever happens to be in front
+        would be closing the tester's own screen."""
+        self.assertFalse(await mobile_session.restart_app("s", "iOS", None))
+
+    async def test_a_driver_that_refuses_does_not_fail_the_run(self):
+        with patch.object(mobile_session.appium, "terminate_app",
+                          AsyncMock(side_effect=RuntimeError("no"))), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            self.assertFalse(await mobile_session.restart_app("s", "iOS", "com.thy.app"))

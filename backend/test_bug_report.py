@@ -194,3 +194,44 @@ def test_every_code_it_can_return_is_described():
         assert bug_report.CODES[code], code
     assert bug_report.NOT_APP_DEFECTS <= set(bug_report.CODES)
     assert bug_report.classify(r) in bug_report.CODES
+
+
+# --- raised by the run itself ---------------------------------------------- #
+
+class RaisedAutomatically:
+    """A scenario that fails during an execution files what it found, while it
+    is still known — but only when what it found was the app's fault.
+
+    The line matters more than the convenience. A tracker that mixes "the app
+    is broken" with "the scenario ran out of actions" is one whose triage is
+    worthless, and QAi is wrong often enough — an expected string no page
+    renders, a limit a scenario invented — that an automatic bug is a lead
+    rather than a finding.
+    """
+
+
+def test_only_a_defect_of_the_app_is_filed_without_being_read():
+    for message, filed in [
+        ("hiçbir sonuç gelmedi", True),
+        ("Step 1 used 12 actions without reaching its expected result.", False),
+        ("kapandı — closed as passed without verifying the expected result.", False),
+    ]:
+        draft = bug_report.compose(run(scenarioSteps=[
+            sstep(1, "failed", "Tap search", "results show", message)]))
+        assert draft["isAppDefect"] is filed, message
+
+
+def test_a_stopped_run_files_nothing():
+    """Someone pressed stop. There is no finding in that."""
+    assert bug_report.compose(run(error="Stopped by the user."))["isAppDefect"] is False
+
+
+def test_a_draft_carries_what_a_reader_needs_to_act():
+    """Filed unread, so it has to stand on its own: what was expected, what
+    happened instead, and the screen it happened on."""
+    draft = bug_report.compose(run(scenarioSteps=[
+        sstep(1, "failed", "Tap Uçuş ara", "a result list appears", "boş liste döndü")]))
+    assert "a result list appears" in draft["detail"]
+    assert "boş liste döndü" in draft["detail"]
+    assert draft["title"]
+    assert draft["code"] in bug_report.CODES

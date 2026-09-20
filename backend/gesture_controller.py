@@ -164,7 +164,12 @@ class MobileGestureController:
                 size = await appium.get_window_size(session_id)
                 mid_y = size["height"] // 2
                 return await cls.perform_swipe(session_id, 8, mid_y, int(size["width"] * 0.6), mid_y, 400)
-            if key == "enter":
+            # The keyboard's own return key, whatever this field has labelled
+            # it. A search box titles it "Search" and a form "Go", and the
+            # agent asks for the one it can see — which came back "Key
+            # 'search' is not supported on iOS" while the field sat there with
+            # the key on screen. They all submit the field.
+            if key in ("enter", "search", "go", "done", "return", "send", "next"):
                 return await cls.perform_type_text(session_id, "\n")
             print(f"[gesture] Unsupported iOS key: {key_name}")
             return False

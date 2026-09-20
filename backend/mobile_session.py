@@ -75,6 +75,97 @@ def _grant_button(buttons: list) -> Optional[str]:
     return None
 
 
+# The app's own way of getting in the way: a welcome carousel, a sign-in wall
+# with a guest door, a "what's new" sheet. None of it is the feature under
+# test, and every one of them used to be dismissed by the agent — four model
+# calls and roughly 35,000 tokens on the first step of every single mobile
+# run, spent tapping Skip.
+#
+# Ordered by how certain the tap is. A label that can only mean "get me past
+# this" comes first; the ambiguous ones — Continue, OK — are last, so on a
+# screen offering both, the unambiguous one is pressed. Nothing here signs in,
+# buys, accepts terms or refuses a permission.
+SKIP_LABELS = (
+    "Continue as a guest", "Misafir olarak devam et", "Misafir Olarak Devam Et",
+    "Skip", "Atla", "Geç",
+    "Maybe later", "Daha sonra", "Şimdi değil", "Not now",
+    "Got it", "Anladım",
+    "Done", "Bitti",
+    "Next", "İleri",
+    "Close", "Kapat",
+    "Continue", "Devam", "Devam Et",
+    "OK", "Tamam",
+)
+
+# Where the walking stops. Seeing one of these means the app's own first screen
+# is up and anything still tappable belongs to the feature, not to the way in.
+# Without a marker the loop would keep pressing "Continue" on a booking form.
+HOME_MARKERS = (
+    "Book a flight", "Uçuş ara", "BOOK A FLIGHT",
+    "Check-in", "My flights", "Uçuşlarım",
+)
+
+# Bounded on purpose. A carousel is three or four screens; anything longer is
+# not an onboarding, it is the app, and pressing on would be walking into it.
+MAX_SKIPS = 8
+
+
+async def restart_app(session_id: str, platform: str, app_id: Optional[str]) -> bool:
+    """Put the app back on its own first screen, between scenarios.
+
+    A web case gets a new browser, so it starts from nothing. Mobile cases
+    share one session, and the app remembers: a scenario that left ESB in the
+    destination handed it to the next one, which had been written to expect an
+    empty field and failed on a value it never set. That is not flakiness, it
+    is the second scenario reading the first one's leftovers — and it makes
+    every mobile set order-dependent.
+
+    Closing and reopening clears what the app holds in memory without touching
+    what it holds on disk, so a saved sign-in survives and a half-filled form
+    does not.
+    """
+    if not app_id:
+        return False
+    try:
+        await appium.terminate_app(session_id, app_id)
+        await asyncio.sleep(0.6)
+        await appium.activate_app(session_id, app_id)
+        await asyncio.sleep(1.2)
+        await settle_permissions(session_id, platform, window_s=4.0)
+        await settle_onboarding(session_id, platform)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[mobile] could not restart {app_id}: {exc}")
+        return False
+
+
+async def settle_onboarding(
+    session_id: str, platform: str, max_taps: int = MAX_SKIPS,
+) -> int:
+    """Walk the standard screens until the app's own first screen is up.
+
+    Returns how many were dismissed. Stops the moment nothing matches, which
+    is the usual case on every launch after the first — so a session that
+    opens straight onto the home screen pays one screen read for this.
+    """
+    tapped = 0
+    for _ in range(max_taps):
+        if await appium.screen_has_text(session_id, platform, HOME_MARKERS):
+            break
+        pressed = None
+        for label in SKIP_LABELS:
+            if await appium.tap_by_text(session_id, platform, label):
+                pressed = label
+                break
+        if pressed is None:
+            break
+        tapped += 1
+        print(f"[mobile] skipped “{pressed}”")
+        # The next screen is often already animating in behind this one.
+        await asyncio.sleep(1.0)
+    return tapped
+
+
 async def settle_permissions(
     session_id: str, platform: str, window_s: float = DEFAULT_WINDOW_S,
 ) -> int:
@@ -202,5 +293,16 @@ async def prepare_session(
             print(f"[mobile] {app_id} would not come to the foreground")
     except Exception as exc:
         print(f"[mobile] could not foreground {app_id}: {exc}")
+
+    # Last, because it needs the app in front and the prompts out of the way:
+    # a welcome carousel cannot be walked while an OS alert owns the screen.
+    try:
+        skipped = await settle_onboarding(session_id, platform)
+        if skipped:
+            print(f"[mobile] walked past {skipped} screen(s) to the app's own")
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort throughout: whatever is left standing the agent still
+        # handles the way it did before, at the cost this exists to avoid.
+        print(f"[mobile] could not settle the onboarding: {exc}")
 
     return app_id

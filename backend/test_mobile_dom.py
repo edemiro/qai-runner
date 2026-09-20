@@ -196,3 +196,52 @@ class TestMobileDOM(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SCREEN_BEHIND_AN_OVERLAY = """
+<hierarchy rotation="0">
+  <XCUIElementTypeApplication bounds="[0,0][440,956]" displayed="true" visible="true">
+    <XCUIElementTypeStaticText name="Cabin" bounds="[210,272][260,290]"
+      displayed="true" visible="false"/>
+    <XCUIElementTypeButton name="ECONOMY" bounds="[210,288][270,306]"
+      displayed="true" visible="false"/>
+    <XCUIElementTypeStaticText name="Off the screen" bounds="[0,4000][100,4020]"
+      displayed="true" visible="false"/>
+    <XCUIElementTypeButton name="Done" bounds="[0,900][440,940]"
+      displayed="true" visible="true"/>
+  </XCUIElementTypeApplication>
+</hierarchy>
+"""
+
+
+class TextTheDriverSaysIsNotVisible(unittest.TestCase):
+    """iOS decides `visible` by hit-testing, so a word under a keyboard
+    accessory or a sheet being dismissed comes back hidden while the run's own
+    screenshot shows it plainly.
+
+    Measured on the real app: an assertion for "ECONOMY" failed against a
+    screen with ECONOMY on it, because the booker sat behind the picker's Done
+    bar and every one of its views was marked visible="false".
+    """
+
+    def _screen(self):
+        return MobileDOMManager(SCREEN_BEHIND_AN_OVERLAY, "iOS", 440, 956)
+
+    def test_the_strict_reading_still_misses_it(self):
+        """Unchanged, because a caller asking only for what is hit-testable
+        should still get that answer."""
+        self.assertFalse(self._screen().contains_text("ECONOMY"))
+
+    def test_position_is_the_second_opinion(self):
+        self.assertTrue(self._screen().contains_text("ECONOMY", include_hidden=True))
+
+    def test_the_three_answers_are_told_apart(self):
+        screen = self._screen()
+        self.assertEqual(screen.find_text("Done"), "visible")
+        self.assertEqual(screen.find_text("ECONOMY"), "hidden")
+        self.assertIsNone(screen.find_text("Business"))
+
+    def test_something_genuinely_off_the_screen_is_not_rescued(self):
+        """Four thousand pixels down is not on the screen by any reading, and
+        counting it would make every assertion pass."""
+        self.assertIsNone(self._screen().find_text("Off the screen"))

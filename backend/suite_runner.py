@@ -23,6 +23,8 @@ from uuid import uuid4
 
 import agent
 import drivers
+import bug_report
+import mobile_session
 import storage
 import config
 from drivers.web import WebTarget, run_artifact_dir
@@ -238,6 +240,41 @@ def _keep_what_worked(
             print(f"[suite] kept the recording for {kept} step(s) of {case['id']}")
     except Exception as exc:  # noqa: BLE001
         print(f"[suite] could not keep the recording for {case['id']}: {exc}")
+
+
+def _raise_bug_if_it_found_one(run_id: Optional[str], case: Dict[str, Any]) -> None:
+    """File what a failed scenario turned out to mean, while it is still known.
+
+    Only when the classifier calls it a defect of the app. A scenario that ran
+    out of actions, closed a step without proving it, or was stopped by hand
+    has failed for a reason that belongs to the run, and a tracker that mixes
+    those with real findings is a tracker whose triage is worthless — which is
+    why bugs raised by hand still go through a draft somebody reads.
+
+    Raised open and said to be unreviewed, because nobody has looked at it: QAi
+    is wrong often enough — an expected string no page renders, a limit a
+    scenario invented — that an automatic bug is a lead, not a finding.
+    """
+    if not run_id:
+        return
+    try:
+        draft = bug_report.draft_for_run(run_id)
+        if not draft or not draft.get("isAppDefect") or draft.get("existingBugId"):
+            return
+        storage.create_bug(
+            title=draft["title"],
+            detail=(
+                "Raised automatically when this scenario failed. Nobody has "
+                "reviewed it yet.\n\n" + (draft.get("detail") or "")
+            ),
+            code=draft.get("code"), severity=draft.get("severity"),
+            run_id=run_id, case_id=case.get("id"), case_name=case.get("name"),
+            suite_name=case.get("suite_name"), url=draft.get("url"),
+            screenshot=draft.get("screenshot"),
+        )
+        print(f"[suite] raised a bug for {case.get('name', run_id)[:60]}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[suite] could not raise a bug for {run_id}: {exc}")
 
 
 def _record_unstarted_case(
@@ -457,6 +494,7 @@ async def _execute_one(
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
             _keep_what_worked(run_id, case, row)
+            _raise_bug_if_it_found_one(run_id, case)
         else:
             run_id = _record_unstarted_case(
                 case, suite_run_id, "web", error, row, label,
@@ -483,7 +521,7 @@ async def _run_mobile_case(
     A web case gets its own browser, which is what makes parallel runs safe.
     There is only one phone, so mobile cases share the open session and run one
     after another — the isolation a browser gives for free has to be bought
-    here with sequence.
+    here with sequence, and with the restart below.
     """
     case = execution["case"]
     row = execution["row"]
@@ -565,6 +603,7 @@ async def _run_mobile_case(
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error)
             _keep_what_worked(run_id, case, row)
+            _raise_bug_if_it_found_one(run_id, case)
         else:
             run_id = _record_unstarted_case(
                 case, suite_run_id, "mobile", error, row, label,
@@ -774,7 +813,25 @@ async def run_suite(
     if is_mobile:
         async def sequential():
             results = []
-            for execution in executions:
+            # Read once, and never at the cost of the run: a device that will
+            # not describe itself is a device the scenarios can still be driven
+            # against, so the restart is skipped rather than the suite lost.
+            try:
+                described = device.describe() or {}
+                restart = (described.get("appId"), described.get("platform", ""),
+                           device.session_id)
+            except Exception:  # noqa: BLE001
+                restart = None
+
+            for index, execution in enumerate(executions):
+                # Between scenarios, not before the first: the session was just
+                # opened on the app's own screen, and closing it again only to
+                # reopen it would cost a restart for nothing. From the second
+                # on it is what keeps one scenario's leftovers — a destination
+                # still filled in, a panel left open — out of the next one.
+                if index and restart and restart[0]:
+                    app_id, platform_name, session_id = restart
+                    await mobile_session.restart_app(session_id, platform_name, app_id)
                 results.append(
                     await _run_mobile_case(execution, device, suite_run_id, options, queue)
                 )

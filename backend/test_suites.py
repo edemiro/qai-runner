@@ -535,7 +535,7 @@ def test_a_mobile_suite_runs_one_case_at_a_time():
              patch.object(runner.storage, "select_cases", lambda i, t=None: cases), \
              patch.object(runner.storage, "create_suite_run", lambda *a, **k: "sr"), \
              patch.object(runner.storage, "finish_suite_run", lambda *a, **k: None), \
-             patch.object(runner, "_connected_device", lambda: object()), \
+             patch.object(runner, "_connected_device", lambda: _phone()), \
              patch.object(runner, "_run_mobile_case", fake_case):
             return [json.loads(line) async for line in runner.run_suite("m", workers=4)]
 
@@ -772,3 +772,15 @@ def test_a_run_without_scenario_steps_reports_exactly_as_before():
     run = storage.get_run(run_id)
     assert reporters.json_report([run], "TK")["cases"][0]["scenarioSteps"] == []
     assert "scenario:" not in reporters.junit_xml([run], "TK")
+
+
+class _phone:
+    """A device that answers the two questions the runner asks of one: what is
+    on it, and which session it belongs to. The runner restarts the app
+    between mobile cases, so a stand-in with neither used to take the whole
+    sequential task down with it."""
+
+    session_id = "device-session"
+
+    def describe(self):
+        return {"appId": "com.thy.reg", "platform": "iOS", "name": "iPhone"}

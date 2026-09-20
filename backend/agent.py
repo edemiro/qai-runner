@@ -888,7 +888,11 @@ async def _execute_action(
                 ),
                 "element": None,
             }
-        if not fresh.contains_text(needle):
+        # Hidden views counted too, and deliberately: claiming something is
+        # gone is a stronger claim than claiming it is there, so it has to
+        # survive the wider search. A phrase the driver merely marked
+        # invisible has not left the screen.
+        if not fresh.contains_text(needle, include_hidden=True):
             return {"ok": True, "message": f'"{needle}" is no longer on screen', "element": None}
         return {
             "ok": False,
@@ -925,18 +929,34 @@ async def _execute_action(
         fresh = await target.snapshot()
         if fresh is None:
             return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
-        if fresh.contains_text(needle):
+        # Three answers, not two. iOS decides `visible` by hit-testing, so a
+        # word under a keyboard accessory or a sheet mid-dismissal comes back
+        # hidden while the run's own screenshot shows it plainly — which is how
+        # an assertion for "ECONOMY" failed against a screen with ECONOMY on it.
+        where = fresh.find_text(needle) if hasattr(fresh, "find_text") else (
+            "visible" if fresh.contains_text(needle) else None
+        )
+        if where:
             # Carried back so the step's frame can box what was verified. The
             # locate is best-effort — a phrase split across siblings has no one
             # element — and a miss costs the box, never the verdict.
+            found = f'Found "{needle}" on screen'
+            if where == "hidden":
+                found += " (the driver reported it as not visible; matched on its position)"
             return {
                 "ok": True,
-                "message": f'Found "{needle}" on screen',
+                "message": found,
                 "element": _element_info(
                     fresh.locate_text(needle) if hasattr(fresh, "locate_text") else None
                 ),
             }
-        visible = ", ".join(fresh.visible_text()[:12])
+        # The whole screen, not the first dozen strings of it. Truncated, this
+        # read as though the screen held nothing else — it sent the reader, and
+        # me, looking for the wrong fault twice.
+        strings = fresh.visible_text()
+        visible = ", ".join(strings[:40])
+        if len(strings) > 40:
+            visible += f" … and {len(strings) - 40} more"
         return {
             "ok": False,
             "message": f'Expected "{needle}" on screen but it is not there. Visible text: {visible}',

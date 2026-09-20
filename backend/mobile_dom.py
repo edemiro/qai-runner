@@ -412,7 +412,47 @@ class MobileDOMManager:
                 matches.append(elem)
         return matches
 
-    def contains_text(self, needle: str) -> bool:
+    def _on_screen(self, elem) -> bool:
+        """Whether a view occupies real space inside the screen.
+
+        Used when the driver says a view is not visible, because on iOS it
+        often says that about something a person is plainly reading. XCUITest
+        decides `visible` by hit-testing, so anything under a keyboard
+        accessory, a sheet being dismissed, or a mid-animation overlay comes
+        back false — and a text assertion against it failed on a word that was
+        on the screen in the run's own screenshot. Position is the second
+        opinion: a view with real bounds inside the screen is on the screen.
+        """
+        box = self.bounds_of(elem) if hasattr(self, "bounds_of") else getattr(elem, "bounds", None)
+        if not box:
+            return False
+        try:
+            width = int(box["x2"]) - int(box["x1"])
+            height = int(box["y2"]) - int(box["y1"])
+            if width <= 0 or height <= 0:
+                return False
+            return (
+                int(box["x2"]) > 0 and int(box["y2"]) > 0
+                and int(box["x1"]) < self.screen_width
+                and int(box["y1"]) < self.screen_height
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def find_text(self, needle: str) -> Optional[str]:
+        """Where a phrase is: "visible", "hidden", or None for not there.
+
+        The three answers are different things and the caller acts on each
+        differently — a phrase the driver hid but the screen shows is a pass
+        worth annotating, not a failure.
+        """
+        if self.contains_text(needle):
+            return "visible"
+        if self.contains_text(needle, include_hidden=True):
+            return "hidden"
+        return None
+
+    def contains_text(self, needle: str, include_hidden: bool = False) -> bool:
         """Is this phrase on screen, as a person reading the screen would say?
 
         Matched against the screen as one running text rather than view by
@@ -428,7 +468,8 @@ class MobileDOMManager:
         parts: List[str] = []
         for elem in self.get_all_elements():
             if not (elem.displayed and elem.visible):
-                continue
+                if not (include_hidden and elem.displayed and self._on_screen(elem)):
+                    continue
             for value in (elem.text, elem.name):
                 if not value:
                     continue

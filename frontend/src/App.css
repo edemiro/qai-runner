@@ -5158,6 +5158,33 @@ textarea,
   color: var(--text-tertiary);
 }
 
+/* What the next run already knows how to do. Green when the whole scenario
+   replays — that run asks the model nothing at all — and plain when only some
+   of it does, because half a recording is a saving, not a state to celebrate. */
+.recorded-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.recorded-tag.full {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(63, 184, 127, 0.32);
+}
+
+.recorded-tag.partial {
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+  border-color: var(--border);
+}
+
 /* Two services in one card, each standing on its own: a team can have Jira
    without Confluence, and the half that works should look like it works. */
 .tracker-services { display: grid; gap: var(--gap-4); }
