@@ -16,13 +16,14 @@ import {
 import { EmptyState } from '../components/EmptyState';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { ScenarioGenerator } from '../components/ScenarioGenerator';
-
-// Sentinel for "a Test Set that does not exist yet" in the move-to picker.
-const MOVE_NEW = '__new__';
 import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
 import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
+import { OS_TABS, matchesOs } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
+
+// Sentinel for "a Test Set that does not exist yet" in the move-to picker.
+const MOVE_NEW = '__new__';
 
 const EMPTY_CASE = { name: '', goal: '', url: '', tags: '', dataset: '', steps: [] };
 
@@ -98,6 +99,9 @@ export function SuitesPage({
   const [suites, setSuites] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  // Which phone, once Mobile is the platform. Meaningless on Web, so it is
+  // simply not shown there rather than kept in step with something.
+  const [os, setOs] = useState('ios');
   // null while nobody has touched the picker, which means "whichever platform
   // the page is on". Held as an override rather than synced to the tab from an
   // effect: a set created on the Mobile tab should be a mobile set without
@@ -172,8 +176,28 @@ export function SuitesPage({
     web: suites.filter((item) => (item.kind || 'web') !== 'mobile').length,
     mobile: suites.filter((item) => item.kind === 'mobile').length,
   };
-  const visible = suites.filter((item) => (item.kind || 'web') === platform);
-  const suiteKind = newSuiteKind || platform;
+  const onPlatform = suites.filter((item) => (item.kind || 'web') === platform);
+
+  /* iOS and Android are the same product and not the same screen: different
+     controls, different labels, different selectors. A set written on one does
+     not read on the other, and a recording taken on one would be replayed into
+     the wrong app — so within Mobile they are separated the way Web and Mobile
+     are. A set that has not said which shows on both, rather than being hidden
+     by a field it predates. */
+  const osCounts = {
+    ios: onPlatform.filter((item) => item.os !== 'android').length,
+    android: onPlatform.filter((item) => item.os !== 'ios').length,
+  };
+  const visible = platform === 'mobile'
+    ? onPlatform.filter((item) => matchesOs(item, os))
+    : onPlatform;
+
+  // What the platform picker in the create form means, as the two fields the
+  // backend stores: a web set has no OS, a mobile one always does.
+  const newSuiteTarget = newSuiteKind || (platform === 'mobile' ? os : 'web');
+  const newSuiteFields = newSuiteTarget === 'web'
+    ? { kind: 'web', os: null }
+    : { kind: 'mobile', os: newSuiteTarget };
 
   /* Derived rather than synced through an effect: filtering to a platform the
      selected set is not on used to leave that set open on the right while the
@@ -246,14 +270,15 @@ export function SuitesPage({
     if (!name) return;
     try {
       const created = await api.createSuite({
-        name, kind: suiteKind, tags: [], module: newSuiteModule.trim() || null,
+        name, ...newSuiteFields, tags: [], module: newSuiteModule.trim() || null,
       });
       setNewSuiteName('');
       setNewSuiteModule('');
       setNewSuiteKind(null);
       // Follow the new set to its own tab rather than leaving it filtered out
       // of the list it was just added to.
-      setPlatform(suiteKind);
+      setPlatform(newSuiteFields.kind);
+      if (newSuiteFields.os) setOs(newSuiteFields.os);
       setSelectedId(created.id);
       await loadSuites();
       toast.success(`Test set “${name}” created.`);
@@ -590,7 +615,35 @@ export function SuitesPage({
           </p>
         </div>
         <PlatformTabs value={platform} onChange={setPlatform} counts={counts} />
+        {platform === 'mobile' && (
+          <PlatformTabs
+            options={OS_TABS} value={os} onChange={setOs} counts={osCounts} sub
+          />
+        )}
       </header>
+
+      {/* Writing the scenarios is what this page is for, so it is the first
+          thing on it rather than a button inside whichever set happens to be
+          open. Name the module, or hand it the analysis document the module
+          was specified in, and the scenarios come back for review. */}
+      <section className="generate-hero card">
+        <div className="generate-hero-head">
+          <Sparkles size={17} />
+          <div>
+            <h2>Write scenarios</h2>
+            <p className="muted small">
+              Name a module — “Uçuş Arama”, “Check-in” — or upload the analysis
+              document it was specified in. Nothing is saved until you have read it.
+            </p>
+          </div>
+        </div>
+        <ScenarioGenerator
+          kind={platform}
+          os={platform === 'mobile' ? os : null}
+          onAdded={loadSuites}
+          onOpenExecution={onOpenExecution}
+        />
+      </section>
 
       <div className="suites-layout">
         {/* ------------------------------------------------------- list ---- */}
@@ -614,12 +667,13 @@ export function SuitesPage({
                 scenarios can go in and which device can run them, so a set
                 that changed platform afterwards would strand its own cases. */}
             <select
-              value={suiteKind}
+              value={newSuiteTarget}
               onChange={(event) => setNewSuiteKind(event.target.value)}
               aria-label="Platform for the new test set"
             >
               <option value="web">Web</option>
-              <option value="mobile">Mobile</option>
+              <option value="ios">iOS</option>
+              <option value="android">Android</option>
             </select>
             <button className="btn btn-primary btn-sm" type="submit" disabled={!newSuiteName.trim()}>
               <Plus size={14} /> Add

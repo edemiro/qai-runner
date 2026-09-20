@@ -28,7 +28,9 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -41,6 +43,7 @@ import bug_report
 import mobile_session
 import config
 import devices as device_discovery
+import documents
 import drivers
 import explorer
 import exporters
@@ -1393,6 +1396,9 @@ class SuiteBody(BaseModel):
     # The module this set sits under ("Uçuş Arama"); sets sharing one are shown
     # grouped. Optional — a set can stand on its own.
     module: Optional[str] = None
+    # Which phone OS a mobile set is written against. Ignored for a web set,
+    # where the question does not arise.
+    os: Optional[str] = None
 
 
 class CaseBody(BaseModel):
@@ -1461,6 +1467,7 @@ async def get_suites():
 async def post_suite(body: SuiteBody):
     suite_id = storage.create_suite(
         body.name, body.description, body.kind, body.tags, module=body.module,
+        os=body.os,
     )
     return storage.get_suite(suite_id)
 
@@ -1633,6 +1640,25 @@ async def _start_in_background(stream) -> Dict[str, Any]:
 async def post_execution_start(body: ExecutionBody):
     """Start a hand-picked execution and return its id."""
     return await _start_in_background(_execution_stream(body))
+
+
+@app.post("/api/scenarios/document")
+async def read_scenario_document(file: UploadFile = File(...)):
+    """Turn an uploaded analysis document into the brief the generator takes.
+
+    Only read here, never generated from directly: the text goes back to the
+    tester, who sees exactly what the model will be given and can trim it or
+    add to it first. A requirements document usually needs one — it carries
+    sign-off history and page furniture the scenarios have no use for.
+    """
+    data = await file.read()
+    try:
+        text, note = documents.extract(file.filename or "", data)
+    except documents.UnreadableDocument as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "name": file.filename, "text": text, "characters": len(text), "note": note,
+    }
 
 
 @app.post("/api/scenarios/generate")

@@ -247,6 +247,22 @@ export const api = {
   // first, the tester sees an error and a live Generate button, not a spinner.
   generateScenarios: (body) =>
     request('/api/scenarios/generate', { method: 'POST', body, timeoutMs: 300000 }),
+  /* An analysis document, read into the text the generator takes. Sent as a
+     file rather than pasted: the requirements already exist as a document, and
+     retyping them is both work and a chance to leave something out. It comes
+     back as text so the tester sees exactly what the model will be given.
+     Not through `request`, which sends JSON — the browser has to set the
+     multipart boundary itself, so the Content-Type is left alone. */
+  readScenarioDocument: async (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await fetch(`${BASE}/api/scenarios/document`, {
+      method: 'POST', body: form,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'That document could not be read.');
+    return data;
+  },
   generateScenariosFromScreen: (sessionId, body) =>
     request(`/api/session/${sessionId}/scenarios/generate`, { method: 'POST', body, timeoutMs: 300000 }),
   updateCase: (caseId, body) => request(`/api/cases/${caseId}`, { method: 'PATCH', body }),

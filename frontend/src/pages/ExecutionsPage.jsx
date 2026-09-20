@@ -6,6 +6,7 @@ import {
 
 import { EmptyState } from '../components/EmptyState';
 import { DEFAULT_PLATFORM, PlatformTabs, PlatformTag } from '../components/PlatformTabs';
+import { OS_TABS, matchesOs } from '../lib/platforms';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
 
@@ -72,12 +73,26 @@ export function ExecutionsPage({
   const [execution, setExecution] = useState(null);
   const [loading, setLoading] = useState(true);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
+  // Which phone, once Mobile is the platform. Not shown on Web, where the
+  // question does not arise.
+  const [os, setOs] = useState('ios');
 
   const counts = {
     web: executions.filter((e) => (e.kind || 'web') !== 'mobile').length,
     mobile: executions.filter((e) => e.kind === 'mobile').length,
   };
-  const visible = executions.filter((e) => (e.kind || 'web') === platform);
+  const onPlatform = executions.filter((e) => (e.kind || 'web') === platform);
+
+  /* Within Mobile, iOS and Android are read apart for the same reason their
+     Test Sets are: they are different screens, and a pass rate that mixes them
+     describes neither. An execution that predates the field shows on both. */
+  const osCounts = {
+    ios: onPlatform.filter((e) => e.os !== 'android').length,
+    android: onPlatform.filter((e) => e.os !== 'ios').length,
+  };
+  const visible = platform === 'mobile'
+    ? onPlatform.filter((e) => matchesOs(e, os))
+    : onPlatform;
 
   /* Derived rather than synced through an effect: switching platform with an
      execution of the other one open used to leave the detail pane reporting a
@@ -255,6 +270,12 @@ export function ExecutionsPage({
           onChange={setPlatform}
           counts={loading ? null : counts}
         />
+        {platform === 'mobile' && (
+          <PlatformTabs
+            options={OS_TABS} value={os} onChange={setOs}
+            counts={loading ? null : osCounts} sub
+          />
+        )}
       </header>
 
       <div className="suites-layout">

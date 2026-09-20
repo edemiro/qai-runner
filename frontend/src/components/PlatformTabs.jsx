@@ -31,6 +31,10 @@ const PLATFORMS = [
    perfectly well without one invented for it. */
 export function PlatformTabs({
   options = PLATFORMS, value, onChange, counts = null, disabled = false,
+  // A second strip under the first, asking the narrower question. Drawn
+  // lighter so the two read as a question and a follow-up rather than as two
+  // competing choices.
+  sub = false,
 }) {
   const tabs = useRef([]);
   const fallback = options[0]?.id;
@@ -53,9 +57,9 @@ export function PlatformTabs({
 
   return (
     <div
-      className="platform-tabs"
+      className={`platform-tabs ${sub ? 'sub' : ''}`}
       role="tablist"
-      aria-label="Platform"
+      aria-label={sub ? 'Operating system' : 'Platform'}
       onKeyDown={disabled ? undefined : onKeyDown}
     >
       {options.map(({ id, label, icon: Icon }, i) => {

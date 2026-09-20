@@ -740,6 +740,10 @@ async def run_suite(
             if cases else None
         ),
         kind=suite.get("kind") or "web",
+        # Read off the set rather than the device: an execution assembled from
+        # several sets still belongs to one phone OS, and the report has to say
+        # which long after the session that ran it is gone.
+        os=suite.get("os"),
     )
 
     # Carried down to each case so a watchable session can name the execution

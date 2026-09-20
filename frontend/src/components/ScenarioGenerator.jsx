@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Globe, HelpCircle, Loader2, Play, Save, Sparkles, X } from 'lucide-react';
+import {
+  Check, ChevronDown, ChevronRight, FileText, FileUp, Globe, HelpCircle,
+  Loader2, Play, Save, Sparkles, X,
+} from 'lucide-react';
 
 import { api } from '../api';
 import { StepEditor } from './StepEditor';
@@ -25,7 +28,9 @@ export function ScenarioGenerator({
   initialScenarios = null, initialReadFrom = null, defaultSetName = '',
   // Platform of the session the scenarios were read from; a new set created
   // here is filed under it, so a mobile session never produces a "web" set.
-  kind = 'web',
+  // `os` narrows that for mobile — a set that does not say which phone lands
+  // on neither sub-tab, and the scenarios just written look lost.
+  kind = 'web', os = null,
   // Open the execution "Save & run" just started. Absent where the caller has
   // no way to switch tabs, in which case the toast says where to find it.
   onOpenExecution = null,
@@ -47,6 +52,31 @@ export function ScenarioGenerator({
 
   const [sessions, setSessions] = useState([]);
   const [source, setSource] = useState(sessionId ? 'session' : 'url');
+
+  /* An analysis document, read into text and shown as what it is rather than
+     dropped into the brief field — a page of acceptance criteria would bury
+     the module name the tester typed beside it. Both are sent: the name says
+     which part of the product, the document says what it has to do. */
+  const [analysis, setAnalysis] = useState(null);
+  const [reading, setReading] = useState(false);
+
+  const readDocument = async (file) => {
+    if (!file) return;
+    setReading(true);
+    try {
+      const data = await api.readScenarioDocument(file);
+      setAnalysis(data);
+      if (data.note) toast.info(data.note);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setReading(false);
+    }
+  };
+
+  // What actually reaches the model: the module name and the document, in that
+  // order, so the first line still says what this is about.
+  const fullBrief = [brief.trim(), analysis?.text].filter(Boolean).join('\n\n');
 
   // Generating from a workspace means no Test Set is in scope yet, so one has
   // to be chosen — or named and created — before the scenarios have anywhere to go.
@@ -101,7 +131,7 @@ export function ScenarioGenerator({
       const liveSession = sessionId
         || (source !== 'url' && source !== 'brief' ? source : null);
       const body = {
-        brief: brief.trim() || null,
+        brief: fullBrief || null,
         url: liveSession ? null : (source === 'url' ? url.trim() || null : null),
         answers: withAnswers.trim() || null,
       };
@@ -183,6 +213,7 @@ export function ScenarioGenerator({
       const created = await api.createSuite({
         name: newSetName.trim(),
         kind,
+        os,
         module: newSetModule.trim() || null,
       });
       destId = created.id;
@@ -277,10 +308,28 @@ export function ScenarioGenerator({
           value={brief}
           onChange={(event) => setBrief(event.target.value)}
           placeholder={sessionId
-            ? 'What should these cover? Leave empty for the screen as a whole.'
-            : 'What to cover — e.g. “Homepage flight search” or “Booking - Payment, Klarna”'}
+            ? 'Module or what to cover — e.g. “Uçuş Arama”'
+            : 'Module or what to cover — e.g. “Uçuş Arama”, “Booking - Payment”'}
           disabled={busy}
         />
+
+        {/* The requirements usually exist already. Reading the file is worth a
+            button of its own beside the module name, not a line of help text
+            under it. */}
+        <label className={`generator-doc ${reading ? 'busy' : ''}`}>
+          {reading ? <Loader2 size={14} className="spin" /> : <FileUp size={14} />}
+          {reading ? 'Reading…' : 'Analysis document'}
+          <input
+            type="file"
+            accept=".txt,.md,.markdown,.csv,.json,.docx,.pdf"
+            disabled={busy || reading}
+            onChange={(event) => {
+              readDocument(event.target.files?.[0]);
+              // Cleared so choosing the same file again still fires a change.
+              event.target.value = '';
+            }}
+          />
+        </label>
         {!sessionId && (
           <select
             className="generator-source"
@@ -315,6 +364,28 @@ export function ScenarioGenerator({
           {busy ? 'Writing…' : 'Generate'}
         </button>
       </div>
+
+      {/* What was read, in the tester's hands rather than the model's alone:
+          the size says whether the whole document came through, and the first
+          lines say whether it was the right one. */}
+      {analysis && (
+        <div className="generator-doc-read">
+          <FileText size={14} />
+          <span className="doc-name">{analysis.name}</span>
+          <span className="muted small">
+            {analysis.characters.toLocaleString()} characters
+            {analysis.note ? ` · ` : ''}
+          </span>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setAnalysis(null)}
+            disabled={busy}
+          >
+            <X size={13} /> Remove
+          </button>
+          <pre className="doc-preview">{analysis.text.slice(0, 700)}</pre>
+        </div>
+      )}
 
       <p className="generator-hint">
         {sessionId || (source !== 'url' && source !== 'brief')

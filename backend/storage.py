@@ -280,6 +280,14 @@ MIGRATIONS = [
     # Which platform the bug was found on, so Bug Report can be read one
     # platform at a time like every other page.
     ("bugs", "kind", "TEXT"),
+    # Which phone OS a mobile set is written against, and which one an
+    # execution drove. iOS and Android are the same product and not the same
+    # screen — different controls, different labels, different selectors — so a
+    # set written on one does not read on the other, and a recording taken on
+    # one would be replayed into the wrong app. Null on a web set, where the
+    # question does not arise.
+    ("suites", "os", "TEXT"),
+    ("suite_runs", "os", "TEXT"),
     # The scenario written out as ordered steps, each with what it expects to
     # see. Stored as JSON on the case: a step has no identity of its own and is
     # only ever read with the scenario it belongs to.
@@ -1042,23 +1050,41 @@ def get_artifact(artifact_id: int) -> Optional[Dict[str, Any]]:
 
 # --- suites --------------------------------------------------------------- #
 
+MOBILE_OS = ("ios", "android")
+
+
+def clean_os(value: Optional[str], kind: str = "mobile") -> Optional[str]:
+    """Which phone OS this is for, or None where the question does not arise.
+
+    Only a mobile set has one. A web set carrying an OS would be a set that
+    claims to be two things at once, and the lists are read through exactly
+    these two fields.
+    """
+    if (kind or "").lower() != "mobile":
+        return None
+    os_name = (value or "").strip().lower()
+    return os_name if os_name in MOBILE_OS else None
+
+
 def create_suite(
     name: str, description: Optional[str] = None, kind: str = "web",
     tags: Optional[List[str]] = None, module: Optional[str] = None,
+    os: Optional[str] = None,
 ) -> str:
     suite_id = uuid.uuid4().hex[:16]
     module = " ".join((module or "").split())[:80] or None
     with _connect() as conn:
         conn.execute(
-            """INSERT INTO suites (id, name, description, kind, tags, module, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (suite_id, name[:120], description, kind, _dump_tags(tags), module, time.time()),
+            """INSERT INTO suites (id, name, description, kind, tags, module, os, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (suite_id, name[:120], description, kind, _dump_tags(tags), module,
+             clean_os(os, kind), time.time()),
         )
     return suite_id
 
 
 def update_suite(suite_id: str, **fields: Any) -> bool:
-    allowed = {"name", "description", "kind", "module"}
+    allowed = {"name", "description", "kind", "module", "os"}
     sets, values = [], []
     for key, value in fields.items():
         if key in allowed and value is not None:
@@ -1577,6 +1603,7 @@ def create_suite_run(
     name: Optional[str] = None,
     sources: Optional[List[Dict[str, Any]]] = None,
     kind: Optional[str] = None,
+    os: Optional[str] = None,
 ) -> str:
     """Open an execution.
 
@@ -1600,13 +1627,14 @@ def create_suite_run(
             source["suite_name"] = label
 
         conn.execute(
-            """INSERT INTO suite_runs (id, suite_id, name, kind, status, workers, started_at)
-               VALUES (?, ?, ?, ?, 'running', ?, ?)""",
+            """INSERT INTO suite_runs (id, suite_id, name, kind, os, status, workers, started_at)
+               VALUES (?, ?, ?, ?, ?, 'running', ?, ?)""",
             (
                 suite_run_id,
                 suite_id or (contributing[0].get("suite_id") if contributing else None),
                 name or " + ".join(dict.fromkeys(labels)) or "Execution",
                 kind or "web",
+                clean_os(os, kind or "web"),
                 workers,
                 time.time(),
             ),

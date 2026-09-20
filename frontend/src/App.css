@@ -5133,6 +5133,99 @@ textarea,
   color: var(--text-tertiary);
 }
 
+/* ==========================================================================
+   Writing scenarios — the first thing on the Test Sets page
+   It used to be a button inside whichever set was open, which meant the one
+   thing the page exists for was two clicks behind a selection.
+   ========================================================================== */
+
+.generate-hero {
+  border-color: var(--accent-border);
+  background:
+    linear-gradient(var(--accent-soft), transparent 120px),
+    var(--bg-surface);
+}
+
+.generate-hero-head {
+  display: flex;
+  gap: var(--gap-3);
+  align-items: flex-start;
+  margin-bottom: var(--gap-3);
+}
+
+.generate-hero-head > svg { color: var(--accent); flex: none; margin-top: 2px; }
+.generate-hero-head h2 { font-size: 15px; margin: 0 0 2px; }
+.generate-hero-head p { margin: 0; max-width: 72ch; }
+
+/* The document, and what came out of it. Shown because the tester is about to
+   pay for it on every generate and should see what they are sending. */
+.generator-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--control-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.generator-doc:hover { border-color: var(--accent-border); color: var(--text-primary); }
+.generator-doc.busy { cursor: progress; }
+.generator-doc input[type="file"] { display: none; }
+
+.generator-doc-read {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2);
+  margin-top: var(--gap-3);
+  padding: var(--gap-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.generator-doc-read > svg { color: var(--accent); flex: none; }
+.generator-doc-read .doc-name { font-weight: 600; }
+
+.doc-preview {
+  flex: 1 0 100%;
+  max-height: 140px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* The follow-up question, when the first one has an answer that raises it:
+   which phone, once the platform is Mobile. It carries no rule of its own and
+   sits a size down, so the two strips read as a question and its refinement
+   rather than as two choices of equal weight. */
+.platform-tabs.sub {
+  border-bottom: 0;
+  margin-top: calc(var(--gap-2) * -1);
+  padding-left: var(--control-px);
+}
+
+.platform-tabs.sub .platform-tab {
+  height: var(--control-h-sm);
+  font-size: var(--control-font-sm);
+  font-weight: 550;
+  border-bottom-width: 2px;
+}
+
+.platform-tabs.sub .platform-tab-count {
+  min-width: 18px;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
 /* Under a phone-sized width the two tabs share the strip, so the bar under the
    chosen one is half of it and the mode reads before the labels do. */
 @media (max-width: 560px) {

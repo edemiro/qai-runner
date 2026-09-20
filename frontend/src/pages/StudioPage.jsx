@@ -5,14 +5,8 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { PlatformTabs } from '../components/PlatformTabs';
+import { OS_TABS } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
-
-// No icons: lucide ships no platform logos, and the two words read perfectly
-// well side by side without one invented for them.
-const OS_TABS = [
-  { id: 'ios', label: 'iOS' },
-  { id: 'android', label: 'Android' },
-];
 
 /* "Newest first", built from what a device row actually carries.
    BrowserStack offers hundreds of them in one list and the model a tester
