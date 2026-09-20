@@ -87,6 +87,93 @@ function PriorityStrip({ cases }) {
   );
 }
 
+/**
+ * Where a run points: an environment for web, a phone and a build for mobile.
+ *
+ * Its own component because there are two places a run starts from — the set's
+ * own Run panel and the bar that appears when scenarios are picked — and only
+ * the first had this. Picking mobile scenarios and pressing Run produced
+ * "Pick the device this execution should run on" with nothing on screen to
+ * pick it with, because the control was below the scenario list the tester had
+ * just scrolled past.
+ */
+function RunTarget({
+  isMobile, devices, sessions, deviceUdid, onDevice, deviceAppId, onBuild,
+  deviceBuilds, envUrl, onEnv, compact = false,
+}) {
+  if (!isMobile) {
+    return (
+      <div className={`run-target ${compact ? 'compact' : ''}`}>
+        <label className="run-target-env">
+          Environment
+          <select value={envUrl} onChange={(e) => onEnv(e.target.value)}>
+            <option value="">Each scenario's own address</option>
+            {ENV_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.items.map((item) => (
+                  <option key={item.name} value={item.url} title={item.url}>
+                    {item.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      </div>
+    );
+  }
+
+  const unopened = devices.filter(
+    (d) => !sessions.some((s) => s.device?.udid === d.udid),
+  );
+  return (
+    <div className={`run-target ${compact ? 'compact' : ''}`}>
+      <label>
+        Device
+        <select
+          value={deviceUdid}
+          onChange={(e) => onDevice(e.target.value)}
+        >
+          <option value="">{devices.length ? 'Pick a device' : 'No device found'}</option>
+          {sessions.length > 0 && (
+            <optgroup label="Already connected">
+              {sessions.map((item) => (
+                <option key={item.sessionId} value={item.device.udid}>
+                  {item.device.name} · {item.device.platform}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {unopened.length > 0 && (
+            <optgroup label="Available">
+              {unopened.map((d) => (
+                <option key={d.udid} value={d.udid}>
+                  {d.name} · {d.platform}{d.source === 'browserstack' ? ' · cloud' : ''}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </label>
+      <label>
+        Build
+        <select value={deviceAppId} onChange={(e) => onBuild(e.target.value)} disabled={!deviceUdid}>
+          <option value="">
+            {deviceUdid
+              ? (deviceBuilds.length ? 'Whatever is open' : 'No TK build on this device')
+              : 'Pick a device first'}
+          </option>
+          {deviceBuilds.map((build) => (
+            <option key={build.id || build.name} value={build.id}>
+              {build.label || build.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 export function SuitesPage({
   onRunHere, onOpenExecution, onWatchExecution,
   // The phones already connected, and the way to connect another. A mobile
@@ -795,13 +882,41 @@ export function SuitesPage({
                       : 'Execution name — required'}
                     disabled={running}
                   />
-                  {/* Disabled rather than warned about after the click: the
-                      name is required, so say so before the button is pressed. */}
+
+                  {/* The same target control as the Run panel below. Without it
+                      here, picking mobile scenarios and pressing Run asked for
+                      a device with nothing on screen to choose one with. */}
+                  <RunTarget
+                    compact
+                    isMobile={isMobileSet}
+                    devices={devices}
+                    sessions={sessions}
+                    deviceUdid={deviceUdid}
+                    onDevice={(value) => {
+                      setDeviceUdid(value);
+                      setDeviceAppId('');
+                      setDeviceBuilds([]);
+                    }}
+                    deviceAppId={deviceAppId}
+                    onBuild={setDeviceAppId}
+                    deviceBuilds={deviceBuilds}
+                    envUrl={envUrl}
+                    onEnv={setEnvUrl}
+                  />
+
+                  {/* Disabled rather than warned about after the click: both
+                      the name and, on mobile, the device are required, so say
+                      so before the button is pressed rather than after. */}
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={runPicked}
-                    disabled={running || connecting || !executionName.trim()}
-                    title={executionName.trim() ? undefined : 'Name the execution first'}
+                    disabled={running || connecting || !executionName.trim()
+                      || (isMobileSet && !deviceUdid)}
+                    title={
+                      !executionName.trim() ? 'Name the execution first'
+                        : (isMobileSet && !deviceUdid) ? 'Pick the device to run on'
+                          : undefined
+                    }
                   >
                     <Play size={14} /> Run execution
                   </button>
@@ -1163,82 +1278,22 @@ export function SuitesPage({
                   was written against and whatever phone happened to be plugged
                   in; neither is a choice anyone made at the moment they pressed
                   Run, which is when it matters. */}
-              <div className="run-target">
-                {isMobileSet ? (
-                  <>
-                    <label>
-                      Device
-                      <select
-                        value={deviceUdid}
-                        onChange={(e) => {
-                          setDeviceUdid(e.target.value);
-                          setDeviceAppId('');
-                          setDeviceBuilds([]);
-                        }}
-                      >
-                        <option value="">
-                          {devices.length ? 'Pick a device' : 'No device found'}
-                        </option>
-                        {sessions.length > 0 && (
-                          <optgroup label="Already connected">
-                            {sessions.map((item) => (
-                              <option key={item.sessionId} value={item.device.udid}>
-                                {item.device.name} · {item.device.platform}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                        {devices.filter((d) => !sessions.some((s2) => s2.device?.udid === d.udid)).length > 0 && (
-                          <optgroup label="Available">
-                            {devices
-                              .filter((d) => !sessions.some((s2) => s2.device?.udid === d.udid))
-                              .map((d) => (
-                                <option key={d.udid} value={d.udid}>
-                                  {d.name} · {d.platform}{d.source === 'browserstack' ? ' · cloud' : ''}
-                                </option>
-                              ))}
-                          </optgroup>
-                        )}
-                      </select>
-                    </label>
-                    <label>
-                      Build
-                      <select
-                        value={deviceAppId}
-                        onChange={(e) => setDeviceAppId(e.target.value)}
-                        disabled={!deviceUdid}
-                      >
-                        <option value="">
-                          {deviceUdid
-                            ? (deviceBuilds.length ? 'Whatever is open' : 'No TK build on this device')
-                            : 'Pick a device first'}
-                        </option>
-                        {deviceBuilds.map((build) => (
-                          <option key={build.id || build.name} value={build.id}>
-                            {build.label || build.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </>
-                ) : (
-                  <label className="run-target-env">
-                    Environment
-                    <select value={envUrl} onChange={(e) => setEnvUrl(e.target.value)}>
-                      <option value="">Each scenario's own address</option>
-                      {ENV_GROUPS.map((group) => (
-                        <optgroup key={group.label} label={group.label}>
-                          {group.items.map((item) => (
-                            <option key={item.name} value={item.url} title={item.url}>
-                              {item.name}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </div>
+              <RunTarget
+                isMobile={isMobileSet}
+                devices={devices}
+                sessions={sessions}
+                deviceUdid={deviceUdid}
+                onDevice={(value) => {
+                  setDeviceUdid(value);
+                  setDeviceAppId('');
+                  setDeviceBuilds([]);
+                }}
+                deviceAppId={deviceAppId}
+                onBuild={setDeviceAppId}
+                deviceBuilds={deviceBuilds}
+                envUrl={envUrl}
+                onEnv={setEnvUrl}
+              />
 
               <div className="run-options">
                 <label>

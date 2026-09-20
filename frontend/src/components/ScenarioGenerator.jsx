@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Check, ChevronDown, ChevronRight, FileText, FileUp, Globe, HelpCircle,
+  Link as LinkIcon,
   Loader2, Play, Save, Sparkles, X,
 } from 'lucide-react';
 
@@ -59,6 +60,25 @@ export function ScenarioGenerator({
      which part of the product, the document says what it has to do. */
   const [analysis, setAnalysis] = useState(null);
   const [reading, setReading] = useState(false);
+
+  // A Jira story or a Confluence page, read into the same place a document
+  // goes: they are the same thing to the generator — the requirements, already
+  // written down somewhere that is not here.
+  const [link, setLink] = useState('');
+
+  const readLink = async () => {
+    if (!link.trim()) return;
+    setReading(true);
+    try {
+      const data = await api.readTrackerLink(link.trim());
+      setAnalysis({ ...data, name: `${data.title} (${data.service})` });
+      if (data.note) toast.info(data.note);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setReading(false);
+    }
+  };
 
   const readDocument = async (file) => {
     if (!file) return;
@@ -316,6 +336,27 @@ export function ScenarioGenerator({
         {/* The requirements usually exist already. Reading the file is worth a
             button of its own beside the module name, not a line of help text
             under it. */}
+        {/* The same requirements, wherever the team keeps them. Enter submits
+            so a pasted link needs no second gesture. */}
+        <div className="generator-link">
+          <LinkIcon size={13} />
+          <input
+            type="text"
+            value={link}
+            onChange={(event) => setLink(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') readLink(); }}
+            placeholder="Jira or Confluence link"
+            disabled={busy || reading}
+          />
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={readLink}
+            disabled={busy || reading || !link.trim()}
+          >
+            Read
+          </button>
+        </div>
+
         <label className={`generator-doc ${reading ? 'busy' : ''}`}>
           {reading ? <Loader2 size={14} className="spin" /> : <FileUp size={14} />}
           {reading ? 'Reading…' : 'Analysis document'}

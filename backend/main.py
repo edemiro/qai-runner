@@ -55,6 +55,7 @@ import storage
 import scenario_writer
 import suggestions
 import suite_runner
+import tracker
 import visual
 from config import ALLOWED_ORIGINS, ARTIFACT_DIR, WDA_BUNDLE_ID
 from drivers import MobileTarget, WebTarget
@@ -1438,6 +1439,10 @@ class CaseBody(BaseModel):
     steps: Optional[List[ScenarioStep]] = None
 
 
+class TrackerLinkBody(BaseModel):
+    url: str
+
+
 class ScenarioGenerateBody(BaseModel):
     brief: Optional[str] = None
     kind: str = "web"
@@ -1675,6 +1680,59 @@ async def read_scenario_document(file: UploadFile = File(...)):
     return {
         "name": file.filename, "text": text, "characters": len(text), "note": note,
     }
+
+
+class TrackerCredentials(BaseModel):
+    """One service's address and token. Saved separately because a team can
+    have one without the other, and a half-filled pair should not lock out the
+    half that works."""
+    service: str
+    baseUrl: str
+    token: str
+
+
+@app.get("/api/tracker/status")
+async def tracker_status():
+    """Which of the two are set up, without handing the tokens back."""
+    return {
+        service: {
+            "configured": tracker.configured(service),
+            "baseUrl": tracker.settings(service)[0],
+        }
+        for service in ("jira", "confluence")
+    }
+
+
+@app.post("/api/tracker/credentials")
+async def save_tracker_credentials(body: TrackerCredentials):
+    service = (body.service or "").strip().lower()
+    if service not in ("jira", "confluence"):
+        raise HTTPException(status_code=400, detail="Service must be jira or confluence.")
+    base_url, token = body.baseUrl.strip().rstrip("/"), body.token.strip()
+    if not base_url or not token:
+        raise HTTPException(status_code=400, detail="Both an address and a token are required.")
+    if not base_url.startswith(("http://", "https://")):
+        base_url = "https://" + base_url
+
+    prefix = "JIRA" if service == "jira" else "CONFLUENCE"
+    config.write_env({f"{prefix}_BASE_URL": base_url, f"{prefix}_TOKEN": token})
+    return {"status": "success", "service": service, "baseUrl": base_url}
+
+
+@app.post("/api/tracker/read")
+async def read_tracker_link(body: TrackerLinkBody):
+    """A Jira issue or a Confluence page, as the text the generator takes.
+
+    Read here, never generated from directly: the text goes back to the tester,
+    who sees exactly what the model will be given. A story carries estimates,
+    comments and sign-off history that the scenarios have no use for.
+    """
+    try:
+        return await tracker.fetch(body.url.strip())
+    except tracker.TrackerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read that link: {exc}")
 
 
 @app.post("/api/scenarios/generate")

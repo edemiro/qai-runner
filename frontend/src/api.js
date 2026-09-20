@@ -253,6 +253,16 @@ export const api = {
      back as text so the tester sees exactly what the model will be given.
      Not through `request`, which sends JSON — the browser has to set the
      multipart boundary itself, so the Content-Type is left alone. */
+  /* A Jira story or a Confluence analysis page as the text the generator
+     takes. Read, not generated from: a story carries estimates, comments and
+     sign-off history the scenarios have no use for, and the tester should see
+     what is being sent. */
+  trackerStatus: () => request('/api/tracker/status'),
+  saveTrackerCredentials: (service, baseUrl, token) =>
+    request('/api/tracker/credentials', { method: 'POST', body: { service, baseUrl, token } }),
+  readTrackerLink: (url) =>
+    request('/api/tracker/read', { method: 'POST', body: { url }, timeoutMs: 60000 }),
+
   readScenarioDocument: async (file) => {
     const form = new FormData();
     form.append('file', file);

@@ -5133,6 +5133,68 @@ textarea,
   color: var(--text-tertiary);
 }
 
+/* Two services in one card, each standing on its own: a team can have Jira
+   without Confluence, and the half that works should look like it works. */
+.tracker-services { display: grid; gap: var(--gap-4); }
+
+.tracker-service {
+  padding-top: var(--gap-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tracker-service:first-child { padding-top: 0; border-top: 0; }
+
+.tracker-service-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  margin-bottom: var(--gap-2);
+}
+
+.tracker-save { margin-top: var(--gap-3); }
+
+/* Where the requirements already live, beside where a file would be picked —
+   the same thing arriving a different way. */
+.generator-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  min-width: 260px;
+}
+
+.generator-link > svg { color: var(--text-tertiary); flex: none; }
+
+.generator-link input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  height: auto;
+  padding: 0;
+}
+
+/* The same target control, sitting in a row of them rather than in a panel of
+   its own: no labels above the selects, and only as wide as it needs to be. */
+.run-target.compact {
+  gap: var(--gap-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.run-target.compact label {
+  gap: 0;
+  font-size: 0;           /* the label reads from the option, not from above */
+}
+
+.run-target.compact select { min-width: 150px; }
+
 /* ==========================================================================
    Writing scenarios — the first thing on the Test Sets page
    It used to be a button inside whichever set was open, which meant the one

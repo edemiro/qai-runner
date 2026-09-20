@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Building2, Check, Cloud, Cpu, Eye, EyeOff, Key, Loader2, Play, Save, Square,
+  Building2, Check, Cloud, Cpu, Eye, EyeOff, Key, Link as LinkIcon, Loader2,
+  Play, Save, Square,
   Terminal, Zap,
 } from 'lucide-react';
 import { api } from '../api';
@@ -379,6 +380,136 @@ function ModelCard({ onSaved }) {
  * browser — and is verified by actually asking BrowserStack for the device
  * list, because a key that saves but cannot book anything is not saved.
  */
+/**
+ * Jira and Confluence, so a story or an analysis page can be handed to the
+ * scenario writer as a link instead of retyped.
+ *
+ * One card, two independent services: a team can have one and not the other,
+ * and the half that works should keep working. Both are Server installations
+ * rather than Cloud, which decides the credential — a Personal Access Token,
+ * sent as a Bearer header. A Cloud API token is a different thing and comes
+ * back 401 with nothing useful said, so the field says which one to paste.
+ */
+function TrackerCard() {
+  const toast = useToast();
+  const [status, setStatus] = useState({});
+  const [draft, setDraft] = useState({
+    jira: { baseUrl: 'https://jira.thy.com', token: '' },
+    confluence: { baseUrl: 'https://confluence.thy.com', token: '' },
+  });
+  const [saving, setSaving] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.trackerStatus();
+        if (cancelled) return;
+        setStatus(data);
+        setDraft((current) => ({
+          jira: { ...current.jira, baseUrl: data.jira?.baseUrl || current.jira.baseUrl },
+          confluence: {
+            ...current.confluence,
+            baseUrl: data.confluence?.baseUrl || current.confluence.baseUrl,
+          },
+        }));
+      } catch {
+        // An older backend: the card still explains what it is for.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async (service) => {
+    const entry = draft[service];
+    if (!entry.baseUrl.trim() || !entry.token.trim()) {
+      toast.warning('Both the address and the token are needed.');
+      return;
+    }
+    setSaving(service);
+    try {
+      await api.saveTrackerCredentials(service, entry.baseUrl.trim(), entry.token.trim());
+      setStatus((current) => ({
+        ...current, [service]: { configured: true, baseUrl: entry.baseUrl.trim() },
+      }));
+      // Not kept in the field after it is saved: it lives in the backend's
+      // .env, and leaving it on screen only invites it into a screenshot.
+      setDraft((current) => ({ ...current, [service]: { ...current[service], token: '' } }));
+      toast.success(`${service === 'jira' ? 'Jira' : 'Confluence'} connected — paste a link on Test Sets.`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-header">
+        <div className="card-title-group">
+          <div className="card-icon"><LinkIcon size={17} /></div>
+          <div>
+            <h3 className="card-title">Jira &amp; Confluence</h3>
+            <p className="card-desc">
+              Paste a story or an analysis page on Test Sets and write the
+              scenarios from it. Optional, and each one stands on its own.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="card-body tracker-services">
+        {[['jira', 'Jira', 'https://jira.thy.com'],
+          ['confluence', 'Confluence', 'https://confluence.thy.com']].map(
+          ([service, label, example]) => (
+            <div className="tracker-service" key={service}>
+              <div className="tracker-service-head">
+                <strong>{label}</strong>
+                {status[service]?.configured && (
+                  <span className="status-pill ok"><Check size={12} /> connected</span>
+                )}
+              </div>
+              <div className="field-row">
+                <label className="field">
+                  <span className="field-label">Address</span>
+                  <input
+                    type="text"
+                    value={draft[service].baseUrl}
+                    onChange={(e) => setDraft((c) => ({
+                      ...c, [service]: { ...c[service], baseUrl: e.target.value },
+                    }))}
+                    placeholder={example}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Personal Access Token</span>
+                  <input
+                    type="password"
+                    value={draft[service].token}
+                    onChange={(e) => setDraft((c) => ({
+                      ...c, [service]: { ...c[service], token: e.target.value },
+                    }))}
+                    placeholder={status[service]?.configured
+                      ? 'Saved — paste a new one to replace it'
+                      : 'Profile → Personal Access Tokens'}
+                  />
+                </label>
+              </div>
+              <button
+                className="btn btn-primary btn-sm tracker-save"
+                onClick={() => save(service)}
+                disabled={saving === service}
+              >
+                {saving === service ? 'Saving…' : `Save ${label}`}
+              </button>
+            </div>
+          ),
+        )}
+      </div>
+    </section>
+  );
+}
+
 function BrowserStackCard() {
   const toast = useToast();
   const [username, setUsername] = useState('');
@@ -555,6 +686,7 @@ export function SettingsPage({ appiumStatus, onRefreshHealth }) {
         <AppiumCard status={appiumStatus} logs={logs} onStart={start} onStop={stop} busy={busy} />
         <ModelCard onSaved={onRefreshHealth} />
         <BrowserStackCard />
+        <TrackerCard />
       </div>
     </main>
   );
