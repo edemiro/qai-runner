@@ -110,7 +110,14 @@ class TestWebTarget(unittest.IsolatedAsyncioTestCase):
         cls.server.shutdown()
 
     async def asyncSetUp(self):
-        self.target = await WebTarget.launch(self.url, viewport="desktop", headless=True)
+        # Every test in this class launches its own browser, and the consent
+        # check waits CONSENT_TIMEOUT_MS for a banner before giving up. The
+        # fixture page has none, so that wait was pure cost — two and a half
+        # seconds per test, about a minute across the class, on a suite whose
+        # browser tests already go red at random under load.
+        self.target = await WebTarget.launch(
+            self.url, viewport="desktop", headless=True, accept_consent=False,
+        )
 
     async def asyncTearDown(self):
         await self.target.close()
