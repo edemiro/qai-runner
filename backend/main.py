@@ -33,7 +33,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 import agent
 import appium_client as appium
@@ -1402,7 +1402,20 @@ class SuiteBody(BaseModel):
 
 
 class CaseBody(BaseModel):
-    name: str
+    """A scenario, however the caller spells its two ambiguous fields.
+
+    The generator returns `title` and `type`; this endpoint has always taken
+    `name` and `scenarioType`. The UI maps between them on the way through, so
+    the mismatch was invisible there — but anything else that feeds generated
+    scenarios straight back, a CI job or a script, got a 422 naming a field it
+    had never heard of and had to learn the mapping to get past it.
+
+    Both spellings are accepted rather than one renamed, because a rename would
+    break every caller that already sends the current one.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(validation_alias=AliasChoices("name", "title"))
     goal: str
     url: Optional[str] = None
     tags: List[str] = []
@@ -1412,8 +1425,11 @@ class CaseBody(BaseModel):
     enabled: Optional[bool] = None
     priority: Optional[str] = None
     layer: Optional[str] = None
-    # Positive / Negative / Boundary — what kind of check this is.
-    scenarioType: Optional[str] = None
+    # Positive / Negative / Boundary — what kind of check this is. `type` is
+    # what the generator calls it.
+    scenarioType: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scenarioType", "type"),
+    )
     # The state the scenario needs before its first step, what it needs from a
     # person to reach it, and what they answered.
     precondition: Optional[str] = None
@@ -1751,7 +1767,13 @@ class CasePatchBody(BaseModel):
     precondition's data should not have to resend the whole scenario — doing so
     invites a caller to overwrite a field someone else just edited.
     """
-    name: Optional[str] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    # The generator's spellings are accepted here too, so a scenario can be
+    # sent back for editing in the shape it came out in.
+    name: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("name", "title"),
+    )
     goal: Optional[str] = None
     url: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -1760,7 +1782,9 @@ class CasePatchBody(BaseModel):
     enabled: Optional[bool] = None
     priority: Optional[str] = None
     layer: Optional[str] = None
-    scenarioType: Optional[str] = None
+    scenarioType: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scenarioType", "type"),
+    )
     precondition: Optional[str] = None
     requiredData: Optional[List[Dict[str, str]]] = None
     preconditionData: Optional[Dict[str, str]] = None
