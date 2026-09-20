@@ -317,12 +317,13 @@ export const api = {
     request(`/api/cases/${caseId}`, { method: 'PATCH', body: { preconditionData: data } }),
 
   bugDraft: (runId) => request(`/api/runs/${runId}/bug-draft`),
-  bugs: ({ status = null, code = null, search = null, kind = null } = {}) => {
+  bugs: ({ status = null, code = null, search = null, kind = null, os = null } = {}) => {
     const q = new URLSearchParams();
     if (status) q.set('status', status);
     if (code) q.set('code', code);
     if (search) q.set('search', search);
     if (kind) q.set('kind', kind);
+    if (os) q.set('os', os);
     const query = q.toString();
     return request(`/api/bugs${query ? `?${query}` : ''}`);
   },
@@ -339,17 +340,18 @@ export const api = {
 
   // --- insights -----------------------------------------------------------
   // All four take a platform, because a pass rate that averages a mature web
-  // suite with a handful of mobile runs describes neither of them.
-  trend: (days = 14, kind = null) =>
-    request(`/api/insights/trend?days=${days}${kind ? `&kind=${kind}` : ''}`),
-  flaky: (limit = 20, kind = null) =>
-    request(`/api/insights/flaky?limit=${limit}${kind ? `&kind=${kind}` : ''}`),
-  priorityBreakdown: (days = 14, kind = null) =>
-    request(`/api/insights/priority?days=${days}${kind ? `&kind=${kind}` : ''}`),
+  // suite with a handful of mobile runs describes neither of them — and, on
+  // Mobile, a phone, for the same reason one step down.
+  trend: (days = 14, kind = null, os = null) =>
+    request(`/api/insights/trend?days=${days}${kind ? `&kind=${kind}` : ''}${os ? `&os=${os}` : ''}`),
+  flaky: (limit = 20, kind = null, os = null) =>
+    request(`/api/insights/flaky?limit=${limit}${kind ? `&kind=${kind}` : ''}${os ? `&os=${os}` : ''}`),
+  priorityBreakdown: (days = 14, kind = null, os = null) =>
+    request(`/api/insights/priority?days=${days}${kind ? `&kind=${kind}` : ''}${os ? `&os=${os}` : ''}`),
   // What the runs asked of the model. Not the quota left on the key — that
   // lives with whoever issues it — but what QAi itself spent.
-  usage: (days = 14, kind = null) =>
-    request(`/api/insights/usage?days=${days}${kind ? `&kind=${kind}` : ''}`),
+  usage: (days = 14, kind = null, os = null) =>
+    request(`/api/insights/usage?days=${days}${kind ? `&kind=${kind}` : ''}${os ? `&os=${os}` : ''}`),
   // Spend against the monthly limit, straight from the gateway.
   budget: () => request('/api/insights/budget'),
 

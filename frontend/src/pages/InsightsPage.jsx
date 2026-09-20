@@ -5,6 +5,7 @@ import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { formatTokens } from '../lib/format';
+import { OS_TABS } from '../lib/platforms';
 
 /**
  * A suite's history is only useful if it answers three questions: is it getting
@@ -25,6 +26,12 @@ export function InsightsPage() {
      each other as though they shared a device, a driver and a failure mode. */
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
   const [platformCounts, setPlatformCounts] = useState(null);
+  /* And, on Mobile, which phone. "Which of my scenarios are flaky" is a
+     different question on an iPhone than on a Pixel — different selectors,
+     different gestures, different app — and ranking them in one table against
+     each other answers neither. */
+  const [os, setOs] = useState('ios');
+  const [osCounts, setOsCounts] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,11 +39,12 @@ export function InsightsPage() {
     (async () => {
       // Awaited first so nothing sets state during the same commit that
       // scheduled this effect.
+      const phone = platform === 'mobile' ? os : null;
       const [trendData, flakyData, priorityData, usageData, budgetData] = await Promise.all([
-        api.trend(days, platform).catch((err) => ({ error: err })),
-        api.flaky(20, platform).catch((err) => ({ error: err })),
-        api.priorityBreakdown(days, platform).catch((err) => ({ error: err })),
-        api.usage(days, platform).catch((err) => ({ error: err })),
+        api.trend(days, platform, phone).catch((err) => ({ error: err })),
+        api.flaky(20, platform, phone).catch((err) => ({ error: err })),
+        api.priorityBreakdown(days, platform, phone).catch((err) => ({ error: err })),
+        api.usage(days, platform, phone).catch((err) => ({ error: err })),
         // The gateway may be unreachable or not offer this; the rest of the
         // page must not fail with it, so its error stays local.
         api.budget().catch(() => null),
@@ -47,6 +55,7 @@ export function InsightsPage() {
       if (failure) toast.error(failure.message);
       if (trendData.trend) setTrend(trendData.trend);
       if (trendData.counts) setPlatformCounts(trendData.counts);
+      if (trendData.osCounts) setOsCounts(trendData.osCounts);
       if (flakyData.flaky) setFlaky(flakyData.flaky);
       if (priorityData.breakdown) setBreakdown(priorityData.breakdown);
       if (usageData.usage) setUsage(usageData.usage);
@@ -55,7 +64,7 @@ export function InsightsPage() {
     return () => {
       cancelled = true;
     };
-  }, [days, platform, toast]);
+  }, [days, platform, os, toast]);
 
   const totals = useMemo(() => {
     const passed = trend.reduce((sum, day) => sum + day.passed, 0);
@@ -122,6 +131,12 @@ export function InsightsPage() {
           ))}
         </div>
         <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
+        {platform === 'mobile' && (
+          <PlatformTabs
+            options={OS_TABS} value={os} onChange={setOs}
+            counts={loading ? null : osCounts} sub
+          />
+        )}
       </header>
 
       {loading ? (

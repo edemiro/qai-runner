@@ -279,3 +279,129 @@ def test_an_execution_without_an_os_is_given_one_from_its_sources(db):
         storage._backfill_execution_os(conn)
         row = conn.execute("SELECT os FROM suite_runs WHERE id = ?", (run_id,)).fetchone()
     assert row["os"] == "ios"
+
+
+# --- and within Mobile, which phone ----------------------------------------- #
+#
+# An iPhone run and a Pixel run are different apps with different selectors and
+# different failure modes. Read in one list a failure on one looked like a
+# failure on both, so everything below Mobile is split again — off the run's own
+# `platform`, which is what the driver reported when it ran.
+
+def phone_run(os_name, status="passed", case_id=None, goal="a phone run"):
+    run_id = storage.create_run(
+        goal=goal, platform=os_name, kind="mobile", case_id=case_id,
+    )
+    storage.finish_run(run_id, status)
+    return run_id
+
+
+def test_only_the_two_phones_narrow_anything(db):
+    assert storage.clean_os("iOS") == "ios"
+    assert storage.clean_os("android") == "android"
+    # Anything else means "no filter" rather than "a phone nothing is on".
+    for value in (None, "", "  ", "all", "windows"):
+        assert storage.clean_os(value) is None, value
+    # A web row never carries one, whatever was asked for.
+    assert storage.clean_os("ios", kind="web") is None
+
+
+def test_a_phone_shows_its_own_runs_and_not_the_others(db):
+    ios = phone_run("iOS")
+    android = phone_run("Android")
+    web = make_run("web")
+
+    assert [r["id"] for r in db.list_runs(kind="mobile", os="ios")] == [ios]
+    assert [r["id"] for r in db.list_runs(kind="mobile", os="android")] == [android]
+    assert sorted(r["id"] for r in db.list_runs(kind="mobile")) == sorted([ios, android])
+    assert [r["id"] for r in db.list_runs(kind="web")] == [web]
+
+
+def test_the_phone_counts_are_taken_over_everything_not_over_one_page(db):
+    """The sub-tabs sit above a list that pages fifty at a time, so their
+    numbers cannot come from the page that happens to be loaded."""
+    for _ in range(3):
+        phone_run("iOS")
+    phone_run("Android")
+    make_run("web")
+
+    assert db.run_os_counts() == {"ios": 3, "android": 1}
+
+
+def test_a_search_narrows_the_phone_counts_with_it(db):
+    """Otherwise the tab says 3 and the list under it shows 1, and the two
+    numbers read as a contradiction."""
+    phone_run("iOS", goal="search a one way flight")
+    phone_run("iOS", goal="check in")
+    phone_run("Android", goal="search a one way flight")
+
+    assert db.run_os_counts("one way") == {"ios": 1, "android": 1}
+
+
+def test_the_trend_and_the_spend_are_split_by_phone_too(db):
+    phone_run("iOS")
+    phone_run("iOS", "failed")
+    phone_run("Android")
+
+    ios = db.trend(kind="mobile", os="ios")
+    assert sum(day["total"] for day in ios) == 2
+    android = db.trend(kind="mobile", os="android")
+    assert sum(day["total"] for day in android) == 1
+    assert sum(day["total"] for day in db.trend(kind="mobile")) == 3
+
+
+def test_flakiness_reads_the_phone_off_the_test_set(db):
+    """Same reasoning as the platform above it: a set belongs to one phone for
+    its whole life, and a set written before the column existed has not said
+    which — so it shows on both rather than vanishing from each."""
+    ios_suite = db.create_suite("iOS set", kind="mobile", os="ios")
+    android_suite = db.create_suite("Android set", kind="mobile", os="android")
+    old_suite = db.create_suite("an older set", kind="mobile")
+    cases = {
+        name: db.add_case(suite, name, "g")
+        for name, suite in [("ios", ios_suite), ("android", android_suite),
+                            ("old", old_suite)]
+    }
+    for case_id in cases.values():
+        phone_run("iOS", "passed", case_id=case_id)
+        phone_run("iOS", "failed", case_id=case_id)
+
+    on_ios = {row["case_id"] for row in db.flakiness_report(kind="mobile", os="ios")}
+    assert on_ios == {cases["ios"], cases["old"]}
+    on_android = {row["case_id"] for row in db.flakiness_report(kind="mobile", os="android")}
+    assert on_android == {cases["android"], cases["old"]}
+
+
+def test_a_bug_is_filed_under_the_phone_its_run_was_on(db):
+    ios_bug = db.create_bug(title="ios", run_id=phone_run("iOS", "failed"))
+    android_bug = db.create_bug(title="android", run_id=phone_run("Android", "failed"))
+
+    assert [b["id"] for b in db.list_bugs(kind="mobile", os="ios")] == [ios_bug]
+    assert [b["id"] for b in db.list_bugs(kind="mobile", os="android")] == [android_bug]
+    assert db.bug_os_counts() == {"ios": 1, "android": 1}
+
+
+def test_a_bug_filed_by_hand_stays_on_both_phones(db):
+    """It has no run and so was never asked which phone. Hiding it behind a
+    question it predates is how a finding goes missing from every tab."""
+    by_hand = db.create_bug(title="typed by hand", kind="mobile")
+
+    assert by_hand in [b["id"] for b in db.list_bugs(kind="mobile", os="ios")]
+    assert by_hand in [b["id"] for b in db.list_bugs(kind="mobile", os="android")]
+
+
+def test_the_status_counts_follow_the_phone_tab(db):
+    db.create_bug(title="a", run_id=phone_run("iOS", "failed"))
+    db.create_bug(title="b", run_id=phone_run("Android", "failed"))
+    db.create_bug(title="c", run_id=phone_run("Android", "failed"), status="fixed")
+
+    assert db.bug_counts("mobile", "ios") == {"open": 1, "all": 1}
+    assert db.bug_counts("mobile", "android") == {"open": 1, "fixed": 1, "all": 2}
+
+
+def test_the_web_tab_is_untouched_by_a_phone_asked_for_by_mistake(db):
+    """A stray `&os=ios` on the Web tab must return the web runs, not none."""
+    web = make_run("web")
+    phone_run("iOS")
+
+    assert [r["id"] for r in db.list_runs(kind="web", os="ios")] == [web]

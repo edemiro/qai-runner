@@ -514,11 +514,14 @@ def record_run_usage(run_id: str, usage: Optional[Dict[str, Any]]) -> None:
         )
 
 
-def usage_totals(days: int = 14, kind: Optional[str] = None) -> Dict[str, Any]:
+def usage_totals(
+    days: int = 14, kind: Optional[str] = None, os: Optional[str] = None,
+) -> Dict[str, Any]:
     """What the model has been asked for lately, across every run."""
     where = ["started_at >= ?", "llm_calls IS NOT NULL"]
     params: List[Any] = [time.time() - days * 86400]
     _kind_filter("kind", kind, where, params)
+    _run_os_filter("platform", os, where, params, kind)
     with _connect() as conn:
         row = conn.execute(
             f"""SELECT COUNT(*) AS runs,
@@ -643,6 +646,41 @@ def platform_counts(table: str) -> Dict[str, int]:
     return counts
 
 
+def _run_os_filter(
+    column: str, os: Optional[str], where: List[str], params: List[Any],
+    kind: Optional[str] = "mobile",
+) -> None:
+    """Narrow to one phone, read off what the driver reported when it ran.
+
+    An iPhone run and a Pixel run are different apps with different selectors
+    and different bugs; read in one list, a failure on one looked like a
+    failure on both.
+
+    `kind` is here so the question can be refused rather than answered wrongly:
+    on the Web tab there is no phone, and a stray `&os=ios` left over from the
+    Mobile tab would otherwise match nothing and empty the list.
+    """
+    wanted = clean_os(os, kind or "mobile")
+    if wanted:
+        where.append(f"LOWER(COALESCE({column}, '')) = ?")
+        params.append(wanted)
+
+
+def _suite_os_filter(
+    column: str, os: Optional[str], where: List[str], params: List[Any],
+    kind: Optional[str] = "mobile",
+) -> None:
+    """The same cut, asked of a Test Set rather than of a run.
+
+    A set written before the column existed has not said which phone it is
+    for, and shows on both rather than being hidden by a question it predates.
+    """
+    wanted = clean_os(os, kind or "mobile")
+    if wanted:
+        where.append(f"({column} IS NULL OR {column} = ?)")
+        params.append(wanted)
+
+
 def _run_search_filter(search: Optional[str], where: List[str], params: List[Any]) -> None:
     """Search on the server, not in the loaded page: a filter that only looks
     at the runs already fetched quietly misses the older run being hunted for.
@@ -713,10 +751,7 @@ def list_runs(
                LEFT JOIN suite_cases c ON c.id = r.case_id"""
     where, params = [], []
     _kind_filter("r.kind", kind, where, params)
-    wanted_os = clean_os(os, "mobile")
-    if wanted_os:
-        where.append("LOWER(COALESCE(r.platform, '')) = ?")
-        params.append(wanted_os)
+    _run_os_filter("r.platform", os, where, params, kind)
     if priority:
         # Not `c.priority = ?`, which would also turn the LEFT JOIN into an
         # inner one and drop every run whose case has since been deleted.
@@ -930,6 +965,22 @@ def create_bug(
     return bug_id
 
 
+def _bug_os_filter(
+    os: Optional[str], where: List[str], params: List[Any],
+    kind: Optional[str] = "mobile",
+) -> None:
+    """Narrow bugs to one phone, through the run that raised them.
+
+    A bug filed by hand has no run and so no OS. It stays on both sub-tabs
+    rather than being hidden by a question it was never asked — the same rule
+    a Test Set written before the field existed follows.
+    """
+    wanted = clean_os(os, kind or "mobile")
+    if wanted:
+        where.append("(LOWER(COALESCE(r.platform, '')) = ? OR b.run_id IS NULL)")
+        params.append(wanted)
+
+
 def _row_to_bug(row: sqlite3.Row, include_screenshot: bool = False) -> Dict[str, Any]:
     bug = dict(row)
     bug["hasScreenshot"] = bool(bug.get("screenshot"))
@@ -944,24 +995,33 @@ def list_bugs(
     search: Optional[str] = None,
     limit: int = 200,
     kind: Optional[str] = None,
+    os: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    query = "SELECT * FROM bugs"
+    # Which phone a bug is on is read off the run that raised it rather than
+    # stored again: bugs carry the run, and the run carries what the driver
+    # reported. One filed by hand has no run and so no OS, which puts it on
+    # both sub-tabs — the same rule everything else here follows.
+    query = ("SELECT b.*,"
+             "       CASE WHEN LOWER(COALESCE(r.platform, '')) IN ('ios', 'android')"
+             "            THEN LOWER(r.platform) END AS os"
+             "  FROM bugs b LEFT JOIN runs r ON r.id = b.run_id")
     where, params = [], []
-    _kind_filter("kind", kind, where, params)
+    _kind_filter("b.kind", kind, where, params)
+    _bug_os_filter(os, where, params, kind)
     if status:
-        where.append("status = ?")
+        where.append("b.status = ?")
         params.append(status)
     if code:
-        where.append("code = ?")
+        where.append("b.code = ?")
         params.append(code)
     if search and search.strip():
         needle = f"%{search.strip().lower()}%"
-        where.append("(LOWER(title) LIKE ? OR LOWER(COALESCE(detail, '')) LIKE ?"
-                     " OR LOWER(COALESCE(case_name, '')) LIKE ?)")
+        where.append("(LOWER(b.title) LIKE ? OR LOWER(COALESCE(b.detail, '')) LIKE ?"
+                     " OR LOWER(COALESCE(b.case_name, '')) LIKE ?)")
         params.extend([needle, needle, needle])
     if where:
         query += " WHERE " + " AND ".join(where)
-    query += " ORDER BY created_at DESC LIMIT ?"
+    query += " ORDER BY b.created_at DESC LIMIT ?"
     params.append(limit)
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -1012,21 +1072,44 @@ def bug_for_run(run_id: str) -> Optional[Dict[str, Any]]:
     return _row_to_bug(row) if row else None
 
 
-def bug_counts(kind: Optional[str] = None) -> Dict[str, int]:
+def bug_counts(kind: Optional[str] = None, os: Optional[str] = None) -> Dict[str, int]:
     # Counted within the platform being viewed: the status filter sits under
-    # the platform tab, so "12 open" has to mean 12 on this tab.
+    # the platform tab, so "12 open" has to mean 12 on this tab — and on the
+    # phone it names, once Mobile is split in two.
     where: List[str] = []
     params: List[Any] = []
-    _kind_filter("kind", kind, where, params)
+    _kind_filter("b.kind", kind, where, params)
+    _bug_os_filter(os, where, params, kind)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT status, COUNT(*) AS n FROM bugs"
+            "SELECT b.status AS status, COUNT(*) AS n"
+            "  FROM bugs b LEFT JOIN runs r ON r.id = b.run_id"
             + (" WHERE " + " AND ".join(where) if where else "")
-            + " GROUP BY status",
+            + " GROUP BY 1",
             params,
         ).fetchall()
     counts = {row["status"]: row["n"] for row in rows}
     counts["all"] = sum(counts.values())
+    return counts
+
+
+def bug_os_counts(kind: str = "mobile") -> Dict[str, int]:
+    """How many bugs sit on each phone, for the sub-tabs above them."""
+    counts = {name: 0 for name in MOBILE_OS}
+    where: List[str] = []
+    params: List[Any] = []
+    _kind_filter("b.kind", kind, where, params)
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT LOWER(COALESCE(r.platform, '')) AS os, COUNT(*) AS n"
+            "  FROM bugs b LEFT JOIN runs r ON r.id = b.run_id"
+            + (" WHERE " + " AND ".join(where) if where else "")
+            + " GROUP BY 1",
+            params,
+        ).fetchall()
+    for row in rows:
+        if row["os"] in counts:
+            counts[row["os"]] = row["n"]
     return counts
 
 
@@ -1817,6 +1900,7 @@ def case_history(case_id: str, limit: int = 30) -> List[Dict[str, Any]]:
 
 def flakiness_report(
     limit: int = 40, window: int = 20, kind: Optional[str] = None,
+    os: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Which cases change their mind.
 
@@ -1830,6 +1914,7 @@ def flakiness_report(
     where: List[str] = []
     params: List[Any] = []
     _kind_filter("s.kind", kind, where, params)
+    _suite_os_filter("s.os", os, where, params, kind)
     with _connect() as conn:
         case_rows = conn.execute(
             """SELECT c.id, c.name, c.suite_id, s.name AS suite_name
@@ -1871,7 +1956,9 @@ def flakiness_report(
 PRIORITY_ORDER = ("Critical", "High", "Medium", "Low")
 
 
-def priority_breakdown(days: int = 14, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+def priority_breakdown(
+    days: int = 14, kind: Optional[str] = None, os: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Pass/fail per priority band.
 
     A pass rate on its own does not say whether the team is in trouble: the same
@@ -1886,6 +1973,7 @@ def priority_breakdown(days: int = 14, kind: Optional[str] = None) -> List[Dict[
     where = ["r.started_at >= ?"]
     params: List[Any] = [time.time() - days * 86400]
     _kind_filter("r.kind", kind, where, params)
+    _run_os_filter("r.platform", os, where, params, kind)
     with _connect() as conn:
         rows = conn.execute(
             # Grouped on the run's own snapshot first, falling back to the case
@@ -1930,11 +2018,14 @@ def priority_breakdown(days: int = 14, kind: Optional[str] = None) -> List[Dict[
     return breakdown
 
 
-def trend(days: int = 14, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+def trend(
+    days: int = 14, kind: Optional[str] = None, os: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Pass/fail counts per day, for the report's sparkline."""
     where = ["started_at >= ?"]
     params: List[Any] = [time.time() - days * 86400]
     _kind_filter("kind", kind, where, params)
+    _run_os_filter("platform", os, where, params, kind)
     with _connect() as conn:
         rows = conn.execute(
             f"""SELECT date(started_at, 'unixepoch', 'localtime') AS day,

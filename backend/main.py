@@ -29,7 +29,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import (
-    FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect,
+    FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -49,6 +49,7 @@ import explorer
 import exporters
 import healing
 import locator
+import process_group
 import process_manager
 import reporters
 import storage
@@ -86,6 +87,14 @@ def require_target(session_id: str):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Before anything can open a browser. The close below handles a graceful
+    # exit; this handles every other kind, which is how twenty-nine orphaned
+    # Chromium processes and 119 MB of abandoned profiles accumulated on one
+    # machine over a fortnight — and why a fresh browser launch had started
+    # timing out.
+    if not process_group.bind_children_to_this_process():
+        print("[startup] browsers will not be cleaned up after a hard kill "
+              "on this platform")
     storage.init_db()
     yield
     await drivers.close_all()
@@ -1189,10 +1198,10 @@ async def get_runs(
     q: Optional[str] = None,
     offset: int = 0,
     kind: Optional[str] = None,
-    os: Optional[str] = None,
+    phone_os: Optional[str] = Query(None, alias="os"),
 ):
     runs = storage.list_runs(
-        limit, priority=priority, search=q, offset=offset, kind=kind, os=os,
+        limit, priority=priority, search=q, offset=offset, kind=kind, os=phone_os,
     )
     # Whether another page exists, so the UI can hide "Load more" at the end
     # rather than offering a button that returns nothing.
@@ -2057,12 +2066,14 @@ async def list_bugs(
     search: Optional[str] = None,
     limit: int = 200,
     kind: Optional[str] = None,
+    phone_os: Optional[str] = Query(None, alias="os"),
 ):
     return {
         "bugs": storage.list_bugs(status=status, code=code, search=search,
-                                  limit=limit, kind=kind),
-        "counts": storage.bug_counts(kind),
+                                  limit=limit, kind=kind, os=phone_os),
+        "counts": storage.bug_counts(kind, phone_os),
         "platformCounts": storage.platform_counts("bugs"),
+        "osCounts": storage.bug_os_counts(),
         "codes": bug_report.CODES,
         "notAppDefects": sorted(bug_report.NOT_APP_DEFECTS),
         "statuses": list(storage.BUG_STATUSES),
@@ -2212,17 +2223,20 @@ async def download_artifact(artifact_id: int):
 
 
 @app.get("/api/insights/trend")
-async def get_trend(days: int = 14, kind: Optional[str] = None):
+async def get_trend(days: int = 14, kind: Optional[str] = None,
+                    phone_os: Optional[str] = Query(None, alias="os")):
     # Every insight is read one platform at a time. A pass rate that averages a
     # mature web suite with a handful of mobile runs describes neither of them.
-    return {"trend": storage.trend(days, kind=kind),
-            "counts": storage.platform_counts("runs")}
+    return {"trend": storage.trend(days, kind=kind, os=phone_os),
+            "counts": storage.platform_counts("runs"),
+            "osCounts": storage.run_os_counts()}
 
 
 @app.get("/api/insights/priority")
-async def get_priority_breakdown(days: int = 14, kind: Optional[str] = None):
+async def get_priority_breakdown(days: int = 14, kind: Optional[str] = None,
+                                 phone_os: Optional[str] = Query(None, alias="os")):
     """How the history looks through the priority standard, not just in total."""
-    return {"breakdown": storage.priority_breakdown(days, kind=kind)}
+    return {"breakdown": storage.priority_breakdown(days, kind=kind, os=phone_os)}
 
 
 @app.get("/api/insights/budget")
@@ -2274,19 +2288,21 @@ async def get_budget():
 
 
 @app.get("/api/insights/usage")
-async def get_usage(days: int = 14, kind: Optional[str] = None):
+async def get_usage(days: int = 14, kind: Optional[str] = None,
+                    phone_os: Optional[str] = Query(None, alias="os")):
     """What the runs in this window asked of the model.
 
     QAi cannot see the quota left on the key — that lives with whoever issues
     it — but it can say what it spent, which is the half of the question it is
     in a position to answer.
     """
-    return {"usage": storage.usage_totals(days, kind=kind)}
+    return {"usage": storage.usage_totals(days, kind=kind, os=phone_os)}
 
 
 @app.get("/api/insights/flaky")
-async def get_flaky(limit: int = 20, window: int = 20, kind: Optional[str] = None):
-    return {"flaky": storage.flakiness_report(limit, window, kind=kind)}
+async def get_flaky(limit: int = 20, window: int = 20, kind: Optional[str] = None,
+                    phone_os: Optional[str] = Query(None, alias="os")):
+    return {"flaky": storage.flakiness_report(limit, window, kind=kind, os=phone_os)}
 
 
 # --------------------------------------------------------------------------- #

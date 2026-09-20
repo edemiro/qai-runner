@@ -14,6 +14,7 @@ import subprocess
 import sys
 from typing import Optional
 
+import process_group
 from config import LOG_FILE_PATH
 
 IS_WINDOWS = sys.platform.startswith("win")
@@ -72,7 +73,17 @@ def start() -> tuple[bool, str]:
 
         if IS_WINDOWS:
             # A new process group lets us signal the whole tree later.
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            #
+            # And out of the backend's job object, which exists so the
+            # browsers die when the backend does. Appium is the one child that
+            # should not: it takes ten seconds to come up, the backend is
+            # restarted often, and a device session does not survive that
+            # restart anyway — so taking Appium down with it costs time and
+            # buys nothing. Stopping it stays an explicit act, from Settings.
+            kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | process_group.CREATE_BREAKAWAY_FROM_JOB
+            )
         else:
             kwargs["start_new_session"] = True
 

@@ -10,6 +10,11 @@ BOUNDS_REGEX = re.compile(r'\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]')
 # which nodes are candidates for a click/type action.
 INTERACTIVE_ROLES = {"button", "textbox", "checkbox", "switch", "link", "tab"}
 
+# A control's `value` when it is a state, not something written on the screen.
+# A switch reports "0" or "1" there, and reading those as screen text would
+# match an assertion on "1" against a control that says nothing of the sort.
+BOOLEAN_VALUES = {"0", "1", "true", "false"}
+
 
 class MobileElement:
     """
@@ -37,6 +42,16 @@ class MobileElement:
         self.name = self.attribs.get("content-desc") or self.attribs.get("name")
         if self.name:
             self.name = self.name.strip()
+
+        # What the control currently holds, where that is a separate thing
+        # from what it is called. An iOS picker row is label="Cabin" with
+        # value="ECONOMY": `text` above takes the label and stops, so an
+        # assertion on the cabin actually chosen failed on a screen that was
+        # showing it. Booleans are left out — a switch reports "0" or "1", and
+        # putting those in the screen's text would match a needle like "1"
+        # against a control that says nothing of the sort.
+        raw_value = (self.attribs.get("value") or "").strip()
+        self.value = None if raw_value.lower() in BOOLEAN_VALUES else (raw_value or None)
 
         # Resource or accessibility identifiers
         raw_res_id = self.attribs.get("resource-id")
@@ -470,7 +485,7 @@ class MobileDOMManager:
             if not (elem.displayed and elem.visible):
                 if not (include_hidden and elem.displayed and self._on_screen(elem)):
                     continue
-            for value in (elem.text, elem.name):
+            for value in (elem.text, elem.name, elem.value):
                 if not value:
                     continue
                 normalised = " ".join(value.split())
@@ -500,11 +515,11 @@ class MobileDOMManager:
             if elem.displayed and elem.visible
         ]
         for elem in visible:
-            for value in (elem.text, elem.name):
+            for value in (elem.text, elem.name, elem.value):
                 if value and needle_norm in " ".join(value.split()).lower():
                     return elem
         for elem in visible:
-            for value in (elem.text, elem.name):
+            for value in (elem.text, elem.name, elem.value):
                 piece = " ".join((value or "").split()).lower()
                 if piece and piece in needle_norm:
                     return elem
@@ -516,7 +531,7 @@ class MobileDOMManager:
         for elem in self.get_all_elements():
             if not (elem.displayed and elem.visible):
                 continue
-            for value in (elem.text, elem.name):
+            for value in (elem.text, elem.name, elem.value):
                 if value and value not in out:
                     out.append(value)
         return out

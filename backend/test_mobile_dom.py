@@ -245,3 +245,52 @@ class TextTheDriverSaysIsNotVisible(unittest.TestCase):
         """Four thousand pixels down is not on the screen by any reading, and
         counting it would make every assertion pass."""
         self.assertIsNone(self._screen().find_text("Off the screen"))
+
+
+class WhatAControlHoldsAgainstWhatItIsCalled(unittest.TestCase):
+    """An iOS picker row is two attributes: label="Cabin", value="ECONOMY".
+
+    The element's text took the label and stopped, so the cabin the tester had
+    actually chosen was nowhere in the screen's text and an assertion on it
+    failed against a screen that was showing it.
+    """
+
+    SCREEN = (
+        '<XCUIElementTypeApplication name="ThyReg" x="0" y="0" width="440" height="956">'
+        '  <XCUIElementTypeOther label="Cabin" value="ECONOMY" visible="true"'
+        '                        x="0" y="400" width="440" height="48"/>'
+        '  <XCUIElementTypeSwitch name="Notifications" value="1" visible="true"'
+        '                         x="0" y="500" width="440" height="48"/>'
+        '</XCUIElementTypeApplication>'
+    )
+
+    def _screen(self):
+        return MobileDOMManager(self.SCREEN, "iOS", 440, 956)
+
+    def test_the_chosen_value_is_part_of_the_screen(self):
+        self.assertEqual(self._screen().find_text("ECONOMY"), "visible")
+
+    def test_the_label_beside_it_still_reads(self):
+        self.assertEqual(self._screen().find_text("Cabin"), "visible")
+
+    def test_a_boolean_state_is_not_treated_as_a_value(self):
+        """A switch reports "1" in the same attribute. That is a state, not
+        something written on the screen, so it is not what `value` carries.
+
+        It still reaches the element tree through `text`, which has always
+        fallen back to the attribute — that is how the model reads whether a
+        switch is on — so an assertion on the bare string "1" can still match
+        a switch. Narrowing that means giving switch state a field of its own,
+        which is a wider change than this one.
+        """
+        switch = next(
+            elem for elem in self._screen().get_all_elements()
+            if elem.name == "Notifications"
+        )
+        self.assertIsNone(switch.value)
+        self.assertEqual(switch.text, "1")
+
+    def test_the_failure_message_lists_it_too(self):
+        """What was on screen has to include the values, or the message sends
+        the reader looking for a word that is genuinely there."""
+        self.assertIn("ECONOMY", self._screen().visible_text())

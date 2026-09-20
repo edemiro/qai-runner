@@ -6,6 +6,7 @@ import {
 import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
+import { OS_TABS } from '../lib/platforms';
 
 /**
  * Defects raised off failed scenarios.
@@ -77,6 +78,12 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
      below are recounted within it for the same reason. */
   const [platform, setPlatform] = useState(initialPlatform || DEFAULT_PLATFORM);
   const [platformCounts, setPlatformCounts] = useState(null);
+  /* And within Mobile, which phone — for the same reason, one step down. An
+     iOS bug and an Android one are different code and usually different
+     people. Which phone is read off the run that raised the bug; one filed by
+     hand has no run and stays on both. */
+  const [os, setOs] = useState('ios');
+  const [osCounts, setOsCounts] = useState(null);
 
   // Bumped to re-read after a change of our own. The fetch itself lives in the
   // effect rather than in a callback the effect calls, so nothing sets state
@@ -90,11 +97,13 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
       try {
         const data = await api.bugs({
           status: status || null, search: search || null, kind: platform,
+          os: platform === 'mobile' ? os : null,
         });
         if (cancelled) return;
         setBugs(data.bugs || []);
         setCounts(data.counts || {});
         setPlatformCounts(data.platformCounts || null);
+        setOsCounts(data.osCounts || null);
         setMeta({
           codes: data.codes || {},
           notAppDefects: data.notAppDefects || [],
@@ -107,7 +116,7 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [status, search, platform, reload, toast]);
+  }, [status, search, platform, os, reload, toast]);
 
   const selected = bugs.find((b) => b.id === selectedId) || null;
 
@@ -148,6 +157,12 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
           placeholder="Search title, body or scenario"
         />
         <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
+        {platform === 'mobile' && (
+          <PlatformTabs
+            options={OS_TABS} value={os} onChange={setOs}
+            counts={loading ? null : osCounts} sub
+          />
+        )}
       </header>
 
       <div className="segmented">
