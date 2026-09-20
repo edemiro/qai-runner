@@ -47,6 +47,17 @@ function byNewest(a, b) {
 
 const osOf = (device) => (String(device.platform || '').toLowerCase() === 'ios' ? 'ios' : 'android');
 
+/* Read off the model name, which is the only place it is written — neither
+   BrowserStack's device list nor a local adb scan says what shape a device is.
+   Every tablet on this account is an iPad or a Galaxy Tab, and "tab" is
+   matched as a whole word so it does not catch a phone whose name merely
+   contains those letters.
+
+   Anything unrecognised counts as a phone. That way a tablet QAi has not seen
+   before turns up in the default list rather than vanishing from both. */
+const TABLET_NAMES = /\bipad\b|\btablets?\b|\btab\b|mediapad/i;
+const isTablet = (device) => TABLET_NAMES.test(String(device.name || ''));
+
 function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
   const toast = useToast();
   const [apps, setApps] = useState(null);
@@ -208,6 +219,9 @@ export function StudioPage({
   const [filter, setFilter] = useState('');
   // iOS first and selected, which is where the mobile work starts here.
   const [os, setOs] = useState('ios');
+  // Phones by default: they are what most testing is against, and a tablet
+  // picked by accident is a run against a layout nobody meant to test.
+  const [form, setForm] = useState('phone');
 
   // The button flips `scanning` and bumps the key; the effect only reads. That
   // keeps every synchronous setState in an event handler rather than an effect.
@@ -317,8 +331,18 @@ export function StudioPage({
     ios: source_devices.filter((device) => osOf(device) === 'ios').length,
     android: source_devices.filter((device) => osOf(device) === 'android').length,
   };
-  const shown = source_devices
-    .filter((device) => osOf(device) === os)
+
+  /* Tablets are a quarter of the catalogue — 29 of the 111 on this account —
+     and a different job: a layout that reflows, gestures with room to miss,
+     an app that may not even ship for them. They are kept out of the way
+     rather than off the page, counted so the choice is visible. */
+  const onThisOs = source_devices.filter((device) => osOf(device) === os);
+  const formCounts = {
+    phone: onThisOs.filter((device) => !isTablet(device)).length,
+    tablet: onThisOs.filter((device) => isTablet(device)).length,
+  };
+  const shown = onThisOs
+    .filter((device) => isTablet(device) === (form === 'tablet'))
     .slice()
     .sort(byNewest);
 
@@ -366,6 +390,19 @@ export function StudioPage({
               <span className="source-count">{cloud.devices.length}</span>
             )}
           </button>
+        </div>
+
+        <div className="segmented">
+          {[['phone', 'Phones'], ['tablet', 'Tablets']].map(([id, label]) => (
+            <button
+              key={id}
+              className={form === id ? 'active' : ''}
+              onClick={() => setForm(id)}
+            >
+              {label}
+              <span className="tab-count">{formCounts[id]}</span>
+            </button>
+          ))}
         </div>
         {effectiveSource === 'browserstack' && cloud.configured && (
           <label className="device-filter">
