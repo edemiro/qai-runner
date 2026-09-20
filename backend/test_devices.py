@@ -204,3 +204,53 @@ class IosAppListing(unittest.IsolatedAsyncioTestCase):
     async def test_an_unreadable_report_is_an_empty_list_not_a_crash(self):
         with patch.object(devices, "_run", AsyncMock(return_value="")):
             self.assertEqual(await devices._ios_apps_via_devicectl("udid"), [])
+
+
+class BuildsOfferedForADevice(unittest.TestCase):
+    """The app picker should only offer what the device in hand can install.
+
+    The account holds both tracks — measured on the real one, 58 .apk against
+    18 .ipa — and the picker listed all 76 whichever device was connected. The
+    environment buttons already read the platform out of the file name; this is
+    the same reading applied to the full list.
+    """
+
+    ANDROID = [
+        "26.9.17.0_Android_Test.apk",
+        "TK_REG_1.49.3.967.apk",
+        "and_reg_1.47.0.919.apk",
+        "AJet-AND-preprod-2-1-4-52.apk",
+        "something.aab",
+    ]
+    IOS = [
+        "26.9.17.0_IOS_Test.ipa",
+        "BrowserStack-SampleApp.ipa",
+    ]
+
+    def test_an_android_device_is_offered_the_android_builds(self):
+        for name in self.ANDROID:
+            self.assertTrue(devices.matches_platform(name, "Android"), name)
+        for name in self.IOS:
+            self.assertFalse(devices.matches_platform(name, "Android"), name)
+
+    def test_an_ios_device_is_offered_the_ios_builds(self):
+        for name in self.IOS:
+            self.assertTrue(devices.matches_platform(name, "iOS"), name)
+        for name in self.ANDROID:
+            self.assertFalse(devices.matches_platform(name, "iOS"), name)
+
+    def test_the_platform_written_into_the_name_counts_too(self):
+        """Not every build carries an extension QAi recognises, but the team
+        writes the platform into the name as well."""
+        self.assertTrue(devices.matches_platform("26.9.17.0_Android_Test", "Android"))
+        self.assertFalse(devices.matches_platform("26.9.17.0_IOS_Test", "Android"))
+
+    def test_a_name_that_says_neither_is_kept(self):
+        """This list also carries the packages installed on a physical phone,
+        whose names are bundle ids. Hiding one is worse than offering it."""
+        for name in ("com.thy.thytest", "ThyReg", ""):
+            self.assertTrue(devices.matches_platform(name, "Android"), name)
+            self.assertTrue(devices.matches_platform(name, "iOS"), name)
+
+    def test_an_unknown_platform_filters_nothing(self):
+        self.assertTrue(devices.matches_platform("x.ipa", "Tizen"))

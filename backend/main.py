@@ -270,6 +270,11 @@ async def get_device_apps(udid: str, platform: str = "Android"):
         apps = await _browserstack_apps()
     else:
         apps = await device_discovery.list_installed_apps(udid, platform)
+    # Only what this device could actually install. The account holds both
+    # tracks, so a cloud Pixel was being offered every .ipa and an iPhone every
+    # .apk — a list where most of the entries are mistakes.
+    apps = [app for app in apps
+            if device_discovery.matches_platform(app.get("name"), platform)]
     # The TK builds are called out separately so the common choice is one tap
     # rather than a search through every app on the phone.
     return {"apps": apps, "environments": device_discovery.match_environments(apps, platform)}
@@ -1037,9 +1042,17 @@ class ScenarioStep(BaseModel):
     `expected` is what makes the step checkable rather than merely performed —
     a run reports each step against it, so a step without one can only ever be
     reported as "carried out".
+
+    `recorded` is what the last green run did to carry the step out, and it is
+    declared here so it survives a round trip. Without it Pydantic dropped the
+    field on the way in, so saving any edit to a scenario — even one that did
+    not touch the steps — silently erased every recording it had, and the next
+    run paid full price for all of them. The contents are re-checked by
+    `storage.clean_recorded`; this only has to let them through.
     """
     action: str
     expected: Optional[str] = None
+    recorded: Optional[List[Dict[str, Any]]] = None
 
 
 class AgentRunRequest(BaseModel):

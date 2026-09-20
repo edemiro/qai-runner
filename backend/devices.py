@@ -214,6 +214,28 @@ _OTHER_PRODUCTS = (
 )
 
 
+def matches_platform(name: str, platform: str) -> bool:
+    """Whether a build with this file name can run on this kind of device.
+
+    The environment buttons have always read the platform out of the name; the
+    list of every build did not, so a cloud Pixel offered eighteen .ipa files
+    it could not install, and an iPhone offered fifty-eight .apk files. Same
+    tokens, applied in one more place.
+
+    A name that says neither is kept. This list also carries the packages
+    already installed on a physical phone, whose names are bundle ids with no
+    platform in them — and hiding a build someone meant to pick is worse than
+    offering one they will not.
+    """
+    wants, rejects = _PLATFORM_TOKENS.get((platform or "").lower(), ((), ()))
+    if not wants:
+        return True
+    low = str(name or "").lower()
+    if any(token in low for token in wants):
+        return True
+    return not any(token in low for token in rejects)
+
+
 def _upload_for(label: str, platform: str, apps: List[Dict]) -> Optional[Dict]:
     """The newest uploaded build whose file name says this platform and env."""
     tokens = _ENV_TOKENS.get(label.lower(), ())

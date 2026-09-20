@@ -237,6 +237,21 @@ def test_a_step_that_only_moved_keeps_its_recording(db, case):
     assert [item["recorded"][0]["action"] for item in after] == ["type", "click"]
 
 
+def test_the_request_model_lets_a_recording_through(db):
+    """Found by editing one scenario and watching all four of its recordings
+    disappear. The API's step model declared only `action` and `expected`, so
+    Pydantic dropped `recorded` on the way in and saving any edit — even one
+    that did not touch the steps — erased every recording the scenario had.
+    """
+    from main import ScenarioStep
+
+    step = ScenarioStep(**{
+        "action": "Search", "expected": "Results",
+        "recorded": [{"action": "click", "selector": "#go"}],
+    })
+    assert step.model_dump()["recorded"] == [{"action": "click", "selector": "#go"}]
+
+
 def test_what_is_written_is_exactly_what_the_replay_reads(db, case):
     """The seam. `promote_recording` writes the recording and the agent's
     `open_step` reads it back; each half is tested on its own, so this is the

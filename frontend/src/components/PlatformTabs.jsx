@@ -22,22 +22,32 @@ const PLATFORMS = [
   { id: 'mobile', label: 'Mobile', icon: Smartphone },
 ];
 
-export function PlatformTabs({ value = DEFAULT_PLATFORM, onChange, counts = null, disabled = false }) {
-  const tabs = useRef([]);
+/* `options` is how the same strip asks a different question — which mobile OS,
+   on the page where devices are picked. A caller's own list lives with that
+   caller; only the web/mobile pair is general enough to sit here.
 
-  // Anything that is not one of the two — an 'all' left over from the old
-  // filter — lands on the default rather than on a strip with nothing chosen
-  // and, because of the roving tabindex below, nothing a keyboard can reach.
-  const current = PLATFORMS.some((item) => item.id === value) ? value : DEFAULT_PLATFORM;
+   An option's icon is optional, because not every axis has a glyph worth
+   drawing: lucide ships no platform logos, and "iOS" beside "Android" reads
+   perfectly well without one invented for it. */
+export function PlatformTabs({
+  options = PLATFORMS, value, onChange, counts = null, disabled = false,
+}) {
+  const tabs = useRef([]);
+  const fallback = options[0]?.id;
+
+  // Anything that is not one of them — an 'all' left over from the old filter —
+  // lands on the first rather than on a strip with nothing chosen and, because
+  // of the roving tabindex below, nothing a keyboard can reach.
+  const current = options.some((item) => item.id === value) ? value : fallback;
 
   // Arrows move the choice, not just the focus: with two tabs there is nothing
   // to browse, so Left and Right both mean "the other one".
   const onKeyDown = (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const index = PLATFORMS.findIndex((item) => item.id === current);
-    const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + PLATFORMS.length) % PLATFORMS.length;
-    onChange?.(PLATFORMS[next].id);
+    const index = options.findIndex((item) => item.id === current);
+    const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length;
+    onChange?.(options[next].id);
     tabs.current[next]?.focus();
   };
 
@@ -48,7 +58,7 @@ export function PlatformTabs({ value = DEFAULT_PLATFORM, onChange, counts = null
       aria-label="Platform"
       onKeyDown={disabled ? undefined : onKeyDown}
     >
-      {PLATFORMS.map(({ id, label, icon: Icon }, i) => {
+      {options.map(({ id, label, icon: Icon }, i) => {
         const selected = id === current;
         // No counts, no badges. A "0" is a statement — the switch is right and
         // the work is missing — so a page passes counts only once it has them,
@@ -69,7 +79,7 @@ export function PlatformTabs({ value = DEFAULT_PLATFORM, onChange, counts = null
             onClick={() => onChange?.(id)}
             disabled={disabled}
           >
-            <Icon size={15} />
+            {Icon && <Icon size={15} />}
             {label}
             {hasCount && <span className="platform-tab-count">{count}</span>}
           </button>

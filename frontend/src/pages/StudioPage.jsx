@@ -4,7 +4,48 @@ import {
   Wifi, WifiOff,
 } from 'lucide-react';
 import { api } from '../api';
+import { PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
+
+// No icons: lucide ships no platform logos, and the two words read perfectly
+// well side by side without one invented for them.
+const OS_TABS = [
+  { id: 'ios', label: 'iOS' },
+  { id: 'android', label: 'Android' },
+];
+
+/* "Newest first", built from what a device row actually carries.
+   BrowserStack offers hundreds of them in one list and the model a tester
+   wants is almost always a recent one, so it should not have to be hunted for.
+
+   The OS version leads because it is unambiguous and comparable across
+   brands. The number in the model name breaks the tie, which is what orders
+   an iPhone 16 above an iPhone 11 on the same iOS. Four digits and up are a
+   year ("iPhone SE 2022"), not a model number, so they are left out of that
+   comparison rather than ranking a 2022 above everything. */
+function compareVersion(a, b) {
+  const left = String(a || '').split('.').map((part) => parseInt(part, 10) || 0);
+  const right = String(b || '').split('.').map((part) => parseInt(part, 10) || 0);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    if ((left[i] || 0) !== (right[i] || 0)) return (right[i] || 0) - (left[i] || 0);
+  }
+  return 0;
+}
+
+function modelNumber(name) {
+  const numbers = (String(name || '').match(/\d+/g) || [])
+    .map(Number)
+    .filter((value) => value < 1000);
+  return numbers.length ? Math.max(...numbers) : 0;
+}
+
+function byNewest(a, b) {
+  return compareVersion(a.version, b.version)
+    || modelNumber(b.name) - modelNumber(a.name)
+    || String(a.name || '').localeCompare(String(b.name || ''));
+}
+
+const osOf = (device) => (String(device.platform || '').toLowerCase() === 'ios' ? 'ios' : 'android');
 
 function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
   const toast = useToast();
@@ -165,6 +206,8 @@ export function StudioPage({
   const [source, setSource] = useState('local');
   const [cloud, setCloud] = useState({ configured: false, devices: [], loading: false });
   const [filter, setFilter] = useState('');
+  // iOS first and selected, which is where the mobile work starts here.
+  const [os, setOs] = useState('ios');
 
   // The button flips `scanning` and bumps the key; the effect only reads. That
   // keeps every synchronous setState in an event handler rather than an effect.
@@ -258,12 +301,26 @@ export function StudioPage({
   const effectiveSource = devices.length === 0 ? 'browserstack' : source;
 
   const needle = filter.trim().toLowerCase();
-  const shown = effectiveSource === 'browserstack'
+  const source_devices = effectiveSource === 'browserstack'
     ? cloud.devices.filter((device) =>
         !needle
         || device.name.toLowerCase().includes(needle)
         || `${device.platform} ${device.version}`.toLowerCase().includes(needle))
     : devices;
+
+  /* An iPhone and a Pixel have nothing to do with each other — different
+     builds, different gestures, different bugs — and BrowserStack hands back
+     both in one list of hundreds. The counts sit on the tabs so an empty one
+     explains itself: with a single Android plugged in, the Android tab says 1
+     rather than the page looking broken on the iOS tab it opens on. */
+  const osCounts = {
+    ios: source_devices.filter((device) => osOf(device) === 'ios').length,
+    android: source_devices.filter((device) => osOf(device) === 'android').length,
+  };
+  const shown = source_devices
+    .filter((device) => osOf(device) === os)
+    .slice()
+    .sort(byNewest);
 
   return (
     <main className="page">
@@ -278,6 +335,7 @@ export function StudioPage({
           <RefreshCw size={15} className={scanning ? 'spin' : ''} />
           {scanning ? 'Scanning…' : 'Scan devices'}
         </button>
+        <PlatformTabs options={OS_TABS} value={os} onChange={setOs} counts={osCounts} />
       </header>
 
       {/* BrowserStack is always offered, whether or not it has been set up.
