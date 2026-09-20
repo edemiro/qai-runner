@@ -216,10 +216,11 @@ export const api = {
   stopAgent: (sessionId) => request(`/api/session/${sessionId}/agent/stop`, { method: 'POST' }),
   agentStatus: (sessionId) => request(`/api/session/${sessionId}/agent/status`),
 
-  runs: (limit = 50, q = '', offset = 0, kind = null) =>
+  runs: (limit = 50, q = '', offset = 0, kind = null, os = null) =>
     request(`/api/runs?limit=${limit}&offset=${offset}`
       + (q ? `&q=${encodeURIComponent(q)}` : '')
-      + (kind ? `&kind=${kind}` : '')),
+      + (kind ? `&kind=${kind}` : '')
+      + (os ? `&os=${os}` : '')),
   run: (runId) => request(`/api/runs/${runId}`),
   stepScreenshot: (runId, stepId) => request(`/api/runs/${runId}/steps/${stepId}/screenshot`),
   renameRun: (runId, title) => request(`/api/runs/${runId}`, { method: 'PATCH', body: { title } }),

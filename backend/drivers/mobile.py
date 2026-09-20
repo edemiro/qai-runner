@@ -182,6 +182,11 @@ class MobileTarget:
             "name": self.device.get("name"),
             "udid": self.device.get("udid"),
             "appId": self.device.get("appId"),
+            # What the app is called on the device. On a cloud session `appId`
+            # is an upload handle ("bs://…") that names nothing there, so
+            # anything that has to address the app — terminate it, relaunch it
+            # — needs this one instead.
+            "bundleId": self.device.get("bundleId"),
         }
 
     async def close(self) -> None:

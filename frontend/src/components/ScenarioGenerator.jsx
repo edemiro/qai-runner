@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Check, ChevronDown, ChevronRight, FileText, FileUp, Globe, HelpCircle,
   Link as LinkIcon,
-  Loader2, Play, Save, Sparkles, X,
+  Loader2, Play, Save, Sparkles, Smartphone, X,
 } from 'lucide-react';
 
 import { api } from '../api';
 import { StepEditor } from './StepEditor';
+import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
+import { sessionsFor } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 /**
@@ -39,7 +41,10 @@ export function ScenarioGenerator({
   const toast = useToast();
   const seeded = Array.isArray(initialScenarios) && initialScenarios.length > 0;
   const [brief, setBrief] = useState(defaultBrief);
-  const [url, setUrl] = useState('');
+  /* One of the environments the Web workspace lists, not free text. These hosts
+     differ by a single token and a mistyped one reads a page that still looks
+     plausible, so scenarios come back written against the wrong stack. */
+  const [url, setUrl] = useState(DEFAULT_ENV_URL);
   const [busy, setBusy] = useState(false);
   const [scenarios, setScenarios] = useState(() => (seeded ? initialScenarios : []));
   const [rejected, setRejected] = useState([]);
@@ -52,7 +57,16 @@ export function ScenarioGenerator({
   const [expanded, setExpanded] = useState(() => new Set());
 
   const [sessions, setSessions] = useState([]);
-  const [source, setSource] = useState(sessionId ? 'session' : 'url');
+  const isMobile = kind === 'mobile';
+  /* A page is something you open at an address; an app is something already
+     running on a phone. Offering "Open a URL…" under the Mobile tab asked for
+     an address there is nothing to type into — and the sessions beside it were
+     every open session, so the Android tab offered an iPhone. Both lists are
+     cut to the tab now: web pages on Web, and on Mobile only the phones on the
+     OS being looked at. */
+  const [source, setSource] = useState(
+    sessionId ? 'session' : (isMobile ? 'brief' : 'url'),
+  );
 
   /* An analysis document, read into text and shown as what it is rather than
      dropped into the brief field — a page of acceptance criteria would bury
@@ -115,15 +129,30 @@ export function ScenarioGenerator({
     (async () => {
       try {
         const data = await api.sessions();
-        if (cancelled) return;
-        setSessions(data.sessions || []);
-        if ((data.sessions || []).length) setSource(data.sessions[0].sessionId);
+        if (!cancelled) setSessions(data.sessions || []);
       } catch {
         if (!cancelled) setSessions([]);
       }
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
+
+  const onThisTab = useMemo(
+    () => sessionsFor(sessions, kind, isMobile ? os : null),
+    [sessions, kind, isMobile, os],
+  );
+
+  /* Derived rather than synced: switching from iOS to Android would otherwise
+     leave the iPhone selected — gone from the list, still in the state, and
+     still the phone the next Generate would read. Falling through to what is
+     on offer keeps the control and the choice saying the same thing. */
+  const chosenSource = (() => {
+    if (sessionId) return 'session';
+    if (source === 'brief') return 'brief';
+    if (onThisTab.some((item) => item.sessionId === source)) return source;
+    if (onThisTab.length) return onThisTab[0].sessionId;
+    return isMobile ? 'brief' : 'url';
+  })();
 
   useEffect(() => {
     if (!needsTarget) return undefined;
@@ -149,10 +178,10 @@ export function ScenarioGenerator({
     setBusy(true);
     try {
       const liveSession = sessionId
-        || (source !== 'url' && source !== 'brief' ? source : null);
+        || (chosenSource !== 'url' && chosenSource !== 'brief' ? chosenSource : null);
       const body = {
         brief: fullBrief || null,
-        url: liveSession ? null : (source === 'url' ? url.trim() || null : null),
+        url: liveSession ? null : (chosenSource === 'url' ? url.trim() || null : null),
         answers: withAnswers.trim() || null,
       };
       const data = liveSession
@@ -233,7 +262,9 @@ export function ScenarioGenerator({
       const created = await api.createSuite({
         name: newSetName.trim(),
         kind,
-        os,
+        // A web set has no OS; carrying one over from a phone that happened to
+        // be open would file it under a sub-tab it does not belong on.
+        os: isMobile ? os : null,
         module: newSetModule.trim() || null,
       });
       destId = created.id;
@@ -374,31 +405,53 @@ export function ScenarioGenerator({
         {!sessionId && (
           <select
             className="generator-source"
-            value={source}
+            value={chosenSource}
             onChange={(event) => setSource(event.target.value)}
             disabled={busy}
             aria-label="What to read the scenarios from"
           >
-            {sessions.map((item) => (
-              <option key={item.sessionId} value={item.sessionId}>
-                {item.device.kind === 'mobile' ? '📱' : '🌐'} {item.device.name}
-              </option>
-            ))}
-            <option value="url">🌐 Open a URL…</option>
+            {onThisTab.length > 0 && (
+              <optgroup label={isMobile ? 'Connected device' : 'Open page'}>
+                {onThisTab.map((item) => (
+                  <option key={item.sessionId} value={item.sessionId}>
+                    {isMobile ? '📱' : '🌐'} {item.device.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {/* There is no address to open on a phone: an app is read off a
+                device that is already running it. */}
+            {!isMobile && <option value="url">🌐 Open an environment…</option>}
             <option value="brief">✎ Brief only</option>
           </select>
         )}
-        {!sessionId && source === 'url' && (
+        {!sessionId && !isMobile && chosenSource === 'url' && (
           <div className="generator-url">
             <Globe size={13} />
-            <input
-              type="text"
+            <select
               value={url}
               onChange={(event) => setUrl(event.target.value)}
-              placeholder="turkishairlines.com"
               disabled={busy}
-            />
+              aria-label="Environment to read"
+            >
+              {ENV_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.items.map((item) => (
+                    <option key={item.name} value={item.url} title={item.url}>
+                      {item.name} · {new URL(item.url).host}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
+        )}
+        {!sessionId && isMobile && !onThisTab.length && (
+          <span className="generator-nodevice">
+            <Smartphone size={13} />
+            No {os === 'android' ? 'Android' : 'iOS'} device connected — open one
+            in Mobile to read the app.
+          </span>
         )}
         <button className="btn btn-primary" onClick={() => generate()} disabled={busy}>
           {busy ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
@@ -429,9 +482,9 @@ export function ScenarioGenerator({
       )}
 
       <p className="generator-hint">
-        {sessionId || (source !== 'url' && source !== 'brief')
+        {sessionId || (chosenSource !== 'url' && chosenSource !== 'brief')
           ? 'Read from the device or page you have open, in the state it is in now.'
-          : source === 'url'
+          : chosenSource === 'url'
             ? 'The page is opened and read, so scenarios name real fields and buttons.'
             : 'Written from the brief alone. Point it at a device or page for real fields.'}
         {' '}Every scenario comes back with steps to review and edit before it is saved.

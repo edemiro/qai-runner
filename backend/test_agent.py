@@ -171,7 +171,8 @@ class FakeTarget:
         return None
 
     def describe(self):
-        return {"kind": "fake", "platform": "Fake", "name": "fake", "udid": "fake", "appId": None}
+        return {"kind": self.kind, "platform": "Fake", "name": "fake",
+                "udid": "fake", "appId": None}
 
     async def close(self):
         return None
@@ -272,6 +273,27 @@ class TestExecuteAction(unittest.IsolatedAsyncioTestCase):
         )
         call = next(c for c in self.target.calls if c[0] == "act")
         self.assertEqual(call[3], "#login")
+
+    async def test_a_pixel_comparison_is_refused_on_a_phone(self):
+        """Measured on the real set: a step whose screen was correct failed at
+        7.18% of pixels differing, because the status bar clock had moved. The
+        run was recorded as a defect nobody could reproduce by hand."""
+        self.target.kind = "mobile"
+        result = await agent._execute_action(
+            self.target, {"action": "assert_visual", "value": "one-way-tab"}, self.snapshot
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("assert_text", result["message"])
+
+    async def test_a_pixel_comparison_is_still_offered_on_the_web(self):
+        """A browser page has no status bar; a layout regression there is
+        exactly what a baseline is good for."""
+        self.target.kind = "web"
+        result = await agent._execute_action(
+            self.target, {"action": "assert_visual"}, self.snapshot
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("baseline name", result["message"])
 
 
 class TestSessionControl(unittest.TestCase):

@@ -126,6 +126,15 @@ async def restart_app(session_id: str, platform: str, app_id: Optional[str]) -> 
     """
     if not app_id:
         return False
+    # A cloud session is booked with an upload handle ("bs://…"), which names
+    # nothing on the phone: terminate_app on it fails, this returned False, and
+    # every scenario after the first inherited the last one's half-filled form.
+    # The device itself knows what it is running, so ask it.
+    if app_id.startswith("bs://"):
+        found = await appium.active_app_info(session_id, platform)
+        if not found or found.lower() in SHELL_APP_IDS:
+            return False
+        app_id = found
     try:
         await appium.terminate_app(session_id, app_id)
         await asyncio.sleep(0.6)

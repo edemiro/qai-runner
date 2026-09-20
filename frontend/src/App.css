@@ -780,6 +780,18 @@
   color: var(--success);
 }
 
+/* A session running on the other OS: counted rather than listed, so the strip
+   stays about the tab you are on without the phone going missing. */
+.session-pill.elsewhere {
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+.session-pill.elsewhere:hover {
+  border-color: var(--accent-border);
+  color: var(--text-secondary);
+}
+
 .device-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
@@ -4098,6 +4110,31 @@ a.scan-row-url {
 }
 
 .generator-url input { border: none; background: transparent; padding-left: 0; }
+
+/* The environment is picked from the list the Web workspace offers, not typed.
+   Those hosts differ by a single token, and scenarios written against the
+   wrong stack still read as a plausible set. */
+.generator-url select {
+  border: none;
+  background: transparent;
+  padding-left: 0;
+  max-width: 250px;
+}
+
+/* Mobile with nothing connected: say what is missing where the device would
+   have been, rather than offering an empty list. */
+.generator-nodevice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  font-size: var(--control-font);
+  line-height: 1.35;
+  color: var(--text-tertiary);
+}
+
+.generator-nodevice > svg { flex: none; }
+
 .generator-suite { max-width: 180px; }
 
 .generator-hint,

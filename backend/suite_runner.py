@@ -818,7 +818,12 @@ async def run_suite(
             # against, so the restart is skipped rather than the suite lost.
             try:
                 described = device.describe() or {}
-                restart = (described.get("appId"), described.get("platform", ""),
+                # bundleId first: on a cloud session `appId` is the upload
+                # handle the session was booked with, which names nothing on
+                # the phone — terminating it failed silently and every mobile
+                # set stayed order-dependent.
+                restart = (described.get("bundleId") or described.get("appId"),
+                           described.get("platform", ""),
                            device.session_id)
             except Exception:  # noqa: BLE001
                 restart = None

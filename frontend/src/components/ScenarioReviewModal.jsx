@@ -16,8 +16,10 @@ export function ScenarioReviewModal({
   // Already-written scenarios (from the agent) to review, with the set name
   // and page they came from. When given, nothing is generated on open.
   scenarios = null, readFrom = null, suggestedName = '',
-  // Platform of the session being reviewed, so a new set is filed under it.
-  kind = 'web',
+  // Platform of the session being reviewed, so a new set is filed under it —
+  // and for a phone, which of the two it was, so the set lands on the sub-tab
+  // it was written on instead of showing up under both.
+  kind = 'web', os = null,
   // Forwarded so "Save & run" lands on the execution it just started.
   onOpenExecution = null,
 }) {
@@ -50,6 +52,7 @@ export function ScenarioReviewModal({
             initialReadFrom={readFrom}
             defaultSetName={suggestedName}
             kind={kind}
+            os={os}
             onOpenExecution={onOpenExecution}
             onAdded={onClose}
           />

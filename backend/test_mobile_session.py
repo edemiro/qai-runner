@@ -351,3 +351,32 @@ class StartingEachScenarioFromTheSamePlace(unittest.IsolatedAsyncioTestCase):
                           AsyncMock(side_effect=RuntimeError("no"))), \
              patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
             self.assertFalse(await mobile_session.restart_app("s", "iOS", "com.thy.app"))
+
+    async def test_a_cloud_handle_is_resolved_against_the_device(self):
+        """A BrowserStack session is booked with "bs://<sha>" — an upload
+        handle, not something the phone has ever heard of. Terminating it did
+        nothing, this returned False, and the measured result was the third
+        scenario opening with the second one's destination still filled in.
+        The device knows what it is running; ask it."""
+        killed = []
+        with patch.object(mobile_session.appium, "active_app_info",
+                          AsyncMock(return_value="com.thy.mobile")), \
+             patch.object(mobile_session.appium, "terminate_app",
+                          AsyncMock(side_effect=lambda _s, app: killed.append(app))), \
+             patch.object(mobile_session.appium, "activate_app", AsyncMock()), \
+             patch.object(mobile_session, "settle_permissions", AsyncMock(return_value=0)), \
+             patch.object(mobile_session, "settle_onboarding", AsyncMock(return_value=0)), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            ok = await mobile_session.restart_app("s", "iOS", "bs://8dff9ca28e56")
+        self.assertTrue(ok)
+        self.assertEqual(killed, ["com.thy.mobile"])
+
+    async def test_the_home_screen_is_never_what_gets_restarted(self):
+        """If the last scenario left SpringBoard in front, the device answers
+        with SpringBoard — and terminating that takes the session with it."""
+        with patch.object(mobile_session.appium, "active_app_info",
+                          AsyncMock(return_value="com.apple.springboard")), \
+             patch.object(mobile_session.appium, "terminate_app", AsyncMock()) as kill, \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            self.assertFalse(await mobile_session.restart_app("s", "iOS", "bs://x"))
+        kill.assert_not_awaited()

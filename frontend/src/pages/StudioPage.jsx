@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { PlatformTabs } from '../components/PlatformTabs';
-import { OS_TABS } from '../lib/platforms';
+import { OS_TABS, osOf } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 /* "Newest first", built from what a device row actually carries.
@@ -38,8 +38,6 @@ function byNewest(a, b) {
     || modelNumber(b.name) - modelNumber(a.name)
     || String(a.name || '').localeCompare(String(b.name || ''));
 }
-
-const osOf = (device) => (String(device.platform || '').toLowerCase() === 'ios' ? 'ios' : 'android');
 
 /* Read off the model name, which is the only place it is written — neither
    BrowserStack's device list nor a local adb scan says what shape a device is.
@@ -423,7 +421,10 @@ export function StudioPage({
       {sessions.length > 0 && (
         <section className="session-strip">
           <span className="strip-label">Active sessions</span>
-          {sessions.map((session) => (
+          {/* The sessions on the OS being looked at. A Pixel under the iOS tab
+              was as wrong here as in the catalogue below it — and the phones on
+              the other one are not lost, they are one click away. */}
+          {sessions.filter((s) => osOf(s.device) === os).map((session) => (
             <button
               key={session.sessionId}
               className={`session-pill ${session.sessionId === activeSessionId ? 'active' : ''}`}
@@ -433,6 +434,15 @@ export function StudioPage({
               {session.device.name}
             </button>
           ))}
+          {sessions.some((s) => osOf(s.device) !== os) && (
+            <button
+              className="session-pill elsewhere"
+              onClick={() => setOs(os === 'ios' ? 'android' : 'ios')}
+            >
+              {sessions.filter((s) => osOf(s.device) !== os).length} on
+              {' '}{os === 'ios' ? 'Android' : 'iOS'} →
+            </button>
+          )}
         </section>
       )}
 

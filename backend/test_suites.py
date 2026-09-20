@@ -784,3 +784,49 @@ class _phone:
 
     def describe(self):
         return {"appId": "com.thy.reg", "platform": "iOS", "name": "iPhone"}
+
+
+# --------------------------------------------------------------------------- #
+# A PATCH changes what it names, and nothing else
+# --------------------------------------------------------------------------- #
+
+def test_renaming_a_mobile_set_leaves_it_on_the_mobile_tab():
+    """The patch endpoint took the create body, whose `kind` defaults to
+    "web". Renaming an iOS set — or filing it under a module — silently moved
+    it to the Web tab, where none of its scenarios could run."""
+    from main import SuitePatchBody
+
+    suite_id = storage.create_suite("Uçuş Arama", kind="mobile", os="ios", tags=["ow"])
+    body = SuitePatchBody(name="Uçuş Arama — iOS")
+    storage.update_suite(
+        suite_id, name=body.name, description=body.description,
+        kind=body.kind, tags=body.tags, module=body.module, os=body.os,
+    )
+
+    suite = storage.get_suite(suite_id)
+    assert suite["name"] == "Uçuş Arama — iOS"
+    assert suite["kind"] == "mobile"
+    assert suite["os"] == "ios"
+    assert suite["tags"] == ["ow"]
+
+
+def test_a_set_can_be_moved_between_the_two_phone_tabs():
+    """`os` was never passed through, so a set filed under the wrong phone
+    could only be fixed by deleting it and writing the scenarios again."""
+    from main import SuitePatchBody
+
+    suite_id = storage.create_suite("Tek yön", kind="mobile", os="ios")
+    body = SuitePatchBody(os="android")
+    storage.update_suite(
+        suite_id, name=body.name, description=body.description,
+        kind=body.kind, tags=body.tags, module=body.module, os=body.os,
+    )
+    assert storage.get_suite(suite_id)["os"] == "android"
+
+
+def test_clearing_the_tags_is_still_an_edit_that_lands():
+    """None means "leave them"; an empty list is the tester clearing them, and
+    the two must not collapse into each other."""
+    suite_id = storage.create_suite("Homepage", tags=["smoke", "ow"])
+    storage.update_suite(suite_id, tags=[])
+    assert storage.get_suite(suite_id)["tags"] == []

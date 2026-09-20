@@ -135,7 +135,13 @@ TARGET_PROFILES = {
             "  for is usually absent rather than elsewhere. If the screen has a\n"
             "  search or filter field, type into it instead of scrolling — an\n"
             "  airport picker opens on A and the airport you want may be three\n"
-            "  hundred rows down. Scroll only when there is no such field."
+            "  hundred rows down. Scroll only when there is no such field.\n"
+            "- Never use assert_visual here. A device screen carries a status bar\n"
+            "  with a clock and a battery, so two screenshots a minute apart\n"
+            "  differ whatever the app did, and the check fails on its own. Prove\n"
+            "  what is on the screen with assert_text or assert_visible, and what\n"
+            "  is gone — a field removed, a section no longer shown — with\n"
+            "  assert_absent."
         ),
     },
     "web": {
@@ -831,6 +837,22 @@ async def _execute_action(
         return as_dict(await target.press_key(key))
 
     if kind == "assert_visual":
+        # Refused rather than discouraged on a phone. The status bar alone —
+        # a clock, a battery, a signal strength — moves between two runs of the
+        # same scenario, so the comparison reports a difference the app did not
+        # make. It failed a step whose screen was correct, and the run was then
+        # recorded as a defect that nobody could reproduce by hand.
+        if (target.describe() or {}).get("kind") == "mobile":
+            return {
+                "ok": False,
+                "message": (
+                    "assert_visual is not available on a device: the status bar "
+                    "clock changes between runs, so the comparison fails on its "
+                    "own. Prove this with assert_text, assert_visible or "
+                    "assert_absent instead."
+                ),
+                "element": None,
+            }
         name = (value or "").strip()
         if not name:
             return {"ok": False, "message": "assert_visual needs a baseline name", "element": None}

@@ -11,6 +11,7 @@ import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
 import { useToast } from './hooks/useToast';
 import { parseBounds, roleColor } from './lib/elements';
+import { osOf } from './lib/platforms';
 import { BugsPage } from './pages/BugsPage';
 import { ExecutionsPage } from './pages/ExecutionsPage';
 import { InsightsPage } from './pages/InsightsPage';
@@ -757,6 +758,7 @@ export default function App() {
           sessionId={activeSessionId}
           brief={writeBrief}
           kind="mobile"
+          os={activeSession ? osOf(activeSession.device) : null}
           onOpenExecution={openExecution}
           onClose={() => setWriteBrief(null)}
         />
@@ -771,6 +773,7 @@ export default function App() {
           readFrom={agent.proposed.readFrom}
           suggestedName={agent.proposed.suggestedName}
           kind={agent.proposed.kind || 'mobile'}
+          os={activeSession ? osOf(activeSession.device) : null}
           onOpenExecution={openExecution}
           onClose={agent.clearProposed}
         />

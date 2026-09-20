@@ -643,6 +643,43 @@ def platform_counts(table: str) -> Dict[str, int]:
     return counts
 
 
+def _run_search_filter(search: Optional[str], where: List[str], params: List[Any]) -> None:
+    """Search on the server, not in the loaded page: a filter that only looks
+    at the runs already fetched quietly misses the older run being hunted for.
+
+    Shared so the list and the counts above it agree about what matches."""
+    if not (search and search.strip()):
+        return
+    needle = f"%{search.strip().lower()}%"
+    where.append("(LOWER(r.title) LIKE ? OR LOWER(r.goal) LIKE ?"
+                 " OR LOWER(COALESCE(r.app_id, '')) LIKE ?"
+                 " OR LOWER(COALESCE(r.device_name, '')) LIKE ?)")
+    params.extend([needle] * 4)
+
+
+def run_os_counts(search: Optional[str] = None) -> Dict[str, int]:
+    """How many recorded runs are on each phone, for the sub-tabs above them.
+
+    Read from the run's own `platform`, which is what the driver reported when
+    it ran — a run outlives the Test Set it came from, so asking the set is
+    asking something that may no longer be there.
+    """
+    counts = {name: 0 for name in MOBILE_OS}
+    where: List[str] = ["COALESCE(r.kind, 'web') = 'mobile'"]
+    params: List[Any] = []
+    _run_search_filter(search, where, params)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT LOWER(COALESCE(r.platform, '')) AS os, COUNT(*) AS n"
+            f"  FROM runs r WHERE {' AND '.join(where)} GROUP BY 1",
+            params,
+        ).fetchall()
+    for row in rows:
+        if row["os"] in counts:
+            counts[row["os"]] = row["n"]
+    return counts
+
+
 def list_runs(
     limit: int = 50,
     tag: Optional[str] = None,
@@ -652,6 +689,10 @@ def list_runs(
     search: Optional[str] = None,
     offset: int = 0,
     kind: Optional[str] = None,
+    # Which phone, when the tab is Mobile. An iPhone run and a Pixel run are
+    # different apps with different selectors, and reading them in one list is
+    # what made a failure on one look like a failure on both.
+    os: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     # Priority and layer come from the run's own snapshot first: the columns
     # exist so a report survives its Test Set being deleted, and reading the
@@ -672,6 +713,10 @@ def list_runs(
                LEFT JOIN suite_cases c ON c.id = r.case_id"""
     where, params = [], []
     _kind_filter("r.kind", kind, where, params)
+    wanted_os = clean_os(os, "mobile")
+    if wanted_os:
+        where.append("LOWER(COALESCE(r.platform, '')) = ?")
+        params.append(wanted_os)
     if priority:
         # Not `c.priority = ?`, which would also turn the LEFT JOIN into an
         # inner one and drop every run whose case has since been deleted.
@@ -686,15 +731,7 @@ def list_runs(
     if status:
         where.append("r.status = ?")
         params.append(status)
-    if search and search.strip():
-        # Searching on the server, not in the loaded page: a filter that only
-        # looks at the runs already fetched would quietly miss the older run
-        # the user is actually hunting for.
-        needle = f"%{search.strip().lower()}%"
-        where.append("(LOWER(r.title) LIKE ? OR LOWER(r.goal) LIKE ?"
-                     " OR LOWER(COALESCE(r.app_id, '')) LIKE ?"
-                     " OR LOWER(COALESCE(r.device_name, '')) LIKE ?)")
-        params.extend([needle, needle, needle, needle])
+    _run_search_filter(search, where, params)
     if where:
         query += " WHERE " + " AND ".join(where)
     query += " ORDER BY r.started_at DESC LIMIT ? OFFSET ?"
@@ -1110,7 +1147,10 @@ def update_suite(suite_id: str, **fields: Any) -> bool:
         if key in allowed and value is not None:
             sets.append(f"{key} = ?")
             values.append(value)
-    if "tags" in fields:
+    # None means "leave the tags alone", which is what a PATCH that does not
+    # mention them is saying. Writing [] there emptied the tags of every set
+    # anyone renamed.
+    if fields.get("tags") is not None:
         sets.append("tags = ?")
         values.append(_dump_tags(fields["tags"]))
     if not sets:
@@ -1123,6 +1163,12 @@ def update_suite(suite_id: str, **fields: Any) -> bool:
 
 
 def delete_suite(suite_id: str) -> bool:
+    """Remove a Test Set and its scenarios.
+
+    The executions stay. An execution is a record of something that happened
+    on a given day, and tidying up the working document it was drawn from must
+    not destroy the history — see the test of the same name.
+    """
     with _connect() as conn:
         conn.execute("DELETE FROM suite_cases WHERE suite_id = ?", (suite_id,))
         cursor = conn.execute("DELETE FROM suites WHERE id = ?", (suite_id,))

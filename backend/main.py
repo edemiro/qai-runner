@@ -1189,8 +1189,11 @@ async def get_runs(
     q: Optional[str] = None,
     offset: int = 0,
     kind: Optional[str] = None,
+    os: Optional[str] = None,
 ):
-    runs = storage.list_runs(limit, priority=priority, search=q, offset=offset, kind=kind)
+    runs = storage.list_runs(
+        limit, priority=priority, search=q, offset=offset, kind=kind, os=os,
+    )
     # Whether another page exists, so the UI can hide "Load more" at the end
     # rather than offering a button that returns nothing.
     return {
@@ -1199,6 +1202,9 @@ async def get_runs(
         # Counted over every run, not the page just returned: the platform tabs
         # are above the paging, so their numbers cannot come from one page of it.
         "counts": storage.platform_counts("runs"),
+        # The same for the iOS / Android split within Mobile. Narrowed by the
+        # search so the sub-tabs count what the list would actually show.
+        "osCounts": storage.run_os_counts(q),
     }
 
 
@@ -1402,6 +1408,21 @@ class SuiteBody(BaseModel):
     os: Optional[str] = None
 
 
+class SuitePatchBody(BaseModel):
+    """The same fields, all optional: a PATCH changes what it names.
+
+    Every field defaults to None and None means "leave it". Sharing the create
+    body meant a rename also sent `kind="web"` and `tags=[]`, so editing a
+    mobile set's name moved it to the Web tab and emptied its tags.
+    """
+    name: Optional[str] = None
+    description: Optional[str] = None
+    kind: Optional[str] = None
+    tags: Optional[List[str]] = None
+    module: Optional[str] = None
+    os: Optional[str] = None
+
+
 class CaseBody(BaseModel):
     """A scenario, however the caller spells its two ambiguous fields.
 
@@ -1502,10 +1523,18 @@ async def get_suite(suite_id: str):
 
 
 @app.patch("/api/suites/{suite_id}")
-async def patch_suite(suite_id: str, body: SuiteBody):
+async def patch_suite(suite_id: str, body: SuitePatchBody):
+    """Change only what was sent.
+
+    It used to take the create body, whose `kind` defaults to "web": renaming
+    a mobile set, or filing it under a module, silently moved it to the Web
+    tab — where none of its scenarios could run — and its `os` was never
+    passed through at all, so a set could not be moved between iOS and
+    Android once written.
+    """
     if not storage.update_suite(
         suite_id, name=body.name, description=body.description,
-        kind=body.kind, tags=body.tags, module=body.module,
+        kind=body.kind, tags=body.tags, module=body.module, os=body.os,
     ):
         raise HTTPException(status_code=404, detail="Suite not found.")
     return storage.get_suite(suite_id)

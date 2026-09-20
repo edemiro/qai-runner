@@ -8,6 +8,7 @@ import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { formatTokens } from '../lib/format';
+import { OS_TABS } from '../lib/platforms';
 
 const EXPORT_LABELS = {
   pytest: { label: 'pytest + Appium', hint: 'Python, Appium-Python-Client' },
@@ -610,6 +611,12 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
      list pages fifty at a time, so a count taken from what is loaded would say
      "Mobile 0" until the tester scrolled far enough to prove otherwise. */
   const [platformCounts, setPlatformCounts] = useState(null);
+  /* And within Mobile, which phone. An iPhone run and a Pixel run are two
+     different apps with different selectors and different bugs; read in one
+     list, a failure on one looked like a failure on both. Server-side, like
+     the platform above it, because the list pages fifty at a time. */
+  const [os, setOs] = useState('ios');
+  const [osCounts, setOsCounts] = useState(null);
   const [filter, setFilter] = useState('all');
   const [priority, setPriority] = useState('all');
   const [search, setSearch] = useState('');
@@ -634,11 +641,14 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
     let cancelled = false;
     (async () => {
       try {
-        const data = await api.runs(PAGE_SIZE, debounced, 0, platform);
+        const data = await api.runs(
+          PAGE_SIZE, debounced, 0, platform, platform === 'mobile' ? os : null,
+        );
         if (!cancelled) {
           setRuns(data.runs || []);
           setHasMore(Boolean(data.hasMore));
           setPlatformCounts(data.counts || null);
+          setOsCounts(data.osCounts || null);
         }
       } catch (err) {
         if (!cancelled) toast.error(err.message);
@@ -650,12 +660,15 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, debounced, platform, toast]);
+  }, [reloadKey, debounced, platform, os, toast]);
 
   const loadMore = async () => {
     setLoadingMore(true);
     try {
-      const data = await api.runs(PAGE_SIZE, debounced, runs.length, platform);
+      const data = await api.runs(
+        PAGE_SIZE, debounced, runs.length, platform,
+        platform === 'mobile' ? os : null,
+      );
       setRuns((current) => [...current, ...(data.runs || [])]);
       setHasMore(Boolean(data.hasMore));
     } catch (err) {
@@ -703,6 +716,12 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
           Refresh
         </button>
         <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
+        {platform === 'mobile' && (
+          <PlatformTabs
+            options={OS_TABS} value={os} onChange={setOs}
+            counts={loading ? null : osCounts} sub
+          />
+        )}
       </header>
 
       <div className="run-search">
@@ -725,9 +744,10 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
           that is loaded. With 112 runs behind a 50-row page the two numbers
           look like a contradiction, so the difference is said out loud rather
           than left to be worked out. */}
-      {platformCounts?.[platform] > runs.length && (
+      {(platform === 'mobile' ? osCounts?.[os] : platformCounts?.[platform]) > runs.length && (
         <p className="muted small run-scope">
-          Showing the {runs.length} most recent of {platformCounts[platform]}.
+          Showing the {runs.length} most recent of
+          {' '}{platform === 'mobile' ? osCounts[os] : platformCounts[platform]}.
           The filters below count these.
         </p>
       )}

@@ -20,7 +20,7 @@ import { ScenarioGenerator } from '../components/ScenarioGenerator';
 import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
 import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
-import { OS_TABS, matchesOs } from '../lib/platforms';
+import { OS_TABS, devicesFor, matchesOs, osOf, sessionsFor } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 // Sentinel for "a Test Set that does not exist yet" in the move-to picker.
@@ -99,7 +99,7 @@ function PriorityStrip({ cases }) {
  * just scrolled past.
  */
 function RunTarget({
-  isMobile, devices, sessions, deviceUdid, onDevice, deviceAppId, onBuild,
+  isMobile, os = null, devices, sessions, deviceUdid, onDevice, deviceAppId, onBuild,
   deviceBuilds, envUrl, onEnv, compact = false,
 }) {
   if (!isMobile) {
@@ -124,9 +124,15 @@ function RunTarget({
     );
   }
 
-  const unopened = devices.filter(
-    (d) => !sessions.some((s) => s.device?.udid === d.udid),
+  /* Only the phones that can actually run this set. An Android set offered an
+     iPhone here, and picking it booked an iPhone to run an Android build on —
+     a failure with nothing to do with the app under test. */
+  const onOs = devicesFor(devices, os);
+  const open = sessionsFor(sessions, 'mobile', os);
+  const unopened = onOs.filter(
+    (d) => !open.some((s) => s.device?.udid === d.udid),
   );
+  const osLabel = os === 'android' ? 'Android' : 'iOS';
   return (
     <div className={`run-target ${compact ? 'compact' : ''}`}>
       <label>
@@ -135,10 +141,14 @@ function RunTarget({
           value={deviceUdid}
           onChange={(e) => onDevice(e.target.value)}
         >
-          <option value="">{devices.length ? 'Pick a device' : 'No device found'}</option>
-          {sessions.length > 0 && (
+          <option value="">
+            {onOs.length || open.length
+              ? `Pick an ${osLabel} device`
+              : `No ${osLabel} device found`}
+          </option>
+          {open.length > 0 && (
             <optgroup label="Already connected">
-              {sessions.map((item) => (
+              {open.map((item) => (
                 <option key={item.sessionId} value={item.device.udid}>
                   {item.device.name} · {item.device.platform}
                 </option>
@@ -436,6 +446,18 @@ export function SuitesPage({
 
   const removeSuite = async () => {
     if (!suite) return;
+    /* Asked before, not regretted after. The button that does this is a bare
+       icon next to "Case", one slip away from a set somebody spent a morning
+       writing. The count is in the question so what is about to go is clear —
+       and so is what stays, because past executions are a record of what
+       happened and are kept. */
+    const n = suite.cases.length;
+    const confirmed = window.confirm(
+      `Delete “${suite.name}” and its ${n} scenario${n === 1 ? '' : 's'}?`
+      + `${history.length ? '\nExecutions already run are kept in Test Executions.' : ''}`
+      + '\n\nThis cannot be undone.',
+    );
+    if (!confirmed) return;
     try {
       await api.deleteSuite(suite.id);
       setSelectedId(null);
@@ -519,14 +541,36 @@ export function SuitesPage({
      on a session — opening it through the same path the Mobile workspace uses
      means the permission prompts are answered and the app is in front before
      the first scenario starts. Returns null when the run must not go ahead. */
+  /* Only for a mobile set, and only once one is open: the cloud catalogue is
+     hundreds of devices and there is no reason to fetch it for someone running
+     a web suite. */
+  const isMobileSet = (suite?.kind || 'web') === 'mobile';
+
+  /* Which phones this set can run on: what the set itself says, and for one
+     written before that field existed, the tab it is being read on. */
+  const runOs = isMobileSet ? (suite?.os || os) : null;
+
+  /* A device chosen on one OS must not survive into the other. Switching from
+     the iOS set to the Android one used to keep the iPhone selected — gone
+     from the list, still in the state, and still the phone Run would book.
+     Derived, not cleared from an effect, so the picker and what Run does can
+     never disagree for a render. */
+  const pickedDevice = deviceUdid
+    ? (devices.find((d) => d.udid === deviceUdid)
+      || sessions.find((s) => s.device?.udid === deviceUdid)?.device || null)
+    : null;
+  const runUdid = pickedDevice && runOs && osOf(pickedDevice) !== runOs
+    ? ''
+    : deviceUdid;
+
   const resolveTarget = async (kind) => {
     if (kind !== 'mobile') return { envUrl: envUrl || null };
 
-    const open = sessions.find((item) => item.device?.udid === deviceUdid);
+    const open = sessions.find((item) => item.device?.udid === runUdid);
     if (open && (!deviceAppId || open.device?.appId === deviceAppId)) {
       return { deviceSessionId: open.sessionId };
     }
-    if (!deviceUdid) {
+    if (!runUdid) {
       toast.warning('Pick the device this execution should run on.');
       return null;
     }
@@ -536,7 +580,7 @@ export function SuitesPage({
     }
     setConnecting(true);
     try {
-      const device = open?.device || devices.find((d) => d.udid === deviceUdid);
+      const device = open?.device || devices.find((d) => d.udid === runUdid);
       if (!device) {
         toast.error('That device is no longer listed. Rescan in the Mobile workspace.');
         return null;
@@ -548,11 +592,6 @@ export function SuitesPage({
       setConnecting(false);
     }
   };
-
-  /* Only for a mobile set, and only once one is open: the cloud catalogue is
-     hundreds of devices and there is no reason to fetch it for someone running
-     a web suite. */
-  const isMobileSet = (suite?.kind || 'web') === 'mobile';
 
   useEffect(() => {
     if (!isMobileSet) return undefined;
@@ -577,8 +616,8 @@ export function SuitesPage({
   // The builds on the chosen phone, matched to ThyDev / ThyTest / ThyReg by the
   // backend — the same list the Mobile workspace offers.
   useEffect(() => {
-    if (!isMobileSet || !deviceUdid) return undefined;
-    const device = devices.find((d) => d.udid === deviceUdid);
+    if (!isMobileSet || !runUdid) return undefined;
+    const device = devices.find((d) => d.udid === runUdid);
     if (!device) return undefined;
     let cancelled = false;
     (async () => {
@@ -592,7 +631,7 @@ export function SuitesPage({
     return () => {
       cancelled = true;
     };
-  }, [isMobileSet, deviceUdid, devices]);
+  }, [isMobileSet, runUdid, devices]);
 
   const openDataForm = (item) => {
     setDataFor(item.id);
@@ -890,9 +929,10 @@ export function SuitesPage({
                   <RunTarget
                     compact
                     isMobile={isMobileSet}
+                    os={runOs}
                     devices={devices}
                     sessions={sessions}
-                    deviceUdid={deviceUdid}
+                    deviceUdid={runUdid}
                     onDevice={(value) => {
                       setDeviceUdid(value);
                       setDeviceAppId('');
@@ -912,10 +952,10 @@ export function SuitesPage({
                     className="btn btn-primary btn-sm"
                     onClick={runPicked}
                     disabled={running || connecting || !executionName.trim()
-                      || (isMobileSet && !deviceUdid)}
+                      || (isMobileSet && !runUdid)}
                     title={
                       !executionName.trim() ? 'Name the execution first'
-                        : (isMobileSet && !deviceUdid) ? 'Pick the device to run on'
+                        : (isMobileSet && !runUdid) ? 'Pick the device to run on'
                           : undefined
                     }
                   >
@@ -974,6 +1014,8 @@ export function SuitesPage({
               {showGenerator && (
                 <ScenarioGenerator
                   suiteId={suite.id}
+                  kind={suite.kind || 'web'}
+                  os={suite.os || (isMobileSet ? os : null)}
                   onAdded={async () => {
                     setShowGenerator(false);
                     setSuite(await api.suite(suite.id));
@@ -1303,9 +1345,10 @@ export function SuitesPage({
                   Run, which is when it matters. */}
               <RunTarget
                 isMobile={isMobileSet}
+                os={runOs}
                 devices={devices}
                 sessions={sessions}
-                deviceUdid={deviceUdid}
+                deviceUdid={runUdid}
                 onDevice={(value) => {
                   setDeviceUdid(value);
                   setDeviceAppId('');
