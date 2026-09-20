@@ -21,7 +21,10 @@ from urllib.parse import quote
 
 import httpx
 
-from config import BROWSERSTACK_ACCESS_KEY, BROWSERSTACK_USERNAME, MOBILE_AUTO_PERMISSIONS
+from config import (
+    BROWSERSTACK_ACCESS_KEY, BROWSERSTACK_IDLE_TIMEOUT, BROWSERSTACK_RESIGN_APP,
+    BROWSERSTACK_USERNAME, MOBILE_AUTO_PERMISSIONS,
+)
 
 API_ROOT = "https://api-cloud.browserstack.com/app-automate"
 HUB_HOST = "hub-cloud.browserstack.com"
@@ -227,12 +230,25 @@ def capabilities(
         "projectName": project,
         "buildName": build,
         "sessionName": name or device_name,
-        # Real hardware, never an emulator: a test that passes on a simulated
-        # device says less than the team needs it to.
-        "realMobile": "true",
+        # Leave the build's own signature alone. Re-signing is what stopped
+        # every iOS run before this: it replaces the team prefix, the shared
+        # keychain group and the app groups named after it stop matching, and
+        # the app exits on the -34018 from its first keychain read. See the
+        # note on BROWSERSTACK_RESIGN_APP.
+        "resignApp": BROWSERSTACK_RESIGN_APP,
+        # BrowserStack ends a session that has been quiet for 90 seconds, and
+        # an agent thinking about a full screen takes longer than that — so a
+        # run would lose the device in the middle of a scenario.
+        "idleTimeout": BROWSERSTACK_IDLE_TIMEOUT,
     }
     if os_version:
         bstack["osVersion"] = os_version
+
+    # There is deliberately no `realMobile` here. It belongs to Automate, where
+    # it asks for a phone to run a browser on; this is App Automate, where the
+    # device is already named by deviceName and osVersion. Sending it was seen
+    # to route a session to a desktop Chrome instead of an iPhone, which then
+    # answered every Appium command with "unknown command".
 
     is_ios = platform.lower() == "ios"
     always: Dict[str, Any] = {

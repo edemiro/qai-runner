@@ -70,8 +70,26 @@ class Capabilities(unittest.TestCase):
         # request to install nothing and fails the session.
         self.assertNotIn("appium:app", self._caps())
 
-    def test_a_real_device_is_asked_for(self):
-        self.assertEqual(self._caps()["bstack:options"]["realMobile"], "true")
+    def test_the_device_is_named_rather_than_asked_for_as_real(self):
+        """`realMobile` is an Automate capability — it picks a phone to run a
+        browser on. This is App Automate, where deviceName and osVersion name
+        the device, and sending it was seen to hand back a desktop Chrome that
+        answered every Appium command with "unknown command"."""
+        options = self._caps()["bstack:options"]
+        self.assertNotIn("realMobile", options)
+        self.assertEqual(options["deviceName"], "Google Pixel 8")
+        self.assertEqual(options["osVersion"], "14.0")
+
+    def test_the_build_keeps_its_own_signature(self):
+        """The one that stopped every iOS run: BrowserStack re-signs by
+        default, which replaces the team prefix, and the app then fails its
+        first keychain read with -34018 and exits before drawing anything."""
+        self.assertIs(self._caps()["bstack:options"]["resignApp"], False)
+
+    def test_the_session_is_given_longer_than_the_default_to_go_quiet(self):
+        """90 seconds is BrowserStack's default and less than one agent step
+        against a full screen, so a run lost the device mid-scenario."""
+        self.assertGreaterEqual(self._caps()["bstack:options"]["idleTimeout"], 300)
 
     def test_credentials_are_read_when_the_session_is_made(self):
         # Saved in Settings while the server runs: the next session must use

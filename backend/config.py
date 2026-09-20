@@ -39,6 +39,32 @@ WDA_BUNDLE_ID = os.environ.get("WDA_BUNDLE_ID", "").strip()
 BROWSERSTACK_USERNAME = os.environ.get("BROWSERSTACK_USERNAME", "").strip()
 BROWSERSTACK_ACCESS_KEY = os.environ.get("BROWSERSTACK_ACCESS_KEY", "").strip()
 
+# Whether BrowserStack may re-sign an uploaded build with its own certificate,
+# which it does by default. It must not for these apps. Re-signing replaces the
+# team prefix, and the entitlements that name it stop matching: the shared
+# keychain group and the app groups are both lost, so the app fails its first
+# keychain read with -34018 and exits before it has drawn anything. Read off a
+# real session's device log:
+#
+#   container_create_or_lookup_app_group_path_by_app_group_identifier:
+#       client is not entitled
+#   Client explicitly specifies access group
+#       35MYG4AN5S.com.turkishairlines…sharedKeychain but is only entitled …
+#
+# Left signed as it is, the same build opens and runs. An enterprise-signed
+# build installs on any device, so nothing is given up by not re-signing it;
+# a build signed with a development profile, which is limited to registered
+# devices, is the case that would need this turned back on.
+BROWSERSTACK_RESIGN_APP = (
+    os.environ.get("BROWSERSTACK_RESIGN_APP", "false").strip().lower() == "true"
+)
+
+# How long BrowserStack lets a session sit without a command before ending it.
+# Its own default is 90 seconds, and an agent spends longer than that on a
+# single step whenever the model has to think about a full screen — so a run
+# would lose the device mid-scenario and report it as a crash.
+BROWSERSTACK_IDLE_TIMEOUT = int(os.environ.get("BROWSERSTACK_IDLE_TIMEOUT", "300"))
+
 # The agent loop is bounded server-side as well as in the UI so a runaway model
 # cannot keep driving the device (and burning API quota) indefinitely.
 MAX_AGENT_STEPS = int(os.environ.get("MAX_AGENT_STEPS", "40"))
