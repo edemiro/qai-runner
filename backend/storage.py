@@ -1072,6 +1072,39 @@ def bug_for_run(run_id: str) -> Optional[Dict[str, Any]]:
     return _row_to_bug(row) if row else None
 
 
+# A bug in one of these has been dealt with: the next failure of that scenario
+# is news again — the fix did not hold, or it was reopened for a reason — and
+# is worth its own row.
+SETTLED_BUG_STATUSES = ("fixed", "closed", "not-a-bug")
+
+
+def open_bug_for_case(case_id: str, code: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A bug still outstanding for this scenario, if one is.
+
+    A bug belongs to the scenario, not to the run that happened to catch it.
+    Matching on the run meant every turn of the same broken scenario filed
+    another identical row — three turns of a measurement produced three — and
+    the list a team triages is worth less for every duplicate in it.
+
+    A settled bug does not suppress a new one: if the scenario fails again
+    after being marked fixed, that is the interesting case.
+    """
+    if not case_id:
+        return None
+    where = ["case_id = ?", f"status NOT IN ({','.join('?' * len(SETTLED_BUG_STATUSES))})"]
+    params: List[Any] = [case_id, *SETTLED_BUG_STATUSES]
+    if code:
+        where.append("COALESCE(code, '') = ?")
+        params.append(code)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT * FROM bugs WHERE {' AND '.join(where)}"
+            "  ORDER BY created_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+    return _row_to_bug(row) if row else None
+
+
 def bug_counts(kind: Optional[str] = None, os: Optional[str] = None) -> Dict[str, int]:
     # Counted within the platform being viewed: the status filter sits under
     # the platform tab, so "12 open" has to mean 12 on this tab — and on the

@@ -254,12 +254,21 @@ def _raise_bug_if_it_found_one(run_id: Optional[str], case: Dict[str, Any]) -> N
     Raised open and said to be unreviewed, because nobody has looked at it: QAi
     is wrong often enough — an expected string no page renders, a limit a
     scenario invented — that an automatic bug is a lead, not a finding.
+
+    Once per scenario, not once per run. A bug belongs to the scenario it was
+    found in, and every turn is a new run: three turns of a measurement filed
+    three identical rows, which is how a tracker stops being worth reading.
     """
     if not run_id:
         return
     try:
         draft = bug_report.draft_for_run(run_id)
         if not draft or not draft.get("isAppDefect") or draft.get("existingBugId"):
+            return
+        already = storage.open_bug_for_case(case.get("id"), draft.get("code"))
+        if already:
+            print(f"[suite] already raised as {already['id']}: "
+                  f"{case.get('name', run_id)[:50]}")
             return
         storage.create_bug(
             title=draft["title"],

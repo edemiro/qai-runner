@@ -235,3 +235,76 @@ def test_a_draft_carries_what_a_reader_needs_to_act():
     assert "boş liste döndü" in draft["detail"]
     assert draft["title"]
     assert draft["code"] in bug_report.CODES
+
+
+class TestOneBugPerScenarioNotPerRun:
+    """A bug belongs to the scenario it was found in, not to the run that
+    happened to catch it.
+
+    Measured: three turns of the same measurement over the same broken
+    scenario filed three identical rows, because the duplicate check matched
+    on the run id and every turn is a new run. A tracker is worth reading in
+    proportion to how few duplicates are in it.
+    """
+
+    @staticmethod
+    def _db(tmp_path, monkeypatch):
+        import storage
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "bugs.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        return storage
+
+    def test_the_second_run_of_a_broken_scenario_finds_the_first_bug(
+        self, tmp_path, monkeypatch,
+    ):
+        db = self._db(tmp_path, monkeypatch)
+        first = db.create_run("g", case_id="case-1")
+        db.finish_run(first, "failed")
+        raised = db.create_bug(title="it broke", code="EXPECTATION_NOT_MET",
+                               run_id=first, case_id="case-1")
+
+        found = db.open_bug_for_case("case-1", "EXPECTATION_NOT_MET")
+        assert found is not None and found["id"] == raised
+
+    def test_a_different_failure_of_the_same_scenario_is_its_own_bug(
+        self, tmp_path, monkeypatch,
+    ):
+        """Two things can be wrong with one scenario, and collapsing them
+        loses the second."""
+        db = self._db(tmp_path, monkeypatch)
+        db.create_bug(title="it broke", code="EXPECTATION_NOT_MET", case_id="case-1")
+
+        assert db.open_bug_for_case("case-1", "ELEMENT_NOT_FOUND") is None
+
+    def test_a_scenario_that_breaks_again_after_a_fix_is_news(
+        self, tmp_path, monkeypatch,
+    ):
+        """The fix did not hold, which is exactly the case worth a fresh row —
+        so a settled bug must not go on suppressing new ones for ever."""
+        db = self._db(tmp_path, monkeypatch)
+        bug = db.create_bug(title="it broke", code="EXPECTATION_NOT_MET",
+                            case_id="case-1")
+        db.update_bug(bug, status="fixed")
+
+        assert db.open_bug_for_case("case-1", "EXPECTATION_NOT_MET") is None
+
+    def test_a_triaged_bug_still_suppresses_a_duplicate(self, tmp_path, monkeypatch):
+        """Somebody has it; filing it again tells them nothing."""
+        db = self._db(tmp_path, monkeypatch)
+        bug = db.create_bug(title="it broke", code="EXPECTATION_NOT_MET",
+                            case_id="case-1")
+        db.update_bug(bug, status="triaged")
+
+        found = db.open_bug_for_case("case-1", "EXPECTATION_NOT_MET")
+        assert found is not None and found["id"] == bug
+
+    def test_a_scenario_with_no_id_is_not_matched_against_every_other(
+        self, tmp_path, monkeypatch,
+    ):
+        """An ad-hoc run from the chat belongs to no scenario. Treating that
+        as "the same scenario" would suppress every bug after the first."""
+        db = self._db(tmp_path, monkeypatch)
+        db.create_bug(title="it broke", code="EXPECTATION_NOT_MET", case_id=None)
+
+        assert db.open_bug_for_case(None, "EXPECTATION_NOT_MET") is None
