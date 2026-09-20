@@ -32,6 +32,19 @@ function formatDuration(ms) {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
+/** What this run was pointed at: the phone, or the site's host.
+ *  The full address is the same on every web row and says nothing the host
+ *  does not — the path lives on the run itself. */
+function runTarget(run) {
+  const name = run.device_name || run.app_id || '';
+  if (!name) return 'Unknown target';
+  try {
+    return name.startsWith('http') ? new URL(name).host : name;
+  } catch {
+    return name;
+  }
+}
+
 function formatWhen(epochSeconds) {
   if (!epochSeconds) return '—';
   const date = new Date(epochSeconds * 1000);
@@ -708,6 +721,17 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
         )}
       </div>
 
+      {/* The tab above counts every run on this platform; these count the page
+          that is loaded. With 112 runs behind a 50-row page the two numbers
+          look like a contradiction, so the difference is said out loud rather
+          than left to be worked out. */}
+      {platformCounts?.[platform] > runs.length && (
+        <p className="muted small run-scope">
+          Showing the {runs.length} most recent of {platformCounts[platform]}.
+          The filters below count these.
+        </p>
+      )}
+
       <div className="filter-row">
         {['all', 'passed', 'failed', 'cancelled'].map((value) => (
           <button
@@ -761,9 +785,13 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
               <StatusBadge status={run.status} />
               <div className="run-row-main">
                 <span className="run-row-title">{run.title}</span>
-                <span className="run-row-meta">
-                  {run.device_name || 'Unknown device'} · {run.platform || '—'} · {run.model || '—'}
-                </span>
+                {/* Where it ran, and nothing else. This line used to carry the
+                    platform and the model as well: the platform is the tab
+                    above, and the model is the same on every row until someone
+                    switches provider — fifty repetitions of the same two facts,
+                    taking the width the title needed. Both are still on the run
+                    itself, which is where a question about one is asked. */}
+                <span className="run-row-meta">{runTarget(run)}</span>
               </div>
               {/* Always rendered, empty or not: a conditional cell would shift
                   every column on rows that have no priority. */}

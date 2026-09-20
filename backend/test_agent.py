@@ -737,3 +737,25 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(asked), 2, "only the unrecorded step should cost calls")
         self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "passed")])
+
+
+class LongListsOnAPhone(unittest.TestCase):
+    """A phone renders the rows on screen and nothing else.
+
+    Measured on the real app: the airport picker opens on Abidjan, the element
+    tree carries the thirty-odd rows visible, and Istanbul — three hundred rows
+    down — is simply not there. Four of five iOS scenarios failed on it, each
+    asserting an airport name that could not appear until someone searched for
+    it. The screen has a search field; the agent was not told to prefer it.
+    """
+
+    def test_the_mobile_prompt_says_to_search_rather_than_scroll(self):
+        prompt = agent.build_system_prompt("mobile")
+        self.assertIn("search or filter field", prompt)
+        self.assertIn("Scroll only when there is no such field", prompt)
+
+    def test_the_web_prompt_is_left_alone(self):
+        """A browser hands over the whole document, so the row is in the tree
+        whether or not it is on screen — the same advice there would send the
+        agent hunting for a search box it does not need."""
+        self.assertNotIn("three hundred rows", agent.build_system_prompt("web"))

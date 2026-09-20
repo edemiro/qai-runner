@@ -129,7 +129,13 @@ TARGET_PROFILES = {
         "keys": "back, home, recents, enter, search, delete",
         "target_rules": (
             "- The backend handles waiting, visibility, scrolling into view, and\n"
-            "  coordinate fallbacks. Do not add your own waits for those reasons."
+            "  coordinate fallbacks. Do not add your own waits for those reasons.\n"
+            "- A long list gives you only the rows currently on screen: a phone\n"
+            "  renders the visible ones and nothing else, so what you are looking\n"
+            "  for is usually absent rather than elsewhere. If the screen has a\n"
+            "  search or filter field, type into it instead of scrolling — an\n"
+            "  airport picker opens on A and the airport you want may be three\n"
+            "  hundred rows down. Scroll only when there is no such field."
         ),
     },
     "web": {

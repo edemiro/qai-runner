@@ -653,12 +653,17 @@ async def run_suite(
         # Assembled by hand: the kind comes from the cases themselves, and the
         # label from the sets they were drawn from.
         kinds = {c.get("suite_kind") or "web" for c in cases}
+        # Only when every case agrees. A run mixing an iOS set with an Android
+        # one belongs to neither phone, and claiming one would file it — and
+        # its report — under a platform half of it never touched.
+        phones = {c.get("suite_os") for c in cases if c.get("suite_os")}
         suite = {
             "id": suite_id,
             "name": name or " + ".join(
                 dict.fromkeys(c.get("suite_name") or "Test Set" for c in cases)
             ),
             "kind": "mobile" if kinds == {"mobile"} else "web",
+            "os": phones.pop() if len(phones) == 1 else None,
         }
 
     cases = cases if cases is not None else storage.select_cases(suite_id, tags)

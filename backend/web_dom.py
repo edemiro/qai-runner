@@ -300,6 +300,13 @@ class WebElement:
 
     def to_llm_dict(self, include_children: bool = True) -> Dict[str, Any]:
         res = self._base()
+        # `class` is `role` with a capital letter — the same word twice on every
+        # node, and the model is told to act by elementId and read by role, so
+        # it never needs the other spelling. Measured on the Turkish Airlines
+        # home page: 2,692 of the tree's 17,542 characters, 15% of what every
+        # single call carries, for nothing. The inspector still gets it from
+        # `to_dict`, which is where it is actually read.
+        res.pop("class", None)
         if self.clickable:
             res["interactive"] = True
         if include_children and self.children:

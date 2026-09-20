@@ -246,3 +246,36 @@ def test_an_old_run_and_a_recent_one_are_not_mixed_by_the_platform_filter(db):
 
     assert sum(day["total"] for day in db.trend(days=7, kind="web")) == 1
     assert sum(day["total"] for day in db.trend(days=60, kind="web")) == 2
+
+
+def test_an_execution_assembled_by_hand_takes_the_phone_of_its_cases(db):
+    """Reported from the UI: iOS executions appeared under Android as well.
+    A hand-picked execution has no Test Set of its own to read the OS off, so
+    it carried none — and one that does not say which phone is shown on both
+    tabs rather than neither, which is how an iOS run turned up under Android.
+    """
+    suite = db.create_suite("an iOS set", kind="mobile", os="ios")
+    case_id = db.add_case(suite, "a scenario", "do it")
+    picked = db.cases_by_id([case_id])
+    assert picked[0]["suite_os"] == "ios"
+
+
+def test_cases_from_two_phones_claim_neither(db):
+    """A run mixing an iOS set with an Android one belongs to neither, and
+    claiming one would file its report under a platform half of it never
+    touched."""
+    ios = db.add_case(db.create_suite("ios", kind="mobile", os="ios"), "a", "g")
+    android = db.add_case(db.create_suite("and", kind="mobile", os="android"), "b", "g")
+    found = {c["id"]: c["suite_os"] for c in db.cases_by_id([ios, android])}
+    assert set(found.values()) == {"ios", "android"}
+
+
+def test_an_execution_without_an_os_is_given_one_from_its_sources(db):
+    """The backfill, for the executions already recorded without it."""
+    suite = db.create_suite("an iOS set", kind="mobile", os="ios")
+    run_id = db.create_suite_run(suite, 1, name="an execution", kind="mobile")
+    with storage._connect() as conn:
+        conn.execute("UPDATE suite_runs SET os = NULL WHERE id = ?", (run_id,))
+        storage._backfill_execution_os(conn)
+        row = conn.execute("SELECT os FROM suite_runs WHERE id = ?", (run_id,)).fetchone()
+    assert row["os"] == "ios"

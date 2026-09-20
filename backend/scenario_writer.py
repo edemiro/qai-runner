@@ -158,6 +158,24 @@ observed behaviour instead of a guessed number:
   expected: "the increase control is disabled and the panel total stops rising"
 Name a specific number only when that number is on the attached screen.
 
+NEVER INVENT A STRING EITHER, and this is the one that bites hardest. An
+expected result is checked literally: the run looks for that text and fails
+when it is not there, however right the app was. The screen you are given is
+the screen the step STARTS on — where it ends is a screen you have not seen,
+so asserting its exact wording is a guess, and a guess is a scenario that
+fails for being wrong rather than for finding anything.
+
+Measured: three of five scenarios failed on "the FROM field shows Istanbul
+Airport". The picker lists "Istanbul - Türkiye IST - Istanbul Airport"; the
+booker, once you have chosen, shows "IST". The app was correct every time.
+
+So on a screen you have been shown, assert its wording. On a screen you have
+not, assert the shortest thing that must be true — a code, a field that is no
+longer empty, a control that has appeared — and never a full label you are
+reconstructing from memory:
+  expected: "the FROM field is no longer empty and shows IST"
+  not:      "the FROM field shows Istanbul Airport"
+
 PRECONDITIONS. Anything the scenario needs to be true before its first step
 goes in `precondition`, not into step 1: signed in as which kind of user, which
 booking or member number already exists, what a previous search left on the

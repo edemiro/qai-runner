@@ -2228,13 +2228,30 @@ select:disabled {
   gap: 2px;
 }
 
+/* Two lines rather than one with an ellipsis. These names share a long prefix
+   — "Booking - Availability | OW DOM [IST-ESB] 1 ADT ECO — " — and what tells
+   one row from the next is the clause after it, which is exactly what a single
+   truncated line cuts off. Every row read "…control that the" and stopped. */
 .run-row-title {
   font-size: 13.5px;
   font-weight: 570;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
+
+.run-scope { margin: calc(var(--gap-2) * -1) 0 0; }
+
+/* The row is no longer one line tall, so the columns beside it sit at the top
+   rather than floating in the middle of a two-line title. */
+.run-row { align-items: start; }
+.run-row > .run-status,
+.run-row-priority,
+.run-row-steps,
+.run-row-duration,
+.run-row-when { margin-top: 2px; }
 
 .run-row-meta {
   font-size: 11.5px;
@@ -3159,6 +3176,14 @@ select:disabled {
 
 .run-options > label {
   max-width: 180px;
+}
+
+/* A checkbox and its words, which need as much room as the words take. The
+   180px cap above is for the numeric fields beside them; applied to a label
+   that reads "Fail on console/network errors" it cut the sentence in half. */
+.run-options > label.check {
+  max-width: none;
+  white-space: nowrap;
 }
 
 .progress-list {

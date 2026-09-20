@@ -7,6 +7,7 @@ that a real site's DOM is mostly scaffolding.
 
 import asyncio
 import http.server
+import json
 import os
 import tempfile
 import threading
@@ -174,6 +175,22 @@ class TestWebTarget(unittest.IsolatedAsyncioTestCase):
         snapshot = await self.target.snapshot()
         by_id = {e.resource_id: e for e in snapshot.get_all_elements()}
         self.assertEqual(by_id["cabin"].selector, "#cabin")
+
+    async def test_the_role_is_not_also_sent_as_a_capitalised_class(self):
+        """The tree goes out on every call, so anything in it that says nothing
+        is paid for on every action of every run, for ever. `class` was `role`
+        with a capital letter — measured on the Turkish Airlines home page,
+        2,692 of the tree's 17,542 characters, 15% of every call."""
+        snapshot = await self.target.snapshot()
+        sent = json.dumps(snapshot.get_optimized_tree_for_llm(), ensure_ascii=False)
+        self.assertIn('"role"', sent)
+        self.assertNotIn('"class"', sent)
+
+    async def test_the_inspector_still_gets_it(self):
+        """It is read there, where the element list is colour-coded by kind."""
+        snapshot = await self.target.snapshot()
+        shown = json.dumps(snapshot.get_optimized_tree(), ensure_ascii=False)
+        self.assertIn('"class"', shown)
 
     async def test_tree_has_the_same_shape_as_the_mobile_one(self):
         snapshot = await self.target.snapshot()
@@ -1031,3 +1048,4 @@ class NoBrowserWindowEverOpens(unittest.IsolatedAsyncioTestCase):
     async def test_an_ordinary_failure_is_also_tried_only_once(self):
         calls = await self._launch_kwargs_for(Exception("net::ERR_NAME_NOT_RESOLVED"))
         self.assertEqual(len(calls), 1)
+

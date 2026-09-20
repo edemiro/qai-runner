@@ -309,3 +309,25 @@ class GeneratedSteps(unittest.TestCase):
     def test_the_prompt_asks_for_steps_with_expected_results(self):
         assert '"steps"' in writer.SYSTEM_PROMPT
         assert "expected" in writer.SYSTEM_PROMPT
+
+
+class NotInventingWhatTheScreenSays(unittest.TestCase):
+    """An expected result is checked literally, so a guessed string fails for
+    being wrong rather than for finding anything.
+
+    Measured on the iPhone set: three of five scenarios failed on "the FROM
+    field shows Istanbul Airport". The picker lists "Istanbul - Türkiye IST -
+    Istanbul Airport"; the booker, once chosen, shows "IST". The app was
+    correct every time and the suite was not.
+    """
+
+    def test_the_prompt_refuses_invented_strings_as_well_as_limits(self):
+        self.assertIn("NEVER INVENT A STRING", writer.SYSTEM_PROMPT)
+
+    def test_it_says_why_the_end_of_a_step_is_the_risky_part(self):
+        """The attached screen is where the step starts; where it ends has not
+        been seen, and that is exactly where the assertion goes."""
+        self.assertIn("the screen the step STARTS on", writer.SYSTEM_PROMPT)
+
+    def test_it_gives_the_shape_to_use_instead(self):
+        self.assertIn("no longer empty", writer.SYSTEM_PROMPT)

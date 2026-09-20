@@ -350,7 +350,27 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
     _detach_executions_from_suites(conn)
     _backfill_execution_kind(conn)
+    _backfill_execution_os(conn)
     _backfill_bug_kind(conn)
+
+
+def _backfill_execution_os(conn: sqlite3.Connection) -> None:
+    """Give a mobile execution the phone it ran on, where that is knowable.
+
+    Read from the Test Sets that fed it, and only when they agree: an
+    execution drawn from an iOS set and an Android one belongs to neither.
+    Without this, every execution assembled by hand carried no OS — and an
+    execution that does not say which phone is shown on both tabs, so an iOS
+    run appeared under Android as well.
+    """
+    conn.execute(
+        """UPDATE suite_runs SET os = (
+               SELECT MIN(s.os) FROM suite_run_sources src
+                 JOIN suites s ON s.id = src.suite_id
+                WHERE src.suite_run_id = suite_runs.id AND s.os IS NOT NULL
+                HAVING COUNT(DISTINCT s.os) = 1)
+           WHERE kind = 'mobile' AND os IS NULL"""
+    )
 
 
 def _backfill_bug_kind(conn: sqlite3.Connection) -> None:
@@ -1586,7 +1606,11 @@ def cases_by_id(case_ids: List[str]) -> List[Dict[str, Any]]:
     marks = ",".join("?" * len(wanted))
     with _connect() as conn:
         rows = conn.execute(
-            f"""SELECT c.*, s.name AS suite_name, s.kind AS suite_kind
+            # The set's platform travels with the case: an execution assembled
+            # by hand has no set of its own to ask, and without the OS it lands
+            # on neither phone tab — or, because an execution that does not say
+            # shows on both, on both at once.
+            f"""SELECT c.*, s.name AS suite_name, s.kind AS suite_kind, s.os AS suite_os
                 FROM suite_cases c LEFT JOIN suites s ON s.id = c.suite_id
                 WHERE c.id IN ({marks})""",
             wanted,
