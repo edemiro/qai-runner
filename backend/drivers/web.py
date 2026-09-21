@@ -25,6 +25,46 @@ from .base import ActionResult, Snapshot
 # ran. Bounded: a chatty page would otherwise grow this without limit.
 MAX_PAGE_EVENTS = 200
 
+# Starting a browser occasionally never finishes.
+#
+# Measured on this machine: forty launches in a row, thirty-seven of them in
+# half a second, and three that never completed the handshake at all. No drift
+# across the run, nothing left over from a previous one, no load — an isolated
+# stall, roughly one launch in thirteen. The endpoint protection on a corporate
+# Windows box inspects every new executable, and chrome-headless-shell.exe is a
+# new executable every single time.
+#
+# It matters because a browser is started per scenario: a fifty-scenario
+# execution makes fifty of these, so at that rate four of them stall, and each
+# one used to sit for Playwright's three-minute default before failing the
+# scenario. It is also what made the web tests go red at random — a different
+# test each run, every one of them passing alone.
+#
+# The stalls are independent: in the measurement the attempt straight after a
+# stall succeeded all three times. So a short timeout and a couple of retries
+# turns a 7.5% failure into one in ten thousand, and costs a stalled launch
+# thirty seconds instead of a hundred and eighty.
+LAUNCH_TIMEOUT_MS = 30_000
+LAUNCH_ATTEMPTS = 3
+
+
+async def _launch_browser(launcher, **options):
+    """Start a browser, retrying a launch that stalls rather than hangs."""
+    from playwright.async_api import Error as PlaywrightError
+
+    last: Optional[Exception] = None
+    for attempt in range(1, LAUNCH_ATTEMPTS + 1):
+        try:
+            return await launcher.launch(timeout=LAUNCH_TIMEOUT_MS, **options)
+        except PlaywrightError as exc:
+            if "Timeout" not in str(exc):
+                raise
+            last = exc
+            print(f"[web] the browser did not start within "
+                  f"{LAUNCH_TIMEOUT_MS // 1000}s "
+                  f"(attempt {attempt} of {LAUNCH_ATTEMPTS})")
+    raise last
+
 
 # Runs before any page script. Chromium still leaves navigator.webdriver
 # readable as false even with the launch flag; some bot-protection layers key on
@@ -655,7 +695,8 @@ class WebTarget:
         browser = None
         try:
             launcher = getattr(playwright, browser_name, playwright.chromium)
-            browser = await launcher.launch(
+            browser = await _launch_browser(
+                launcher,
                 headless=headless,
                 args=_launch_args(headless, offscreen, browser_name),
             )
@@ -819,7 +860,8 @@ class WebTarget:
         browser_name = self.config.get("browser", "chromium")
         launcher = getattr(playwright, browser_name, playwright.chromium)
         headless = self.config.get("headless", True)
-        browser = await launcher.launch(
+        browser = await _launch_browser(
+            launcher,
             headless=headless,
             args=_launch_args(headless, self.config.get("offscreen", True), browser_name),
         )

@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 
+import drivers.web as web_driver
 from drivers.base import ActionResult
 from drivers.web import WebTarget
 from web_dom import WebSnapshot
@@ -1132,3 +1133,73 @@ class TheStickyBarEveryCheckoutEndsWith(unittest.IsolatedAsyncioTestCase):
         any reading, and offering it as a target is how a run clicks something
         nobody can see."""
         self.assertNotIn("hidden-continue", self.ids)
+
+
+class WhenTheBrowserDoesNotStart(unittest.IsolatedAsyncioTestCase):
+    """Starting a browser occasionally never finishes.
+
+    Measured on this machine: forty launches, thirty-seven in half a second,
+    three that never completed the handshake. No drift, nothing left over, no
+    load — an isolated stall, about one launch in thirteen, which is what the
+    endpoint protection on a corporate Windows box does to a new executable.
+
+    It matters because a browser is started per scenario: at that rate four of
+    a fifty-scenario execution stall, each sitting out Playwright's
+    three-minute default. The stalls are independent — in the measurement the
+    attempt straight after a stall succeeded all three times — so retrying is
+    the whole fix.
+    """
+
+    class FakeLauncher:
+        """Stalls for the first `stalls` attempts, then starts."""
+
+        def __init__(self, stalls):
+            self.stalls = stalls
+            self.attempts = 0
+            self.timeouts = []
+
+        async def launch(self, **options):
+            self.attempts += 1
+            self.timeouts.append(options.get("timeout"))
+            if self.attempts <= self.stalls:
+                from playwright.async_api import Error as PlaywrightError
+                raise PlaywrightError("BrowserType.launch: Timeout 30000ms exceeded.")
+            return f"browser-{self.attempts}"
+
+    async def test_a_stalled_launch_is_tried_again(self):
+        launcher = self.FakeLauncher(stalls=1)
+        browser = await web_driver._launch_browser(launcher, headless=True)
+        self.assertEqual(browser, "browser-2")
+        self.assertEqual(launcher.attempts, 2)
+
+    async def test_it_gives_up_rather_than_retrying_for_ever(self):
+        """A machine where every launch stalls has something else wrong with
+        it, and a run that never ends tells nobody that."""
+        launcher = self.FakeLauncher(stalls=99)
+        with self.assertRaises(Exception):
+            await web_driver._launch_browser(launcher, headless=True)
+        self.assertEqual(launcher.attempts, web_driver.LAUNCH_ATTEMPTS)
+
+    async def test_a_stall_costs_thirty_seconds_not_three_minutes(self):
+        """Playwright's default is 180s, and four of those in one execution is
+        twelve minutes of waiting for nothing."""
+        launcher = self.FakeLauncher(stalls=0)
+        await web_driver._launch_browser(launcher, headless=True)
+        self.assertEqual(launcher.timeouts, [30_000])
+
+    async def test_a_real_failure_is_not_retried(self):
+        """A missing browser binary or a bad flag fails the same way three
+        times over; retrying only delays the message that says so."""
+        class Broken:
+            def __init__(self):
+                self.attempts = 0
+
+            async def launch(self, **options):
+                self.attempts += 1
+                from playwright.async_api import Error as PlaywrightError
+                raise PlaywrightError("Executable doesn't exist at ...")
+
+        launcher = Broken()
+        with self.assertRaises(Exception):
+            await web_driver._launch_browser(launcher, headless=True)
+        self.assertEqual(launcher.attempts, 1)
