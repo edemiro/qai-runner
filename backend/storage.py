@@ -1464,6 +1464,10 @@ def clean_steps(raw: Any) -> List[Dict[str, Any]]:
         recorded = clean_recorded(entry.get("recorded"))
         if recorded:
             step["recorded"] = recorded
+        # A step still carried out, but not one the scenario stands or falls
+        # on. Written only when true so an ordinary step stays two fields.
+        if entry.get("optional"):
+            step["optional"] = True
         steps.append(step)
     return steps[:MAX_STEPS]
 

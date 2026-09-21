@@ -545,6 +545,95 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
 
 
 
+    async def test_an_optional_step_does_not_take_the_run_down_with_it(self):
+        """The step is carried out and not judged. Measured on the booker: the
+        date had to be picked and reading it back was somebody else's
+        scenario, and that one check failed the whole flow."""
+        events = await self._run(
+            [self.ASSERT, self._close("pass", "ok"),
+             self.ASSERT, self._close("fail", "okuyamadim")],
+            steps=[
+                {"action": "Adim 1", "expected": "Beklenen 1"},
+                {"action": "Adim 2", "expected": "Beklenen 2", "optional": True},
+            ],
+        )
+        self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "skipped")])
+        finished = self._finished(events)
+        self.assertEqual(finished["status"], "passed")
+        self.assertIn("2 steps passed", finished["summary"])
+
+    async def test_an_optional_step_that_works_is_still_a_pass(self):
+        """Marking it optional lowers what a failure costs, not what a success
+        is worth."""
+        events = await self._run(
+            [self.ASSERT, self._close("pass", "ok")],
+            steps=[{"action": "Adim 1", "expected": "Beklenen 1", "optional": True}],
+        )
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+        self.assertEqual(self._finished(events)["status"], "passed")
+
+    async def test_a_required_step_after_an_optional_one_still_fails_the_run(self):
+        """Skipping is per step. It must not become a way to make a scenario
+        unfailable."""
+        events = await self._run(
+            [self.ASSERT, self._close("fail", "bos ver"),
+             self.ASSERT, self._close("fail", "bu onemliydi")],
+            steps=[
+                {"action": "Adim 1", "expected": "Beklenen 1", "optional": True},
+                {"action": "Adim 2", "expected": "Beklenen 2"},
+            ],
+        )
+        self.assertEqual(self._verdicts(events), [(1, "skipped"), (2, "failed")])
+        self.assertEqual(self._finished(events)["status"], "failed")
+
+    async def test_the_model_is_told_not_to_grind_at_an_optional_check(self):
+        """Otherwise it spends the step's whole budget looking for another way
+        to prove something the tester has already called unnecessary."""
+        prompts = []
+        self_outer = self
+
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, *args, **kwargs):
+                # The step's own instruction is in the turns, not the system
+                # prompt, so everything the provider is handed is captured.
+                prompts.append(json.dumps(args, ensure_ascii=False, default=str))
+                self.i += 1
+                yield self_outer._close("pass", "ok")
+
+        class Snapshot:
+            snapshot_id = "s"
+
+            def get_optimized_tree_for_llm(self):
+                return {"elementId": "el_1"}
+
+        class Target:
+            kind, session_id = "web", "optional-prompt"
+
+            def describe(self):
+                return {"name": "t", "platform": "Web"}
+
+            async def snapshot(self):
+                return Snapshot()
+
+            async def screenshot(self):
+                return None
+
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()),              patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"),              patch.object(agent.providers, "active_model", lambda *a, **k: "m"),              patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for _ in agent.run_agent(
+                Target(), "senaryo",
+                steps=[{"action": "Adim", "expected": "Beklenen", "optional": True}],
+                session_state=agent.AgentSession(),
+            ):
+                pass
+
+        assert any("OPTIONAL" in p for p in prompts), "the step never said it was"
+
     async def test_a_step_that_proves_nothing_cannot_pass(self):
         # The same trap as a green run that asserted nothing, one scale down:
         # a step with an expected result has to actually check it.

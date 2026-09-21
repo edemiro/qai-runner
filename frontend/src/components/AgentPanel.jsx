@@ -363,10 +363,17 @@ export function AgentPanel({
                     )}
                   </div>
                   {entry.status !== 'running' && (
+                    /* Three verdicts, not two. A step the tester marked
+                       optional is carried out and not judged, and calling
+                       that "Fail" beside a green run is the contradiction
+                       the marking exists to remove. */
                     <span
-                      className={`verdict verdict-${entry.status === 'passed' ? 'pass' : 'fail'}`}
+                      className={`verdict verdict-${
+                        entry.status === 'passed' ? 'pass'
+                          : entry.status === 'skipped' ? 'other' : 'fail'}`}
                     >
-                      {entry.status === 'passed' ? 'Pass' : 'Fail'}
+                      {entry.status === 'passed' ? 'Pass'
+                        : entry.status === 'skipped' ? 'Skipped' : 'Fail'}
                     </span>
                   )}
                 </div>

@@ -1256,23 +1256,32 @@ async def run_agent(
                     f"Step {step_index + 1} used {ACTIONS_PER_STEP} actions without "
                     "reaching its expected result."
                 )
+                # A step the tester marked optional is carried out and not
+                # judged: its action still matters — a date has to be picked —
+                # and whether it reads back is somebody else's scenario.
+                optional = bool(scenario_steps[step_index].get("optional"))
                 storage.finish_scenario_step(
-                    scenario_row_id, "failed", message=stalled,
-                    actions_used=step_actions,
+                    scenario_row_id, "skipped" if optional else "failed",
+                    message=stalled, actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
                 )
                 step_closed = True
                 yield _event(
                     "scenario_step_finished", index=step_index + 1,
-                    total=len(scenario_steps), status="failed", message=stalled,
+                    total=len(scenario_steps),
+                    status="skipped" if optional else "failed", message=stalled,
                 )
-                failed_steps += 1
-                if final_error is None:
-                    final_error = stalled
+                if not optional:
+                    failed_steps += 1
+                    if final_error is None:
+                        final_error = stalled
                 step_index += 1
                 if step_index >= len(scenario_steps):
-                    final_status = "failed"
-                    yield _event("finished", status="failed", summary=final_error)
+                    final_status = "failed" if failed_steps else "passed"
+                    yield _event(
+                        "finished", status=final_status,
+                        summary=final_error or f"All {len(scenario_steps)} steps passed.",
+                    )
                     break
                 scenario_row_id = open_step(step_index)
                 step_actions = 0
@@ -1302,6 +1311,16 @@ async def run_agent(
                 )
                 if current.get("expected"):
                     focus += f"\nEXPECTED RESULT: {current['expected']}"
+                if current.get("optional"):
+                    # Said so the model stops rather than spending the step's
+                    # whole budget on a check the tester has already called
+                    # unnecessary. The action still has to be carried out.
+                    focus += (
+                        "\nTHIS STEP IS OPTIONAL: carry out the action, but if the"
+                        " expected result cannot be proved, close the step with"
+                        " `fail` and move on rather than trying other ways. It"
+                        " will be recorded as skipped and will not fail the run."
+                    )
                 focus += (
                     f"\n\n(Scenario: {goal})" if goal else ""
                 )
@@ -1448,18 +1467,22 @@ async def run_agent(
                         (reason + " — ") if reason else ""
                     ) + "closed as passed without verifying the expected result."
 
+                # Optional: carried out, not judged. The action still had to
+                # happen — this is the step whose check the tester said they
+                # could do without, not the step itself.
+                optional = bool(scenario_steps[step_index].get("optional"))
+                status = "passed" if passed else ("skipped" if optional else "failed")
                 storage.finish_scenario_step(
-                    scenario_row_id, "passed" if passed else "failed",
+                    scenario_row_id, status,
                     message=reason or None, actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
                 )
                 step_closed = True
                 yield _event(
                     "scenario_step_finished", index=step_index + 1,
-                    total=len(scenario_steps),
-                    status="passed" if passed else "failed", message=reason,
+                    total=len(scenario_steps), status=status, message=reason,
                 )
-                if not passed:
+                if not passed and not optional:
                     failed_steps += 1
                     if final_error is None:
                         final_error = f"Step {step_index + 1} failed: {reason or 'no reason given'}"

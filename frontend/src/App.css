@@ -4135,6 +4135,22 @@ a.scan-row-url {
   max-width: 250px;
 }
 
+/* Pick a phone and open it, in the row where the environment would be on Web.
+   Scenarios are written by reading a screen, so one has to be running; sending
+   the tester to another page to arrange that was a dead end in the middle of
+   the page where scenarios get written. */
+.generator-device {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.generator-device > svg { color: var(--text-tertiary); flex: none; }
+.generator-device select { max-width: 200px; min-width: 0; }
+.generator-device select:nth-of-type(2) { max-width: 130px; }
+
 /* Mobile with nothing connected: say what is missing where the device would
    have been, rather than offering an empty list. */
 .generator-nodevice {
@@ -5603,6 +5619,27 @@ textarea,
 }
 
 .case-step-expected::before { content: '→ '; }
+
+/* A step that is carried out and not judged. Marked on the step rather than
+   listed somewhere else, because the question it answers — "why is this run
+   green with that check red" — is asked while reading the steps. */
+.step-optional-tag {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+}
+
+/* The toggle that sets it, lit while it is on. */
+.step-editor-actions .btn-icon.on {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
 
 /* What a recorded step replays, in the order it replays it.
    The badge said a step costs nothing to re-run; it did not say what it does,

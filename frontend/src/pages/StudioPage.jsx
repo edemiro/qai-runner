@@ -5,50 +5,8 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { PlatformTabs } from '../components/PlatformTabs';
-import { OS_TABS, osOf } from '../lib/platforms';
+import { OS_TABS, byNewest, isTablet, osOf } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
-
-/* "Newest first", built from what a device row actually carries.
-   BrowserStack offers hundreds of them in one list and the model a tester
-   wants is almost always a recent one, so it should not have to be hunted for.
-
-   The OS version leads because it is unambiguous and comparable across
-   brands. The number in the model name breaks the tie, which is what orders
-   an iPhone 16 above an iPhone 11 on the same iOS. Four digits and up are a
-   year ("iPhone SE 2022"), not a model number, so they are left out of that
-   comparison rather than ranking a 2022 above everything. */
-function compareVersion(a, b) {
-  const left = String(a || '').split('.').map((part) => parseInt(part, 10) || 0);
-  const right = String(b || '').split('.').map((part) => parseInt(part, 10) || 0);
-  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
-    if ((left[i] || 0) !== (right[i] || 0)) return (right[i] || 0) - (left[i] || 0);
-  }
-  return 0;
-}
-
-function modelNumber(name) {
-  const numbers = (String(name || '').match(/\d+/g) || [])
-    .map(Number)
-    .filter((value) => value < 1000);
-  return numbers.length ? Math.max(...numbers) : 0;
-}
-
-function byNewest(a, b) {
-  return compareVersion(a.version, b.version)
-    || modelNumber(b.name) - modelNumber(a.name)
-    || String(a.name || '').localeCompare(String(b.name || ''));
-}
-
-/* Read off the model name, which is the only place it is written — neither
-   BrowserStack's device list nor a local adb scan says what shape a device is.
-   Every tablet on this account is an iPad or a Galaxy Tab, and "tab" is
-   matched as a whole word so it does not catch a phone whose name merely
-   contains those letters.
-
-   Anything unrecognised counts as a phone. That way a tablet QAi has not seen
-   before turns up in the default list rather than vanishing from both. */
-const TABLET_NAMES = /\bipad\b|\btablets?\b|\btab\b|mediapad/i;
-const isTablet = (device) => TABLET_NAMES.test(String(device.name || ''));
 
 function DeviceCard({ device, session, onConnect, onDisconnect, connecting }) {
   const toast = useToast();

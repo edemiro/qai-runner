@@ -1080,6 +1080,11 @@ class ScenarioStep(BaseModel):
     action: str
     expected: Optional[str] = None
     recorded: Optional[List[Dict[str, Any]]] = None
+    # Carried out, but not something the scenario stands or falls on. A step
+    # whose action matters and whose check does not — picking a date, where
+    # the date has to be picked and reading it back is somebody else's
+    # scenario — used to take the whole run down with it.
+    optional: Optional[bool] = None
 
 
 class AgentRunRequest(BaseModel):

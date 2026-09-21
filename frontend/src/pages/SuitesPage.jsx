@@ -792,6 +792,7 @@ export function SuitesPage({
         <ScenarioGenerator
           kind={platform}
           os={platform === 'mobile' ? os : null}
+          onConnectDevice={onConnectDevice}
           onAdded={loadSuites}
           onOpenExecution={onOpenExecution}
         />
@@ -1044,6 +1045,7 @@ export function SuitesPage({
                   suiteId={suite.id}
                   kind={suite.kind || 'web'}
                   os={suite.os || (isMobileSet ? os : null)}
+                  onConnectDevice={onConnectDevice}
                   onAdded={async () => {
                     setShowGenerator(false);
                     setSuite(await api.suite(suite.id));
@@ -1352,7 +1354,17 @@ export function SuitesPage({
                             <ol className="case-steps">
                               {item.steps.map((step, i) => (
                                 <li key={i}>
-                                  <span className="case-step-action">{step.action}</span>
+                                  <span className="case-step-action">
+                                    {step.action}
+                                    {step.optional && (
+                                      <span
+                                        className="step-optional-tag"
+                                        title="Carried out, but a failed check does not fail the run"
+                                      >
+                                        optional
+                                      </span>
+                                    )}
+                                  </span>
                                   {step.expected && (
                                     <span className="case-step-expected">{step.expected}</span>
                                   )}

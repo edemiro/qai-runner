@@ -8,7 +8,7 @@ import {
 import { api } from '../api';
 import { StepEditor } from './StepEditor';
 import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
-import { devicesFor, sessionsFor } from '../lib/platforms';
+import { forPicking, sessionsFor } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 /**
@@ -34,6 +34,10 @@ export function ScenarioGenerator({
   // `os` narrows that for mobile — a set that does not say which phone lands
   // on neither sub-tab, and the scenarios just written look lost.
   kind = 'web', os = null,
+  // How to book a phone from here. Without it the mobile side is a dead end:
+  // scenarios are written by reading a screen, and the tester was sent to
+  // another page to arrange one.
+  onConnectDevice = null,
   // Open the execution "Save & run" just started. Absent where the caller has
   // no way to switch tabs, in which case the toast says where to find it.
   onOpenExecution = null,
@@ -142,15 +146,23 @@ export function ScenarioGenerator({
     [sessions, kind, isMobile, os],
   );
 
-  /* How many phones could be opened, for the case where none is. "No iOS
-     device connected" read as "QAi cannot see BrowserStack" to someone whose
-     account is connected and has a hundred devices on it. The two are
-     different things: the account is set up, and nothing is running on it —
-     and scenarios are written by reading a screen, so one has to be. */
-  const [bookable, setBookable] = useState(null);
+  /* The phones that could be opened, for the case where none is.
+     Listed rather than counted: saying "63 can be booked — open one in
+     Mobile" is a dead end in the middle of the one screen where scenarios get
+     written. On Web the tester picks an environment here and it opens; this
+     is the same gesture, one platform over. */
+  const [devices, setDevices] = useState([]);
+  const [pickedUdid, setPickedUdid] = useState('');
+  const [pickedApp, setPickedApp] = useState('');
+  const [builds, setBuilds] = useState([]);
+  const [opening, setOpening] = useState(false);
+
+  // Phones first, newest first. The catalogue comes back in no order at
+  // all, so the first thing the list offered was an iPad from 2022.
+  const bookable = useMemo(() => forPicking(devices, os), [devices, os]);
 
   useEffect(() => {
-    if (sessionId || !isMobile || onThisTab.length) return undefined;
+    if (sessionId || !isMobile) return undefined;
     let cancelled = false;
     (async () => {
       const found = [];
@@ -162,10 +174,48 @@ export function ScenarioGenerator({
           /* one source being unavailable must not hide the other */
         }
       }
-      if (!cancelled) setBookable(devicesFor(found, os).length);
+      if (!cancelled) setDevices(found);
     })();
     return () => { cancelled = true; };
-  }, [sessionId, isMobile, os, onThisTab.length]);
+  }, [sessionId, isMobile]);
+
+  // What is installed on the phone about to be opened. A cloud device has
+  // nothing on it until a build is named, and will not start a session
+  // without one.
+  useEffect(() => {
+    if (!pickedUdid) return undefined;
+    const device = devices.find((item) => item.udid === pickedUdid);
+    if (!device) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.deviceApps(device.udid, device.platform);
+        if (!cancelled) setBuilds(data.environments || []);
+      } catch {
+        if (!cancelled) setBuilds([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pickedUdid, devices]);
+
+  /** Book the chosen phone and write the scenarios from its own screen. */
+  const openDevice = async () => {
+    const device = bookable.find((item) => item.udid === pickedUdid);
+    if (!device || !onConnectDevice) return;
+    setOpening(true);
+    try {
+      const session = await onConnectDevice(device, pickedApp || null);
+      if (!session) return;
+      // Added here rather than waited for: the list this component holds is
+      // its own, and the tester pressed open to use it now.
+      setSessions((current) => [...current, session]);
+      setSource(session.sessionId);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setOpening(false);
+    }
+  };
 
   /* Derived rather than synced: switching from iOS to Android would otherwise
      leave the iPhone selected — gone from the list, still in the state, and
@@ -471,16 +521,65 @@ export function ScenarioGenerator({
             </select>
           </div>
         )}
+        {/* Pick a phone and open it, here. Scenarios are written by reading a
+            screen, so one has to be running — and sending the tester to
+            another page to arrange that, in the middle of the page where
+            scenarios get written, is the dead end this replaces. */}
         {!sessionId && isMobile && !onThisTab.length && (
-          <span className="generator-nodevice">
-            <Smartphone size={13} />
-            {bookable
-              ? `No ${os === 'android' ? 'Android' : 'iOS'} device is open. `
-                + `${bookable} can be booked — open one in Mobile and the app's `
-                + 'own screen is what the scenarios get written from.'
-              : `No ${os === 'android' ? 'Android' : 'iOS'} device connected — `
-                + 'open one in Mobile to read the app.'}
-          </span>
+          bookable.length ? (
+            <div className="generator-device">
+              <Smartphone size={13} />
+              <select
+                value={pickedUdid}
+                onChange={(event) => {
+                  setPickedUdid(event.target.value);
+                  setPickedApp('');
+                  setBuilds([]);
+                }}
+                disabled={busy || opening}
+                aria-label="Device to open"
+              >
+                <option value="">
+                  {`Pick an ${os === 'android' ? 'Android' : 'iOS'} device…`}
+                </option>
+                {bookable.map((device) => (
+                  <option key={device.udid} value={device.udid}>
+                    {device.name} · {device.platform}
+                    {device.source === 'browserstack' ? ' · cloud' : ''}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={pickedApp}
+                onChange={(event) => setPickedApp(event.target.value)}
+                disabled={busy || opening || !pickedUdid}
+                aria-label="Build to open on it"
+              >
+                <option value="">
+                  {!pickedUdid ? 'Build' : builds.length ? 'Whatever is open' : 'No TK build'}
+                </option>
+                {builds.map((build) => (
+                  <option key={build.id || build.name} value={build.id}>
+                    {build.label || build.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn btn-sm"
+                onClick={openDevice}
+                disabled={busy || opening || !pickedUdid || !onConnectDevice}
+              >
+                {opening ? <Loader2 size={13} className="spin" /> : null}
+                {opening ? 'Opening…' : 'Open'}
+              </button>
+            </div>
+          ) : (
+            <span className="generator-nodevice">
+              <Smartphone size={13} />
+              {`No ${os === 'android' ? 'Android' : 'iOS'} device found. `}
+              Connect one, or add a BrowserStack account in Settings.
+            </span>
+          )
         )}
         <button className="btn btn-primary" onClick={() => generate()} disabled={busy}>
           {busy ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}

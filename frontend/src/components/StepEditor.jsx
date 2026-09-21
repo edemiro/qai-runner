@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleDashed, Plus, Trash2 } from 'lucide-react';
 
 /**
  * The scenario written out as ordered steps, each with the result it expects.
@@ -71,6 +71,23 @@ export function StepEditor({ steps, onChange, disabled = false }) {
                 />
               </div>
               <div className="step-editor-actions">
+                {/* Carried out, not judged. The action still has to happen —
+                    a date has to be picked — and whether it reads back is
+                    sometimes somebody else's scenario. Without this, one
+                    check the tester did not need took the whole run down. */}
+                <button
+                  type="button"
+                  className={`btn-icon ${step.optional ? 'on' : ''}`}
+                  onClick={() => update(index, { optional: !step.optional })}
+                  disabled={disabled}
+                  title={step.optional
+                    ? 'Optional: carried out, and a failed check does not fail the run'
+                    : 'Make optional — carry the step out but do not fail the run on it'}
+                  aria-label={`Step ${index + 1} is ${step.optional ? 'optional' : 'required'}`}
+                  aria-pressed={Boolean(step.optional)}
+                >
+                  <CircleDashed size={13} />
+                </button>
                 <button
                   type="button"
                   className="btn-icon"
