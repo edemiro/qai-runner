@@ -1678,6 +1678,103 @@ def delete_case(case_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def _step_key(kind: Optional[str], os_name: Optional[str], url: Optional[str],
+              position: int, action: Optional[str]) -> tuple:
+    """What makes two steps the same step.
+
+    The text alone is not enough. "Tap the Nereden field" reaches a different
+    element from the home page than from the availability page, so the screen
+    has to be part of the key: the platform, the phone, the address the
+    scenario opens on, and the position — step three of one scenario and step
+    three of another start from the same place only if everything before them
+    matched too.
+    """
+    return (
+        (kind or "web").lower(),
+        (os_name or "").lower(),
+        (url or "").strip().rstrip("/").lower(),
+        position,
+        " ".join((action or "").split()).lower(),
+    )
+
+
+def lend_recordings(cases: List[Dict[str, Any]]) -> int:
+    """Let a scenario that has never run start from what its siblings learned.
+
+    Recordings are kept on the scenario that earned them, not in a pool. That
+    is on purpose: a recording is only valid on the screen it was taken from,
+    and a shared row is a row that is silently wrong for one of the scenarios
+    reading it. Measured on this database: of the step texts that appear in
+    more than one scenario and are recorded in more than one, half had
+    genuinely different recordings.
+
+    But a scenario that has never run pays full price for its first pass, and
+    forty-four steps here are already recorded on a sibling that starts the
+    same way. So a missing recording is *borrowed* rather than shared: handed
+    to the run in memory, never written down. If it works, the run keeps what
+    actually ran and the scenario owns it from then on. If it does not, the
+    step is spoiled, the borrowed actions go with it, and the agent works it
+    out as it always did.
+
+    Nothing is saved here. Returns how many steps were lent, for the log.
+    """
+    wanting = [
+        case for case in cases
+        if case.get("steps") and not case.get("dataset")
+        and any(not step.get("recorded") for step in case["steps"])
+    ]
+    if not wanting:
+        return 0
+
+    # Both sides of the match are read from the database rather than from what
+    # the caller's dict happens to carry: the two paths into a run build their
+    # cases differently, and one of them does not bring the set's platform
+    # along. A borrower keyed as "web" against a lender keyed as "mobile/ios"
+    # would simply never match, and the feature would look like it did nothing.
+    lenders: Dict[tuple, List[Dict[str, Any]]] = {}
+    where: Dict[str, tuple] = {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT c.id, c.steps, c.url, s.kind, s.os"
+            "  FROM suite_cases c LEFT JOIN suites s ON s.id = c.suite_id"
+        ).fetchall()
+    borrower_ids = {case.get("id") for case in wanting}
+    for row in rows:
+        if row["id"] in borrower_ids:
+            where[row["id"]] = (row["kind"], row["os"], row["url"])
+        if '"recorded"' not in (row["steps"] or ""):
+            continue
+        try:
+            steps = json.loads(row["steps"] or "[]")
+        except Exception:  # noqa: BLE001
+            continue
+        for position, step in enumerate(steps, start=1):
+            if not step.get("recorded"):
+                continue
+            key = _step_key(row["kind"], row["os"], row["url"], position,
+                            step.get("action"))
+            # First writer wins, so lending is stable from run to run rather
+            # than depending on the order rows came back in.
+            lenders.setdefault(key, step["recorded"])
+
+    lent = 0
+    for case in wanting:
+        kind, os_name, url = where.get(case.get("id"), (None, None, None))
+        for position, step in enumerate(case["steps"], start=1):
+            if step.get("recorded"):
+                continue
+            key = _step_key(kind, os_name, url, position, step.get("action"))
+            borrowed = lenders.get(key)
+            if not borrowed:
+                continue
+            step["recorded"] = borrowed
+            # So the report can tell "this replayed something it earned" from
+            # "this replayed something it was handed and has not proved yet".
+            step["borrowed"] = True
+            lent += 1
+    return lent
+
+
 def promote_recording(run_id: str, case_id: str) -> int:
     """Keep what a green run did, on the scenario that ran.
 

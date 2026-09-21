@@ -753,6 +753,19 @@ async def run_suite(
         yield _event("error", message=f"Suite '{suite['name']}' has no enabled cases{criteria}.")
         return
 
+    # Before anything expands: a scenario that has never run can start from
+    # what a sibling already learned, if they open on the same screen and
+    # begin the same way. Lent in memory only — the run keeps what actually
+    # worked, and a borrowed recording that does not work is dropped with the
+    # step that failed on it.
+    try:
+        lent = storage.lend_recordings(cases)
+        if lent:
+            print(f"[suite] lent {lent} recorded step(s) from scenarios that "
+                  f"already earned them")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[suite] could not lend recordings: {exc}")
+
     executions = expand_cases(cases)
 
     # One phone, one session: a mobile suite cannot fan out the way a web suite

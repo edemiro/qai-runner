@@ -278,3 +278,137 @@ def test_more_actions_than_the_scenario_has_steps_are_dropped(db, case):
     did(run_id, 9, "click")
     db.promote_recording(run_id, case)
     assert len(db.get_case(case)["steps"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Borrowing: a scenario that has never run, and a sibling that has
+# --------------------------------------------------------------------------- #
+
+def _case_with(db, suite_id, name, url, steps):
+    return db.add_case(suite_id, name, "g", url=url, steps=steps)
+
+
+def test_a_new_scenario_starts_from_what_a_sibling_learned(db):
+    """A scenario that has never run pays full price for its first pass. If a
+    sibling opens on the same screen and begins the same way, it already knows
+    how — measured on the real database, forty-four steps did."""
+    suite = db.create_suite("Uçuş Arama", kind="web")
+    veteran = _case_with(db, suite, "veteran", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "#one-way",
+                       "value": None, "label": None}]},
+    ])
+    rookie = _case_with(db, suite, "rookie", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir"},
+        {"action": "Uçuş ara", "expected": "liste açılır"},
+    ])
+    assert veteran  # the lender exists
+
+    cases = db.cases_by_id([rookie])
+    assert db.lend_recordings(cases) == 1
+    step = cases[0]["steps"][0]
+    assert step["recorded"][0]["selector"] == "#one-way"
+    assert step["borrowed"] is True
+    # The second step has no lender and is left for the agent.
+    assert not cases[0]["steps"][1].get("recorded")
+
+
+def test_nothing_is_written_down_until_it_has_worked(db):
+    """Borrowed, not shared. A recording is only valid on the screen it came
+    from, so one handed over has not been proved on this scenario yet: it goes
+    to the run in memory and the database keeps saying the scenario has none."""
+    suite = db.create_suite("Uçuş Arama", kind="web")
+    _case_with(db, suite, "veteran", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "#one-way"}]},
+    ])
+    rookie = _case_with(db, suite, "rookie", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir"},
+    ])
+
+    db.lend_recordings(db.cases_by_id([rookie]))
+
+    assert db.get_case(rookie)["recordedSteps"] == 0, "lending must not persist"
+
+
+def test_a_step_that_starts_from_another_screen_is_not_lent_to(db):
+    """The text alone is not enough. The same instruction reaches a different
+    element from a different page, and replaying the wrong one is worse than
+    working it out."""
+    web = db.create_suite("Web", kind="web")
+    _case_with(db, web, "veteran", "https://nuat.test/", [
+        {"action": "Nereden alanına tıkla", "expected": "açılır",
+         "recorded": [{"action": "click", "selector": "#fromPort"}]},
+    ])
+    other_page = _case_with(db, web, "elsewhere", "https://nuat.test/checkin", [
+        {"action": "Nereden alanına tıkla", "expected": "açılır"},
+    ])
+    later = _case_with(db, web, "later", "https://nuat.test/", [
+        {"action": "Çerezleri kabul et", "expected": "kapanır"},
+        {"action": "Nereden alanına tıkla", "expected": "açılır"},
+    ])
+
+    cases = db.cases_by_id([other_page, later])
+    assert db.lend_recordings(cases) == 0, "different page, and different position"
+
+
+def test_a_phone_does_not_lend_to_a_browser(db):
+    ios = db.create_suite("iOS", kind="mobile", os="ios")
+    web = db.create_suite("Web", kind="web")
+    _case_with(db, ios, "veteran", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "//XCUIElementTypeButton"}]},
+    ])
+    rookie = _case_with(db, web, "rookie", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir"},
+    ])
+
+    assert db.lend_recordings(db.cases_by_id([rookie])) == 0
+
+
+def test_one_phone_does_not_lend_to_the_other(db):
+    ios = db.create_suite("iOS", kind="mobile", os="ios")
+    android = db.create_suite("Android", kind="mobile", os="android")
+    _case_with(db, ios, "veteran", None, [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "//XCUIElementTypeButton"}]},
+    ])
+    rookie = _case_with(db, android, "rookie", None, [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir"},
+    ])
+
+    assert db.lend_recordings(db.cases_by_id([rookie])) == 0
+
+
+def test_a_data_driven_scenario_is_never_lent_to(db):
+    """Its recorded actions carry the values that were typed, and those came
+    from one row. The existing rule keeps recordings off these; borrowing one
+    would put the previous passenger into this one's form."""
+    suite = db.create_suite("Uçuş Arama", kind="web")
+    _case_with(db, suite, "veteran", "https://nuat.test/", [
+        {"action": "Yolcu adını gir", "expected": "dolar",
+         "recorded": [{"action": "type", "selector": "#name", "value": "TEST"}]},
+    ])
+    driven = db.add_case(
+        suite, "driven", "g", url="https://nuat.test/",
+        steps=[{"action": "Yolcu adını gir", "expected": "dolar"}],
+        dataset=[{"name": "AYŞE"}, {"name": "MEHMET"}],
+    )
+
+    assert db.lend_recordings(db.cases_by_id([driven])) == 0
+
+
+def test_a_scenario_that_already_knows_is_left_alone(db):
+    suite = db.create_suite("Uçuş Arama", kind="web")
+    _case_with(db, suite, "veteran", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "#one-way"}]},
+    ])
+    owner = _case_with(db, suite, "owner", "https://nuat.test/", [
+        {"action": "Tek yön sekmesini seç", "expected": "seçilir",
+         "recorded": [{"action": "click", "selector": "#tek-yon"}]},
+    ])
+
+    cases = db.cases_by_id([owner])
+    assert db.lend_recordings(cases) == 0
+    assert cases[0]["steps"][0]["recorded"][0]["selector"] == "#tek-yon"
