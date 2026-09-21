@@ -8,7 +8,7 @@ import {
 import { api } from '../api';
 import { StepEditor } from './StepEditor';
 import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
-import { sessionsFor } from '../lib/platforms';
+import { devicesFor, sessionsFor } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 /**
@@ -141,6 +141,31 @@ export function ScenarioGenerator({
     () => sessionsFor(sessions, kind, isMobile ? os : null),
     [sessions, kind, isMobile, os],
   );
+
+  /* How many phones could be opened, for the case where none is. "No iOS
+     device connected" read as "QAi cannot see BrowserStack" to someone whose
+     account is connected and has a hundred devices on it. The two are
+     different things: the account is set up, and nothing is running on it —
+     and scenarios are written by reading a screen, so one has to be. */
+  const [bookable, setBookable] = useState(null);
+
+  useEffect(() => {
+    if (sessionId || !isMobile || onThisTab.length) return undefined;
+    let cancelled = false;
+    (async () => {
+      const found = [];
+      for (const load of [api.devices, api.browserstackDevices]) {
+        try {
+          const data = await load();
+          found.push(...(data.devices || []));
+        } catch {
+          /* one source being unavailable must not hide the other */
+        }
+      }
+      if (!cancelled) setBookable(devicesFor(found, os).length);
+    })();
+    return () => { cancelled = true; };
+  }, [sessionId, isMobile, os, onThisTab.length]);
 
   /* Derived rather than synced: switching from iOS to Android would otherwise
      leave the iPhone selected — gone from the list, still in the state, and
@@ -449,8 +474,12 @@ export function ScenarioGenerator({
         {!sessionId && isMobile && !onThisTab.length && (
           <span className="generator-nodevice">
             <Smartphone size={13} />
-            No {os === 'android' ? 'Android' : 'iOS'} device connected — open one
-            in Mobile to read the app.
+            {bookable
+              ? `No ${os === 'android' ? 'Android' : 'iOS'} device is open. `
+                + `${bookable} can be booked — open one in Mobile and the app's `
+                + 'own screen is what the scenarios get written from.'
+              : `No ${os === 'android' ? 'Android' : 'iOS'} device connected — `
+                + 'open one in Mobile to read the app.'}
           </span>
         )}
         <button className="btn btn-primary" onClick={() => generate()} disabled={busy}>

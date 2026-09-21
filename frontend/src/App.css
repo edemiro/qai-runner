@@ -934,6 +934,20 @@ select:disabled {
   opacity: 0.5;
 }
 
+/* The native dropdown paints its rows from the option's own colours and falls
+   back to the select's where they are not set. A select drawn inside a
+   bordered wrapper has `background: transparent`, so on the dark theme the
+   popup came up as the canvas's white with near-white text on it: the whole
+   environment list was there and unreadable. Stating both on the option
+   itself is the only thing the popup reliably honours. */
+option,
+optgroup {
+  background-color: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+optgroup { color: var(--text-tertiary); }
+
 /* ==========================================================================
    Agent panel
    ========================================================================== */
