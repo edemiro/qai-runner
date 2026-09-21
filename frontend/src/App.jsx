@@ -11,6 +11,7 @@ import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
 import { useToast } from './hooks/useToast';
 import { parseBounds, roleColor } from './lib/elements';
+import { applyEnvironment } from './lib/environments';
 import { osOf } from './lib/platforms';
 import { BugsPage } from './pages/BugsPage';
 import { ExecutionsPage } from './pages/ExecutionsPage';
@@ -323,8 +324,12 @@ export default function App() {
         setTree(null);
         setSelectedElement(null);
         toast.success(`Opened ${data.device.title || data.device.name}.`);
+        // Returned so a caller that needs to act on the new session can, without
+        // waiting for the render that puts it in state.
+        return data;
       } catch (err) {
         toast.error(err.message);
+        return null;
       }
     },
     [toast],
@@ -402,17 +407,43 @@ export default function App() {
      judged step by step here too, so this is also how a step's expected result
      gets checked while the scenario is still being written. */
   const runCaseHere = useCallback(
-    (item) => {
-      if (!activeSessionId) {
-        toast.warning('Connect a browser or device first — this runs on the open session.');
-        return;
+    async (item, { envUrl = null } = {}) => {
+      let sessionId = activeSessionId;
+      let kind = activeSession?.device?.kind;
+
+      if (!sessionId) {
+        /* A web scenario needs no session to exist first: it carries the
+           address it was written against, the tester has usually picked an
+           environment beside it, and a browser is a thing this can open. It
+           used to refuse and say "connect a browser first", which is a step
+           the tester had already expressed — they pressed run on a scenario
+           that says where it runs. A phone is the other way round: nothing
+           here can conjure one, and which device it is changes the result. */
+        if ((item.kind || 'web') === 'mobile') {
+          toast.warning('Open a phone in Mobile first — a scenario runs on the '
+            + 'device you connected, and which one changes the result.');
+          return;
+        }
+        const target = applyEnvironment(item.url, envUrl);
+        if (!target) {
+          toast.warning('This scenario has no address. Pick an environment beside '
+            + 'it, or give the scenario a URL.');
+          return;
+        }
+        // Headed, because the sites these scenarios run against refuse a
+        // headless browser at the network layer.
+        const opened = await openWebPage(target, 'desktop', false);
+        if (!opened) return;
+        sessionId = opened.sessionId;
+        kind = 'web';
       }
+
       // The workspace is where the run can actually be watched.
-      setActiveTab(activeSession?.device?.kind === 'web' ? 'web' : 'mobile');
+      setActiveTab(kind === 'web' ? 'web' : 'mobile');
       setAgentSubTab('chat');
-      startAgent(item.goal, { steps: item.steps || null });
+      startAgent(item.goal, { steps: item.steps || null, on: sessionId });
     },
-    [activeSessionId, activeSession, startAgent, toast],
+    [activeSessionId, activeSession, openWebPage, startAgent, toast],
   );
 
   // ----------------------------------------------------------------- replay -

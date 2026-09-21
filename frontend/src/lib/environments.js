@@ -72,6 +72,36 @@ export const ENV_GROUPS = [
   },
 ];
 
+/**
+ * Point an address at the chosen environment, keeping the path it carries.
+ *
+ * Mirrors `apply_environment` in the runner, which is what an execution goes
+ * through: the environment replaces the origin and nothing else, so
+ * `/tr-tr/flights` on nuat becomes `/tr-tr/flights` on whichever stack was
+ * picked. Needed here too because running one scenario from Test Sets opens
+ * the browser in the page rather than on the server, and the two must land in
+ * the same place.
+ */
+export function applyEnvironment(url, envUrl) {
+  if (!envUrl) return url || null;
+  if (!url) return envUrl;
+  let chosen;
+  try {
+    chosen = new URL(envUrl);
+  } catch {
+    return url;
+  }
+  if (url.startsWith('/')) return new URL(url, envUrl).toString();
+  try {
+    // "nuat.turkishairlines.com/tr-tr" parses as all path, so the host has to
+    // be rescued before the origin can be swapped for it.
+    const current = new URL(/^[a-z]+:\/\//i.test(url) ? url : `https://${url}`);
+    return chosen.origin + current.pathname + current.search + current.hash;
+  } catch {
+    return url;
+  }
+}
+
 /** The environment whose host the address currently points at, if any. */
 export function matchEnv(url) {
   let host;

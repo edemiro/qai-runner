@@ -1181,11 +1181,17 @@ export function SuitesPage({
                         {onRunHere && (
                           <button
                             className="btn-icon"
-                            onClick={() => onRunHere(item)}
+                            onClick={() => onRunHere(
+                              // The set's platform travels with the scenario:
+                              // a web one can open its own browser, a mobile
+                              // one needs the phone the tester connected.
+                              { ...item, kind: suite.kind || 'web' },
+                              { envUrl: isMobileSet ? null : envUrl },
+                            )}
                             title={item.steps?.length
-                              ? 'Run here, step by step, on the connected session'
-                              : 'Run here on the connected session'}
-                            aria-label={`Run ${item.name} on the connected session`}
+                              ? 'Run here, step by step — opens a browser if none is'
+                              : 'Run here — opens a browser if none is'}
+                            aria-label={`Run ${item.name} here`}
                           >
                             <Play size={14} />
                           </button>

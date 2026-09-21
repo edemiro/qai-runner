@@ -57,8 +57,16 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   const clearProposed = useCallback(() => setProposed(null), []);
 
   const start = useCallback(
-    async (goal, { useVision = true, model = '', effort = '', steps = null } = {}) => {
-      if (!sessionId || status === 'running') return;
+    async (goal, {
+      useVision = true, model = '', effort = '', steps = null,
+      // The session to run on, when the caller has just opened one and React
+      // has not re-rendered with it yet. Running a saved scenario opens a
+      // browser first if none is open, and the hook's own `sessionId` is a
+      // render behind at that moment.
+      on = null,
+    } = {}) => {
+      const session = on || sessionId;
+      if (!session || status === 'running') return;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -74,7 +82,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
 
       try {
         await api.runAgent(
-          sessionId,
+          session,
           // Omitted rather than sent empty: the backend reads an absent field
           // as "use the Settings default", which is what a blank picker means.
           {
