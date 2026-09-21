@@ -878,7 +878,27 @@ async def _execute_action(
             if e.get("level") == "error" and not e.get("thirdParty")
         ]
         if not errors:
-            return {"ok": True, "message": "No console or network errors on this page", "element": None}
+            # What was seen and deliberately not failed on, said out loud.
+            #
+            # Every 4xx is a warning here on purpose: a live airline site
+            # answers 4xx all through a perfectly good booking, and treating
+            # those as failures used to fail real runs constantly. But the
+            # step then reported "no errors" over sixteen recorded first-party
+            # failures — including an HTTP 400 on the page's own origin — and
+            # a tester reading that concluded the page was clean. It was not;
+            # it was a page whose failures this assertion does not judge, and
+            # those are different sentences.
+            warnings = [e for e in events if e.get("level") != "error"]
+            own = [e for e in warnings if not e.get("thirdParty")]
+            if not warnings:
+                return {"ok": True, "message": "No console or network errors on this page",
+                        "element": None}
+            note = (f"No errors. {len(warnings)} warning(s) recorded"
+                    + (f", {len(own)} from this site" if own else "")
+                    + " — 4xx and console notices do not fail a run")
+            first = own[0] if own else warnings[0]
+            where = f" (first: {(first.get('text') or first.get('kind') or '')[:90]})"
+            return {"ok": True, "message": note + where, "element": None}
         first = errors[0]
         location = f" ({first['url']})" if first.get("url") else ""
         return {

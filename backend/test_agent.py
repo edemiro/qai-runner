@@ -781,3 +781,70 @@ class LongListsOnAPhone(unittest.TestCase):
         whether or not it is on screen — the same advice there would send the
         agent hunting for a search box it does not need."""
         self.assertNotIn("three hundred rows", agent.build_system_prompt("web"))
+
+
+class WhatAGreenErrorCheckActuallySays(unittest.IsolatedAsyncioTestCase):
+    """`assert_no_errors` judges errors, and every 4xx is a warning here on
+    purpose — a live airline site answers 4xx all through a perfectly good
+    booking, and failing on those used to fail real runs constantly.
+
+    But the step reported "No console or network errors on this page" over
+    sixteen recorded first-party failures, one of them an HTTP 400 on the
+    page's own origin. A tester reading that report concluded the page was
+    clean. It was not: it was a page whose failures this assertion does not
+    judge, and those are different sentences.
+    """
+
+    def setUp(self):
+        self.snapshot = _manager()
+        self.target = FakeTarget(self.snapshot)
+
+    def _events(self, events):
+        self.target.peek_events = lambda: events
+
+    async def test_a_clean_page_still_says_so_plainly(self):
+        self._events([])
+        result = await agent._execute_action(
+            self.target, {"action": "assert_no_errors"}, self.snapshot)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "No console or network errors on this page")
+
+    async def test_warnings_are_counted_in_the_message(self):
+        self._events([
+            {"level": "warning", "kind": "httperror", "text": "HTTP 400",
+             "thirdParty": False},
+            {"level": "warning", "kind": "httperror", "text": "HTTP 404",
+             "thirdParty": False},
+            {"level": "warning", "kind": "console", "text": "third party noise",
+             "thirdParty": True},
+        ])
+        result = await agent._execute_action(
+            self.target, {"action": "assert_no_errors"}, self.snapshot)
+        self.assertTrue(result["ok"], "a 4xx must still not fail the run")
+        self.assertIn("3 warning", result["message"])
+        self.assertIn("2 from this site", result["message"])
+        self.assertIn("HTTP 400", result["message"])
+
+    async def test_someone_elses_outage_is_not_counted_against_this_site(self):
+        self._events([
+            {"level": "warning", "kind": "httperror", "text": "HTTP 403",
+             "thirdParty": True},
+        ])
+        result = await agent._execute_action(
+            self.target, {"action": "assert_no_errors"}, self.snapshot)
+        self.assertTrue(result["ok"])
+        self.assertIn("1 warning", result["message"])
+        self.assertNotIn("from this site", result["message"])
+
+    async def test_a_real_error_still_fails_the_step(self):
+        """The whole point of the check, and the warnings must not dilute it."""
+        self._events([
+            {"level": "warning", "kind": "httperror", "text": "HTTP 404",
+             "thirdParty": False},
+            {"level": "error", "kind": "pageerror", "text": "TypeError: x is not a function",
+             "thirdParty": False},
+        ])
+        result = await agent._execute_action(
+            self.target, {"action": "assert_no_errors"}, self.snapshot)
+        self.assertFalse(result["ok"])
+        self.assertIn("TypeError", result["message"])
