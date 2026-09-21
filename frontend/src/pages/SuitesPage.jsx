@@ -1308,6 +1308,30 @@ export function SuitesPage({
                                   {step.expected && (
                                     <span className="case-step-expected">{step.expected}</span>
                                   )}
+                                  {/* What "Recorded" is actually made of. The
+                                      badge said a step replays; it did not say
+                                      what it replays, so the one thing a tester
+                                      would want to check before trusting it —
+                                      which element, which value — was only
+                                      readable out of the database. */}
+                                  {step.recorded?.length > 0 && (
+                                    <ol className="case-step-recorded">
+                                      {step.recorded.map((action, j) => (
+                                        <li key={j}>
+                                          <span className="recorded-verb">{action.action}</span>
+                                          {action.selector && (
+                                            <code className="recorded-target">{action.selector}</code>
+                                          )}
+                                          {action.value && (
+                                            <span className="recorded-value">“{action.value}”</span>
+                                          )}
+                                          {!action.selector && !action.value && action.label && (
+                                            <span className="recorded-value">{action.label}</span>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  )}
                                 </li>
                               ))}
                             </ol>

@@ -5590,6 +5590,48 @@ textarea,
 
 .case-step-expected::before { content: '→ '; }
 
+/* What a recorded step replays, in the order it replays it.
+   The badge said a step costs nothing to re-run; it did not say what it does,
+   so the one thing worth checking before trusting it — which element, which
+   value — was only readable out of the database. */
+.case-step-recorded {
+  grid-column: 2;
+  margin: 5px 0 2px;
+  padding: 6px 0 6px 10px;
+  list-style: none;
+  border-left: 2px solid var(--success-soft, var(--border));
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.case-step-recorded li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.recorded-verb {
+  flex: none;
+  color: var(--success);
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+}
+
+.recorded-target {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+
+.recorded-value { color: var(--text-secondary); }
+
 /* The steps are a zone of their own inside the card: inset, on its own ground,
    with the count as its heading. Open by default — this is the scenario. */
 .case-steps-block {
