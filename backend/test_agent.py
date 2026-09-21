@@ -848,3 +848,53 @@ class WhatAGreenErrorCheckActuallySays(unittest.IsolatedAsyncioTestCase):
             self.target, {"action": "assert_no_errors"}, self.snapshot)
         self.assertFalse(result["ok"])
         self.assertIn("TypeError", result["message"])
+
+
+class AskingAboutOneFieldRatherThanTheWholeScreen(unittest.IsolatedAsyncioTestCase):
+    """`assert_text` searches everything on screen, which cannot prove which
+    field holds a value — and most of a booking form is that question.
+
+    Measured on the swap control: origin and destination trade places, and
+    every reading of the screen as a whole passes before and after, because
+    both airports are on it either way. The scenario for it could not be made
+    honest until the assertion could say *where*.
+    """
+
+    def setUp(self):
+        self.snapshot = _manager()
+        self.target = FakeTarget(self.snapshot)
+
+    async def _assert(self, **action):
+        with patch("asyncio.sleep", new=AsyncMock()):
+            return await agent._execute_action(
+                self.target, {"action": "assert_text", **action}, self.snapshot)
+
+    async def test_the_field_that_holds_it_passes(self):
+        element = next(iter(self.snapshot.elements_by_id.values()))
+        element.text = "ESB - Ankara Esenboğa"
+        result = await self._assert(elementId=element.element_id, value="ESB")
+        self.assertTrue(result["ok"])
+        self.assertIn("contains", result["message"])
+
+    async def test_a_field_that_does_not_fails_even_though_the_screen_has_it(self):
+        """The whole point: the word is on the screen, in the other field."""
+        elements = list(self.snapshot.elements_by_id.values())
+        elements[0].text = "IST - İstanbul"
+        elements[1].text = "ESB - Ankara"
+        result = await self._assert(elementId=elements[0].element_id, value="ESB")
+        self.assertFalse(result["ok"])
+        self.assertIn("holds", result["message"])
+        # And unscoped, the same screen passes — which is what made the swap
+        # scenario green whether or not the swap worked.
+        self.assertTrue((await self._assert(value="ESB"))["ok"])
+
+    async def test_a_field_that_has_gone_is_said_so_not_silently_passed(self):
+        result = await self._assert(elementId="el_does_not_exist", value="ESB")
+        self.assertFalse(result["ok"])
+        self.assertIn("not on the screen", result["message"])
+
+    async def test_without_an_element_it_still_reads_the_whole_screen(self):
+        """The unscoped form is most of the suite and must not change."""
+        result = await self._assert(value="Welcome back")
+        self.assertTrue(result["ok"])
+        self.assertIn("on screen", result["message"])

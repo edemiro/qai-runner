@@ -45,6 +45,7 @@ AVAILABLE ACTIONS
 {"type":"action","action":"navigate","value":"/tr-tr/flights","reason":"why"}
 {"type":"action","action":"assert_visible","elementId":"el_9","reason":"what this proves"}
 {"type":"action","action":"assert_text","value":"Welcome back","reason":"what this proves"}
+{"type":"action","action":"assert_text","elementId":"el_3","value":"ESB","reason":"what this proves"}
 {"type":"action","action":"assert_absent","value":"Çerez","reason":"what this proves"}
 {"type":"action","action":"assert_disabled","elementId":"el_7","reason":"what this proves"}
 {"type":"action","action":"assert_visual","value":"checkout-page","reason":"what this proves"}
@@ -65,6 +66,12 @@ AVAILABLE ACTIONS
   "/tr-tr/flights" is relative to the site already open. The run already starts
   on the page under test, so this is for reaching a *second* page or going back
   — not for opening the first one.
+`assert_text` looks for a phrase anywhere on the screen. Add `elementId` to ask
+  about one field instead — "does THIS field hold ESB" rather than "is ESB
+  somewhere". Use it whenever the step is about a particular field's value: two
+  fields swapping places, a total updating, a code appearing in the right box.
+  Searching the whole screen cannot tell those apart, because the value is on
+  the screen either way.
 `assert_visual` compares the screen against a stored baseline named by `value`.
   The first time a name is used the current screen becomes the baseline and the
   check passes, so use a stable, descriptive name.
@@ -971,6 +978,49 @@ async def _execute_action(
         fresh = await target.snapshot()
         if fresh is None:
             return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
+
+        # Scoped to one element when the model names one.
+        #
+        # Searching the whole screen cannot prove which field holds a value,
+        # and most of a booking form is exactly that question. Measured on the
+        # swap control: origin and destination trade places, and every reading
+        # of the screen as a whole passes before and after — both airports are
+        # on it either way. The scenario could not be made honest until the
+        # assertion could say *where*.
+        if element_id or selector:
+            element = fresh.elements_by_id.get(element_id) if element_id else None
+            if element is None and selector:
+                element = next(
+                    (e for e in fresh.get_all_elements()
+                     if getattr(e, "selector", None) == selector
+                     or getattr(e, "xpath", None) == selector),
+                    None,
+                )
+            if element is None:
+                return {
+                    "ok": False,
+                    "message": (f"{element_id or selector} is not on the screen "
+                                f"any more, so its text cannot be checked."),
+                    "element": None,
+                }
+            wanted = " ".join(needle.split()).lower()
+            holds = [
+                getattr(element, name, None)
+                for name in ("text", "name", "value", "label")
+            ]
+            info = _element_info(element)
+            label = (info or {}).get("label") or element_id or selector
+            if any(held and wanted in " ".join(str(held).split()).lower()
+                   for held in holds):
+                return {"ok": True, "message": f'"{label}" contains "{needle}"',
+                        "element": info}
+            shown = next((str(h) for h in holds if h), "")
+            return {
+                "ok": False,
+                "message": (f'Expected "{label}" to contain "{needle}" but it '
+                            f'holds "{shown[:80]}".'),
+                "element": info,
+            }
         # Three answers, not two. iOS decides `visible` by hit-testing, so a
         # word under a keyboard accessory or a sheet mid-dismissal comes back
         # hidden while the run's own screenshot shows it plainly — which is how
