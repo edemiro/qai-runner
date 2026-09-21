@@ -143,18 +143,32 @@ def test_the_failing_action_is_shown_when_it_differs_from_the_step():
 
 
 def test_third_party_page_errors_stay_out_of_the_report():
+    """Someone else's outage is not this team's bug.
+
+    This used to keep first-party warnings out as well, on the grounds that
+    they do not decide a verdict. They do not — but they are the evidence for
+    the bugs that are *about* them: every 4xx is a warning here, so a report
+    on a 404 carried no trace of the 404 and the reader had to go back to the
+    run to find out what had happened. They are in now, in their own section,
+    marked as not deciding anything.
+    """
     r = run(
         scenarioSteps=[sstep(1, "failed", "Tap search", "results", "olmadı")],
         pageEvents=[
             {"level": "error", "thirdParty": True, "kind": "httperror", "text": "HTTP 500", "url": "https://tiktok.test/x"},
             {"level": "error", "thirdParty": False, "kind": "httperror", "text": "HTTP 500 on the booking API", "url": "https://nuat.test/api"},
             {"level": "warning", "thirdParty": False, "kind": "console", "text": "a notice"},
+            {"level": "warning", "thirdParty": True, "kind": "console", "text": "meta pixel duplicate"},
         ],
     )
     detail = bug_report.compose(r)["detail"]
     assert "booking API" in detail
     assert "tiktok.test" not in detail
-    assert "a notice" not in detail
+    assert "meta pixel" not in detail
+    # The first-party warning is evidence, and is kept where it cannot be
+    # mistaken for the cause.
+    assert "a notice" in detail
+    assert "Sayfa uyarıları" in detail
 
 
 def test_severity_follows_the_scenario_rather_than_defaulting_to_medium():
@@ -308,3 +322,112 @@ class TestOneBugPerScenarioNotPerRun:
         db.create_bug(title="it broke", code="EXPECTATION_NOT_MET", case_id=None)
 
         assert db.open_bug_for_case(None, "EXPECTATION_NOT_MET") is None
+
+
+class TestAPassingRunIsNotADefect:
+    """A run that passed has nothing to file.
+
+    Measured: a scenario whose four steps all passed, with no error recorded,
+    had a bug raised against the app reading "The run failed without a
+    recognised cause". The chain was: classify() found no failure to describe
+    and returned UNCLASSIFIED; UNCLASSIFIED was not in NOT_APP_DEFECTS, so the
+    draft came back isAppDefect; and the raiser ran after every case whatever
+    it did. Three places, each reasonable alone.
+    """
+
+    def test_not_knowing_why_is_not_evidence_of_anything(self):
+        """UNCLASSIFIED means the tool could not work it out. Nobody should
+        get a defect assigned to them for that."""
+        assert "UNCLASSIFIED" in bug_report.NOT_APP_DEFECTS
+        draft = bug_report.compose(run(status="failed", error=""))
+        assert draft["code"] == "UNCLASSIFIED"
+        assert draft["isAppDefect"] is False
+
+    def test_a_green_run_is_never_filed_automatically(self, tmp_path, monkeypatch):
+        import storage
+
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "bugs.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        run_id = storage.create_run("open the booker", case_id="case-1")
+        storage.add_step(run_id, "click", target="Yolcu", status="passed",
+                         message='Clicked "Yolcu"')
+        storage.finish_run(run_id, "passed")
+
+        draft = bug_report.draft_for_run(run_id)
+        assert draft is not None
+        assert draft["passed"] is True
+        assert draft["isAppDefect"] is False
+
+    def test_a_real_failure_is_still_filed(self, tmp_path, monkeypatch):
+        """The guard must not turn the feature off."""
+        import storage
+
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "bugs2.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        run_id = storage.create_run("search a flight", case_id="case-2")
+        storage.add_step(run_id, "assert_text", target=None, status="failed",
+                         message='Expected "ECONOMY" on screen but it is not there')
+        storage.finish_run(run_id, "failed", error="1 of 2 steps failed")
+
+        draft = bug_report.draft_for_run(run_id)
+        assert draft["isAppDefect"] is True
+        assert not draft.get("passed")
+
+
+class TestTheEvidenceIsInTheReport:
+    """A bug about a 404 has to carry the 404.
+
+    Every 4xx is a warning — a live airline site answers them all through a
+    working booking, so they must not fail a run — but the report only listed
+    *errors*, and on those bugs there were none. It showed a cause and no
+    evidence for it, and the reader had to go back to the run to find out what
+    had actually happened.
+    """
+
+    def _run(self, events):
+        return run(status="failed", error="it broke", pageEvents=events)
+
+    def test_a_failed_request_carries_its_status_and_its_url(self):
+        detail = bug_report.compose(self._run([{
+            "kind": "httperror", "level": "warning", "text": "HTTP 404 ",
+            "url": "https://nuat.turkishairlines.com/rb_b2184cfc?type=js3",
+            "status": 404, "resourceType": "fetch", "thirdParty": False,
+        }])) ["detail"]
+        assert "HTTP 404" in detail
+        assert "(fetch)" in detail
+        assert "https://nuat.turkishairlines.com/rb_b2184cfc?type=js3" in detail
+
+    def test_a_console_error_is_labelled_console_and_quoted_whole(self):
+        message = ("Access to CSS stylesheet at 'https://accounts.google.com/gsi/style' "
+                   "from origin 'https://nuat.turkishairlines.com' has been blocked by CORS")
+        detail = bug_report.compose(self._run([{
+            "kind": "console", "level": "warning", "text": message,
+            "url": "https://nuat.turkishairlines.com/tr-tr", "thirdParty": False,
+        }]))["detail"]
+        assert "console:" in detail
+        assert "blocked by CORS" in detail, "the message must not be cut before the cause"
+
+    def test_errors_and_warnings_are_told_apart(self):
+        detail = bug_report.compose(self._run([
+            {"kind": "pageerror", "level": "error", "text": "TypeError: x is not a function",
+             "thirdParty": False},
+            {"kind": "httperror", "level": "warning", "text": "HTTP 404 ", "status": 404,
+             "thirdParty": False},
+        ]))["detail"]
+        assert "Sayfa hataları" in detail
+        assert "Sayfa uyarıları" in detail
+        assert "koşumun sonucunu belirlemez" in detail
+
+    def test_someone_elses_server_is_left_out(self):
+        """Their outage is not this team's bug, and a report full of Google's
+        console noise is a report nobody reads twice."""
+        detail = bug_report.compose(self._run([{
+            "kind": "console", "level": "warning", "text": "GSI_LOGGER FedCM rejected",
+            "url": "https://accounts.google.com/gsi", "thirdParty": True,
+        }]))["detail"]
+        assert "GSI_LOGGER" not in detail
+
+    def test_a_clean_run_adds_no_section_at_all(self):
+        assert "Sayfa" not in bug_report.compose(self._run([]))["detail"]

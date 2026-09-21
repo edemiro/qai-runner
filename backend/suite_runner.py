@@ -265,6 +265,12 @@ def _raise_bug_if_it_found_one(run_id: Optional[str], case: Dict[str, Any]) -> N
         draft = bug_report.draft_for_run(run_id)
         if not draft or not draft.get("isAppDefect") or draft.get("existingBugId"):
             return
+        if draft.get("passed"):
+            # Belt and braces with the same check in draft_for_run: this used
+            # to be called after every case whatever it did, and a scenario
+            # that passed all four of its steps had a bug filed against the
+            # app saying the run failed for no recognised reason.
+            return
         already = storage.open_bug_for_case(case.get("id"), draft.get("code"))
         if already:
             print(f"[suite] already raised as {already['id']}: "

@@ -2043,6 +2043,10 @@ class BugPatchBody(BaseModel):
     severity: Optional[str] = None
     status: Optional[str] = None
     note: Optional[str] = None
+    # A bug filed by hand has no frame, and the frame is the first thing
+    # anybody opens. Without this the only way to put a picture on a finding
+    # was to have the runner raise it.
+    screenshot: Optional[str] = None
 
 
 @app.get("/api/runs/{run_id}/bug-draft")

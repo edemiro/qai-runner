@@ -45,6 +45,12 @@ CODES: Dict[str, str] = {
 NOT_APP_DEFECTS = {
     "STEP_BUDGET_EXHAUSTED", "STEP_UNPROVEN", "ACTION_TIMEOUT",
     "NAVIGATION_FAILED", "RUN_CANCELLED",
+    # "I could not work out why" is not evidence of anything. It was treated as
+    # a defect by default, which is how a run that passed every step — four of
+    # four green, no error recorded — filed a bug against the app saying "the
+    # run failed without a recognised cause". Nobody should get a defect
+    # assigned to them because the tool had no idea.
+    "UNCLASSIFIED",
 }
 
 
@@ -149,6 +155,71 @@ def _reproduction(run: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _event_line(event: Dict[str, Any]) -> str:
+    """One page event, with everything needed to look it up again.
+
+    The whole line, not a summary of it: whoever reads this bug is going to
+    paste the URL into a network tab or search the text in the source, and a
+    truncated message costs them that. Console goes in as `console:` and a
+    request as its status and method, because the two are looked for in
+    different places.
+    """
+    kind = (event.get("kind") or "").lower()
+    text = " ".join((event.get("text") or "").split())
+    url = event.get("url") or ""
+    status = event.get("status")
+
+    if kind == "console":
+        line = f"- console: {_summarise(text, 400)}"
+    elif kind == "pageerror":
+        line = f"- script hatası: {_summarise(text, 400)}"
+    elif status:
+        line = f"- network: HTTP {status}"
+        if event.get("resourceType"):
+            line += f" ({event['resourceType']})"
+        if text and not text.startswith("HTTP"):
+            line += f" — {_summarise(text, 200)}"
+    else:
+        line = f"- {kind or 'event'}: {_summarise(text, 400)}"
+
+    if url:
+        line += f"\n  {url}"
+    return line
+
+
+def _page_event_section(run: Dict[str, Any]) -> List[str]:
+    """What the page complained about, errors and warnings alike.
+
+    Warnings are here on purpose. Every 4xx is a warning — a live airline site
+    answers them all through a working booking, so they must not fail a run —
+    but a bug *about* a 404 used to carry no trace of it: the section only
+    listed errors, and there were none. The report showed a cause and no
+    evidence for it.
+    """
+    events = [e for e in (run.get("pageEvents") or []) if not e.get("thirdParty")]
+    if not events:
+        return []
+
+    errors = [e for e in events if e.get("level") == "error"]
+    warnings = [e for e in events if e.get("level") != "error"]
+
+    body = [""]
+    if errors:
+        body.append(f"**Sayfa hataları** ({len(errors)})")
+        body.extend(_event_line(event) for event in errors[:8])
+    if warnings:
+        if errors:
+            body.append("")
+        body.append(
+            f"**Sayfa uyarıları** ({len(warnings)}) — koşumun sonucunu "
+            f"belirlemez, 4xx ve konsol bildirimleri burada"
+        )
+        body.extend(_event_line(event) for event in warnings[:8])
+        if len(warnings) > 8:
+            body.append(f"- … ve {len(warnings) - 8} tane daha")
+    return body
+
+
 def compose(run: Dict[str, Any]) -> Dict[str, Any]:
     """A bug draft for a failed run: title, body, code, severity and a frame."""
     code = classify(run)
@@ -189,16 +260,7 @@ def compose(run: Dict[str, Any]) -> Dict[str, Any]:
         body.append("**Steps to reproduce**")
         body.extend(steps)
 
-    errors = [
-        event for event in (run.get("pageEvents") or [])
-        if event.get("level") == "error" and not event.get("thirdParty")
-    ]
-    if errors:
-        body.append("")
-        body.append(f"**Page errors** ({len(errors)})")
-        for event in errors[:5]:
-            where = f" {event['url']}" if event.get("url") else ""
-            body.append(f"- {event.get('kind')}: {_summarise(event.get('text'), 140)}{where}")
+    body.extend(_page_event_section(run))
 
     body.append("")
     body.append(f"_Raised from run {run.get('id')}._")
@@ -242,6 +304,13 @@ def draft_for_run(run_id: str) -> Optional[Dict[str, Any]]:
     if run is None:
         return None
     draft = compose(run)
+    # A run that passed has nothing to file. The tester can still raise one by
+    # hand from the UI — sometimes a green run is wrong — but it goes through
+    # a draft somebody reads, and `isAppDefect` is what decides whether one is
+    # filed without anybody looking.
+    if run.get("status") == "passed":
+        draft["isAppDefect"] = False
+        draft["passed"] = True
     draft["screenshot"] = screenshot_for(run)
     existing = storage.bug_for_run(run_id)
     draft["existingBugId"] = existing["id"] if existing else None

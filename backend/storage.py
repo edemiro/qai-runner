@@ -1035,7 +1035,12 @@ def get_bug(bug_id: str, include_screenshot: bool = False) -> Optional[Dict[str,
 
 
 def update_bug(bug_id: str, **fields: Any) -> bool:
-    allowed = {"title", "detail", "code", "severity", "status", "note"}
+    # `screenshot` is here because a bug filed by hand has none, and the frame
+    # is the first thing anybody opens. Without it the only way to put a
+    # picture on a finding was to have the runner raise it, so every typed-in
+    # bug stayed a wall of text for ever.
+    allowed = {"title", "detail", "code", "severity", "status", "note",
+               "screenshot"}
     sets, values = [], []
     for key, value in fields.items():
         if key in allowed and value is not None:
