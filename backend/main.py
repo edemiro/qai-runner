@@ -444,7 +444,21 @@ async def create_appium_session(req: SessionRequest):
     # turns into a name the device understands.
     session_caps = payload.get("value", {}).get("capabilities") or {}
     if not session_id:
-        raise HTTPException(status_code=500, detail="Appium returned no sessionId.")
+        # Answered 200 and gave nothing back, which BrowserStack does for a
+        # device and build it will not put together — an app built for one iOS
+        # on a phone running another, a version it has withdrawn. The message
+        # used to be "Appium returned no sessionId", which named neither the
+        # phone nor the build and left the tester with nothing to change.
+        where = "BrowserStack" if on_cloud else "Appium"
+        said = (payload.get("value") or {}).get("message") or payload.get("message")
+        raise HTTPException(status_code=502, detail=(
+            f"{where} accepted the request and started no session for "
+            f"{req.name or req.udid}"
+            + (f" with {req.appId}" if req.appId else "")
+            + (f": {said}" if said else
+               ". The device and the build are usually the thing to change —"
+               " an app built for one OS version will not start on another.")
+        ))
 
     # Bound before anything else touches the session: every later call has to
     # reach the hub the session was actually made on.

@@ -407,21 +407,24 @@ export default function App() {
      judged step by step here too, so this is also how a step's expected result
      gets checked while the scenario is still being written. */
   const runCaseHere = useCallback(
-    async (item, { envUrl = null } = {}) => {
-      let sessionId = activeSessionId;
-      let kind = activeSession?.device?.kind;
+    async (item, { envUrl = null, sessionId: given = null } = {}) => {
+      const mobile = (item.kind || 'web') === 'mobile';
+      // A phone the caller has already booked for this — Test Sets connects
+      // the device picked in its Run panel before it gets here, the same way
+      // pressing Run on the whole set does.
+      let sessionId = given || activeSessionId;
+      let kind = given ? 'mobile' : activeSession?.device?.kind;
 
       if (!sessionId) {
-        /* A web scenario needs no session to exist first: it carries the
-           address it was written against, the tester has usually picked an
-           environment beside it, and a browser is a thing this can open. It
-           used to refuse and say "connect a browser first", which is a step
-           the tester had already expressed — they pressed run on a scenario
-           that says where it runs. A phone is the other way round: nothing
-           here can conjure one, and which device it is changes the result. */
-        if ((item.kind || 'web') === 'mobile') {
-          toast.warning('Open a phone in Mobile first — a scenario runs on the '
-            + 'device you connected, and which one changes the result.');
+        /* Pressing run *is* the instruction to connect. Refusing with
+           "connect a browser or device first" asked for a step the tester had
+           already taken: the scenario carries the address it was written
+           against and the environment is picked beside it. A phone cannot be
+           conjured, but it can be booked, and the caller does that — so the
+           only case left here is a mobile scenario run from somewhere with no
+           picker at all. */
+        if (mobile) {
+          toast.warning('Pick the phone to run on, or open one in Mobile.');
           return;
         }
         const target = applyEnvironment(item.url, envUrl);

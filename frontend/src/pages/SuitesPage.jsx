@@ -100,7 +100,8 @@ function PriorityStrip({ cases }) {
  */
 function RunTarget({
   isMobile, os = null, devices, sessions, deviceUdid, onDevice, deviceAppId, onBuild,
-  deviceBuilds, envUrl, onEnv, compact = false,
+  deviceBuilds, loadingBuilds = false, loadingDevices = false,
+  envUrl, onEnv, compact = false,
 }) {
   if (!isMobile) {
     return (
@@ -141,10 +142,15 @@ function RunTarget({
           value={deviceUdid}
           onChange={(e) => onDevice(e.target.value)}
         >
+          {/* The cloud catalogue is a network call away, and this said "No iOS
+              device found" for the whole of it — a settled answer to a
+              question still being asked, on an account with sixty-four of
+              them. */}
           <option value="">
             {onOs.length || open.length
               ? `Pick an ${osLabel} device`
-              : `No ${osLabel} device found`}
+              : loadingDevices ? 'Looking for devices…'
+                : `No ${osLabel} device found`}
           </option>
           {open.length > 0 && (
             <optgroup label="Already connected">
@@ -169,10 +175,15 @@ function RunTarget({
       <label>
         Build
         <select value={deviceAppId} onChange={(e) => onBuild(e.target.value)} disabled={!deviceUdid}>
+          {/* "No TK build on this device" used to show while the list was
+              still being fetched, which reads as a settled answer to a
+              question nobody had asked yet — and on a cloud device the answer
+              takes a few seconds and is usually "here are seventeen". */}
           <option value="">
-            {deviceUdid
-              ? (deviceBuilds.length ? 'Whatever is open' : 'No TK build on this device')
-              : 'Pick a device first'}
+            {!deviceUdid ? 'Pick a device first'
+              : loadingBuilds ? 'Looking for builds…'
+                : deviceBuilds.length ? 'Whatever is open'
+                  : 'No TK build on this device'}
           </option>
           {deviceBuilds.map((build) => (
             <option key={build.id || build.name} value={build.id}>
@@ -241,7 +252,14 @@ export function SuitesPage({
   const [dataValues, setDataValues] = useState({});
   const [savingData, setSavingData] = useState(false);
   const [devices, setDevices] = useState([]);
+  // The cloud catalogue is a network call away; without this the picker
+  // said "No iOS device found" for the whole of it.
+  const [loadingDevices, setLoadingDevices] = useState(true);
   const [deviceBuilds, setDeviceBuilds] = useState([]);
+  // Whether the build list is still being fetched. Set where the device is
+  // chosen rather than from the effect that fetches, because setting state
+  // inside an effect is what this codebase avoids everywhere else.
+  const [loadingBuilds, setLoadingBuilds] = useState(false);
 
   const [options, setOptions] = useState({
     workers: 2,
@@ -606,7 +624,10 @@ export function SuitesPage({
           /* one source being unavailable must not hide the other */
         }
       }
-      if (!cancelled) setDevices(found);
+      if (!cancelled) {
+        setDevices(found);
+        setLoadingDevices(false);
+      }
     })();
     return () => {
       cancelled = true;
@@ -621,11 +642,15 @@ export function SuitesPage({
     if (!device) return undefined;
     let cancelled = false;
     (async () => {
+      // Asking a cloud account what it has uploaded takes a few seconds, and
+      // the picker said "No TK build on this device" the whole time.
       try {
         const data = await api.deviceApps(device.udid, device.platform);
         if (!cancelled) setDeviceBuilds(data.environments || []);
       } catch {
         if (!cancelled) setDeviceBuilds([]);
+      } finally {
+        if (!cancelled) setLoadingBuilds(false);
       }
     })();
     return () => {
@@ -937,10 +962,13 @@ export function SuitesPage({
                       setDeviceUdid(value);
                       setDeviceAppId('');
                       setDeviceBuilds([]);
+                      setLoadingBuilds(Boolean(value));
                     }}
                     deviceAppId={deviceAppId}
                     onBuild={setDeviceAppId}
                     deviceBuilds={deviceBuilds}
+                    loadingBuilds={loadingBuilds}
+                    loadingDevices={loadingDevices}
                     envUrl={envUrl}
                     onEnv={setEnvUrl}
                   />
@@ -1181,16 +1209,30 @@ export function SuitesPage({
                         {onRunHere && (
                           <button
                             className="btn-icon"
-                            onClick={() => onRunHere(
-                              // The set's platform travels with the scenario:
-                              // a web one can open its own browser, a mobile
-                              // one needs the phone the tester connected.
-                              { ...item, kind: suite.kind || 'web' },
-                              { envUrl: isMobileSet ? null : envUrl },
-                            )}
+                            disabled={connecting}
+                            onClick={async () => {
+                              /* Whatever this scenario needs to run, get it —
+                                 the same way pressing Run on the whole set
+                                 does. A web one opens a browser at the chosen
+                                 environment; a mobile one books the phone
+                                 picked in the Run panel, connecting it if it
+                                 is not open yet. Asking the tester to go and
+                                 connect something first was asking for a step
+                                 they had already taken by pressing this. */
+                              const scenario = { ...item, kind: suite.kind || 'web' };
+                              if (!isMobileSet) {
+                                onRunHere(scenario, { envUrl });
+                                return;
+                              }
+                              const target = await resolveTarget('mobile');
+                              if (!target) return;
+                              onRunHere(scenario, {
+                                sessionId: target.deviceSessionId,
+                              });
+                            }}
                             title={item.steps?.length
-                              ? 'Run here, step by step — opens a browser if none is'
-                              : 'Run here — opens a browser if none is'}
+                              ? 'Run here, step by step — connects what it needs'
+                              : 'Run here — connects what it needs'}
                             aria-label={`Run ${item.name} here`}
                           >
                             <Play size={14} />
@@ -1383,10 +1425,13 @@ export function SuitesPage({
                   setDeviceUdid(value);
                   setDeviceAppId('');
                   setDeviceBuilds([]);
+                  setLoadingBuilds(Boolean(value));
                 }}
                 deviceAppId={deviceAppId}
                 onBuild={setDeviceAppId}
                 deviceBuilds={deviceBuilds}
+                loadingBuilds={loadingBuilds}
+                loadingDevices={loadingDevices}
                 envUrl={envUrl}
                 onEnv={setEnvUrl}
               />
