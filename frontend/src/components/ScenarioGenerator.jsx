@@ -453,11 +453,23 @@ export function ScenarioGenerator({
             }}
           />
         </label>
+        {/* Every environment in the one list. Behind "Open an environment…"
+            they were a second choice after a first that only existed to ask
+            whether there would be a second — so the page offered one stack and
+            looked like it had only one. */}
         {!sessionId && (
           <select
             className="generator-source"
-            value={chosenSource}
-            onChange={(event) => setSource(event.target.value)}
+            value={chosenSource === 'url' ? url : chosenSource}
+            onChange={(event) => {
+              const picked = event.target.value;
+              if (picked.startsWith('http')) {
+                setSource('url');
+                setUrl(picked);
+              } else {
+                setSource(picked);
+              }
+            }}
             disabled={busy}
             aria-label="What to read the scenarios from"
           >
@@ -472,30 +484,17 @@ export function ScenarioGenerator({
             )}
             {/* There is no address to open on a phone: an app is read off a
                 device that is already running it. */}
-            {!isMobile && <option value="url">🌐 Open an environment…</option>}
+            {!isMobile && ENV_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.items.map((item) => (
+                  <option key={item.name} value={item.url} title={item.url}>
+                    🌐 {item.name} · {new URL(item.url).host}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
             <option value="brief">✎ Brief only</option>
           </select>
-        )}
-        {!sessionId && !isMobile && chosenSource === 'url' && (
-          <div className="generator-url">
-            <Globe size={13} />
-            <select
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              disabled={busy}
-              aria-label="Environment to read"
-            >
-              {ENV_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.items.map((item) => (
-                    <option key={item.name} value={item.url} title={item.url}>
-                      {item.name} · {new URL(item.url).host}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
         )}
         {/* Pick a phone here and Generate opens it. There is no Open
             button, because opening a device was never the thing the tester

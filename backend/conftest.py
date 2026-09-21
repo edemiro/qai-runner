@@ -1,11 +1,11 @@
 """Test-wide fixtures.
 
-The only thing here is the database, and it matters more than it looks. The
-suite creates runs, suites, cases and page events as fixtures, and `storage`
-resolves its path once at import — so before this, every `pytest` run wrote its
-fixtures into the working database. 75 of the 133 runs in it were scenarios
-called "senaryo", which then counted in the pass rate on Insights, in the flaky
-table and in every report drawn from run history.
+The database matters more than it looks. The suite creates runs, suites, cases
+and page events as fixtures, and `storage` resolves its path once at import —
+so before this, every `pytest` run wrote its fixtures into the working
+database. 75 of the 133 runs in it were scenarios called "senaryo", which then
+counted in the pass rate on Insights, in the flaky table and in every report
+drawn from run history.
 """
 
 import os
@@ -13,6 +13,7 @@ import tempfile
 
 import pytest
 
+import agent
 import storage
 
 
@@ -41,3 +42,22 @@ def _isolated_database():
             # closes; a leftover file in the temp directory is not worth
             # failing a green suite over.
             pass
+
+
+@pytest.fixture(autouse=True)
+def _assertions_do_not_wait():
+    """One reading of the screen per assertion, unless a test asks otherwise.
+
+    Against a real page an assertion keeps looking for a few seconds, because
+    a page that renders when its API answers is not finished when the click
+    is. A fake target is finished the moment it is asked, so that window is
+    pure sitting still — it put 42 seconds on a 24-second suite, all of it
+    waiting for screens that were never going to change. Tests about the
+    waiting set the constant themselves.
+    """
+    original = agent.ASSERT_WAIT_SECONDS
+    agent.ASSERT_WAIT_SECONDS = 0.0
+    try:
+        yield
+    finally:
+        agent.ASSERT_WAIT_SECONDS = original

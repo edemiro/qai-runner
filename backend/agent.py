@@ -16,6 +16,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import authoring
 import storage
+import text_match
 import visual
 from config import MAX_AGENT_STEPS
 from drivers import ActionResult, Snapshot, UITarget
@@ -72,6 +73,14 @@ AVAILABLE ACTIONS
   fields swapping places, a total updating, a code appearing in the right box.
   Searching the whole screen cannot tell those apart, because the value is on
   the screen either way.
+  When you scope it, name the element the words are ON — the one whose `text`
+  shows them, or the field that contains it. Many nodes in the tree carry no
+  text at all, and naming one of those asks a question it cannot answer. If a
+  scoped check comes back saying the phrase is elsewhere on the screen, it
+  tells you which element does hold it: assert against that one next, or drop
+  the elementId if the step is not about a particular field.
+  Case, accents and typographic quotes never decide a verdict — "Ucus ara"
+  matches "Uçuş ara" — so write the phrase as the scenario words it.
 `assert_visual` compares the screen against a stored baseline named by `value`.
   The first time a name is used the current screen becomes the baseline and the
   check passes, so use a stable, descriptive name.
@@ -573,6 +582,70 @@ def _is_blank_frame(screenshot: Optional[str]) -> bool:
         return False
 
 
+def _box_of(element: Any) -> Optional[Dict[str, int]]:
+    """An element's rectangle, whichever shape its driver reports."""
+    bounds = getattr(element, "bounds", None) if element is not None else None
+    if not isinstance(bounds, dict):
+        return None
+    try:
+        return {key: int(bounds[key]) for key in ("x1", "y1", "x2", "y2")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+# A rounding allowance on each edge — a label and the control it sits in
+# routinely differ by a pixel or two of padding.
+SAME_PLACE_SLACK = 8
+
+# The largest share of the screen a region may cover and still be somewhere in
+# particular. A field, a row or a card is far under this; a page banner or the
+# body is over it, and "the words are inside the page" is not an answer to
+# "which field holds them". Expressed against the screen rather than as a
+# multiple of the control, because a 40px icon inside a 280px field is a ten-
+# fold difference and perfectly ordinary — the question is whether the region
+# is a place, not whether it is small.
+SAME_PLACE_SHARE = 0.25
+
+
+def _same_place(named: Any, found: Any, screen: Optional[Snapshot] = None) -> bool:
+    """Is the phrase painted where the assertion pointed?
+
+    Geometry rather than the element tree, and measured before it was trusted:
+    on the real booker, climbing even one ancestor from the origin field pulls
+    in the destination field's text, so widening the search through the DOM
+    destroys the one thing a scoped assertion is for. The boxes do not — the
+    two fields are in different places on the screen, which is exactly how the
+    tester tells them apart.
+    """
+    a, b = _box_of(named), _box_of(found)
+    if not a or not b:
+        return False
+
+    def area(box):
+        return max(0, box["x2"] - box["x1"]) * max(0, box["y2"] - box["y1"])
+
+    def within(inner, outer):
+        return (inner["x1"] >= outer["x1"] - SAME_PLACE_SLACK
+                and inner["y1"] >= outer["y1"] - SAME_PLACE_SLACK
+                and inner["x2"] <= outer["x2"] + SAME_PLACE_SLACK
+                and inner["y2"] <= outer["y2"] + SAME_PLACE_SLACK)
+
+    if within(b, a):
+        return True
+    # The other way round for the case that produced most of these failures:
+    # the model names a small nameless button and the words are on the region
+    # drawn around it.
+    if not within(a, b):
+        return False
+    screen_area = 0
+    if screen is not None:
+        screen_area = (int(getattr(screen, "screen_width", 0) or 0)
+                       * int(getattr(screen, "screen_height", 0) or 0))
+    if not screen_area:
+        return True
+    return area(b) <= SAME_PLACE_SHARE * screen_area
+
+
 def _text_within(element: Any, depth: int = 6) -> str:
     """Everything a person reads inside this element.
 
@@ -883,6 +956,285 @@ async def _run_authoring_action(
     return result
 
 
+# How long an assertion keeps looking before it calls the screen wrong.
+#
+# A single look 0.4s after the action is a coin toss against a page that renders
+# when its API answers, and a coin toss that lands wrong reads as a product
+# defect. Every mature test framework retries an assertion to a deadline for
+# this reason; the cost is nothing when it passes, which is most of the time.
+ASSERT_WAIT_SECONDS = 6.0
+ASSERT_POLL_SECONDS = 0.5
+
+
+def _named_element(fresh: Snapshot, element_id: Optional[str], selector: Optional[str]):
+    """The element the assertion pointed at, by id or by selector."""
+    element = fresh.elements_by_id.get(element_id) if element_id else None
+    if element is None and selector:
+        element = next(
+            (e for e in fresh.get_all_elements()
+             if getattr(e, "selector", None) == selector
+             or getattr(e, "xpath", None) == selector),
+            None,
+        )
+    return element
+
+
+def _look_for_text(fresh: Snapshot, needle: str, element_id: Optional[str],
+                   selector: Optional[str]) -> Dict[str, Any]:
+    """One reading of the screen for a phrase. No waiting, no retrying.
+
+    Scoped to one element when the model names one, because searching the whole
+    screen cannot prove which field holds a value and most of a booking form is
+    exactly that question: origin and destination trade places and a reading of
+    the screen as a whole passes before and after.
+
+    What changed is what happens when the named element does not hold it. The
+    run history says this is the single biggest source of red steps, and almost
+    none of them were the product: the model names a wrapper that holds no text
+    at all — 62 of 193 interactive elements on the home page are like that —
+    and the answer came back `holds ""` about a field the screen was plainly
+    showing a value in. So the phrase is looked for on the rest of the screen
+    too, and where it turns up decides the verdict: in the same place, the
+    check was pointed at a node that could not answer it; somewhere else, the
+    check is wrong and the message now says where the words actually are, which
+    is what lets the next step aim at the right element instead of dying.
+    """
+    if element_id or selector:
+        element = _named_element(fresh, element_id, selector)
+        if element is None:
+            return {
+                "ok": False,
+                "message": (f"{element_id or selector} is not on the screen "
+                            "any more, so its text cannot be checked."),
+                "element": None,
+            }
+        # The whole region, not the node: a control's words are very often on
+        # its children, and reading only the node reported `it holds ""` about
+        # a field the screen was showing a date in.
+        holds = _text_within(element)
+        info = _element_info(element)
+        label = (info or {}).get("label") or element_id or selector
+        if text_match.contains(holds, needle):
+            return {"ok": True, "message": f'"{label}" contains "{needle}"',
+                    "element": info}
+
+        elsewhere = fresh.locate_text(needle) if fresh.find_text(needle) else None
+        if elsewhere is not None and _same_place(element, elsewhere, fresh):
+            return {
+                "ok": True,
+                "element": _element_info(elsewhere),
+                "message": (f'"{needle}" is shown in "{label}" — read from the '
+                            "region it is drawn in, as the element itself "
+                            "carries no text."),
+            }
+        if elsewhere is not None:
+            other = (_element_info(elsewhere) or {}).get("label") or "another part of the screen"
+            return {
+                "ok": False,
+                "element": info,
+                "message": (
+                    f'Expected "{label}" to contain "{needle}". It '
+                    + (f'holds "{holds[:120]}"' if holds else "has no text in it")
+                    + f', and "{needle}" is on the screen in "{other}" instead — '
+                    "so the check is pointed at the wrong element. Assert "
+                    "against that one, or drop the elementId to check the "
+                    "whole screen."
+                ),
+            }
+        return {
+            "ok": False,
+            "message": (f'Expected "{label}" to contain "{needle}" but it '
+                        + (f'holds "{holds[:120]}", and "{needle}" is nowhere '
+                           "on the screen." if holds
+                           else "has no text in it, and "
+                                f'"{needle}" is nowhere on the screen.')),
+            "element": info,
+        }
+
+    # Three answers, not two. iOS decides `visible` by hit-testing, so a word
+    # under a keyboard accessory or a sheet mid-dismissal comes back hidden
+    # while the run's own screenshot shows it plainly — which is how an
+    # assertion for "ECONOMY" failed against a screen with ECONOMY on it. Both
+    # snapshot types answer this; the page's version simply has no third answer
+    # to give. The hasattr check that used to stand here hid the fact that the
+    # two had drifted apart, and the same drift in contains_text crashed every
+    # web run that reached an assert_absent.
+    where = fresh.find_text(needle)
+    if where:
+        # Carried back so the step's frame can box what was verified. The
+        # locate is best-effort — a phrase split across siblings has no one
+        # element — and a miss costs the box, never the verdict.
+        found = f'Found "{needle}" on screen'
+        if where == "hidden":
+            found += " (the driver reported it as not visible; matched on its position)"
+        return {"ok": True, "message": found,
+                "element": _element_info(fresh.locate_text(needle))}
+
+    # The whole screen, not the first dozen strings of it. Truncated, this read
+    # as though the screen held nothing else — it sent the reader, and me,
+    # looking for the wrong fault twice.
+    strings = fresh.visible_text()
+    visible = ", ".join(strings[:40])
+    if len(strings) > 40:
+        visible += f" … and {len(strings) - 40} more"
+    return {
+        "ok": False,
+        "message": f'Expected "{needle}" on screen but it is not there. Visible text: {visible}',
+        "element": None,
+    }
+
+
+async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None):
+    """Read the screen until the check holds or the time runs out.
+
+    `read` is given a fresh snapshot and returns the usual result dict. The
+    first reading happens after the same short settle the assertions always
+    had, so a check that was going to pass costs exactly what it used to.
+
+    The window is read from the module rather than bound as a default, so it
+    can be turned off where every screen is a fixture that will never change.
+    """
+    deadline = time.monotonic() + (
+        ASSERT_WAIT_SECONDS if seconds is None else seconds
+    )
+    result = {"ok": False, "element": None,
+              "message": "Could not read the screen to assert against"}
+    while True:
+        await asyncio.sleep(ASSERT_POLL_SECONDS)
+        fresh = await target.snapshot()
+        if fresh is not None:
+            result = read(fresh)
+            if result["ok"]:
+                return result
+        if time.monotonic() >= deadline:
+            return result
+
+
+async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
+                       selector: Optional[str]) -> Dict[str, Any]:
+    return await _keep_looking(
+        target, lambda fresh: _look_for_text(fresh, needle, element_id, selector),
+    )
+
+
+def _first_json_object(reply: str) -> Optional[Dict[str, Any]]:
+    """The first JSON object in a reply, fenced or bare.
+
+    Models fence when asked to and sometimes do not; both shapes are the same
+    answer and refusing one of them would throw away a verdict over punctuation.
+    """
+    for raw in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", reply, re.DOTALL) \
+            or re.findall(r"\{.*?\}", reply, re.DOTALL):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+JUDGE_PROMPT = """You are checking one assertion in a UI test that has just failed.
+
+A tester is watching the screen and says the thing the step asked for is right
+there. The check is literal — it compares text — so it fails whenever the screen
+says the same thing in different words, in an image, or in a place the check did
+not look. Your job is to say which of those this is.
+
+You are shown the screenshot and every string the screen is made of.
+
+Answer with JSON and nothing else:
+{"holds": true|false, "evidence": "<text copied EXACTLY off the screen>", "why": "<one sentence>"}
+
+Rules that decide whether your answer is used at all:
+- "evidence" must be text that is really on this screen, copied character for
+  character from the screenshot or the list of strings. An answer whose evidence
+  is not on the screen is thrown away and the step stays failed.
+- Say true only if what the step asked to verify is actually satisfied by what
+  is on screen. A screen that is merely similar, still loading, or showing the
+  step before does not satisfy it.
+- Say false if you are unsure. A test that passes when it should not is worse
+  than one that fails when it should not.
+"""
+
+
+async def _judge_on_screen(
+    target: UITarget, provider, model: str, api_key: str, effort: Optional[str],
+    asked: Optional[Dict[str, Any]], goal: str, action: Dict[str, Any],
+    failure: str, screenshot: Optional[str], usage=None,
+) -> Optional[Dict[str, Any]]:
+    """Let the screen overrule a failed text check — if it can prove it.
+
+    The literal check is right about the characters and wrong about the
+    question often enough that it was stopping real runs at every step: a 404
+    page that says "Hiçbir yerde var olmayan bir sayfayı aradınız" and never
+    the digits 404, a heading rendered as an image, a value the check looked
+    for in the wrong field. A tester reading that screen answers in a second.
+
+    What keeps this from turning every red into green is that the model has to
+    quote the screen, and the quote is checked against the snapshot before the
+    verdict is taken. An overrule with invented evidence is discarded and the
+    step stays failed. Returns None when nothing was overruled, so the caller
+    keeps the original result and the normal path is untouched.
+    """
+    if not screenshot:
+        return None
+    wanted = (action.get("value") or "").strip()
+    expected = (asked or {}).get("expected") or goal
+    step_text = (asked or {}).get("action") or ""
+
+    fresh = await target.snapshot()
+    if fresh is None:
+        return None
+    strings = fresh.visible_text()
+
+    question = (
+        f"STEP: {step_text}\n"
+        f"EXPECTED RESULT: {expected}\n"
+        f"THE CHECK THAT FAILED: {action.get('action')}"
+        + (f' looking for "{wanted}"' if wanted else "")
+        + f"\nWHAT IT REPORTED: {failure}\n\n"
+        "EVERY STRING ON THIS SCREEN:\n"
+        + "\n".join(f"- {s}" for s in strings[:150])
+        + (f"\n… and {len(strings) - 150} more" if len(strings) > 150 else "")
+    )
+
+    reply = ""
+    try:
+        async for token in provider.stream(
+            JUDGE_PROMPT,
+            [Turn(role="user", text=question, image_b64=screenshot)],
+            model, api_key, effort, usage=usage,
+        ):
+            reply += token
+    except Exception:
+        # A judgement is a courtesy on top of a verdict that already exists.
+        # If the provider is unwell the step keeps the answer it had.
+        return None
+
+    verdict = _first_json_object(reply)
+    if verdict is None or not verdict.get("holds"):
+        return None
+    evidence = str(verdict.get("evidence") or "").strip()
+    # The whole safety of this rests here: the quote has to be on the screen.
+    # Without it the model is free to assert that anything passed, which is the
+    # one failure mode worse than the one being fixed.
+    if not evidence or not fresh.contains_text(evidence):
+        return None
+    why = " ".join(str(verdict.get("why") or "").split())[:200]
+    return {
+        "ok": True,
+        "element": _element_info(fresh.locate_text(evidence)),
+        "message": (
+            f'Judged from the screen: "{evidence}" — {why}'
+            if why else f'Judged from the screen: "{evidence}"'
+        ),
+        # Carried so the report and the recording can tell a verdict that was
+        # read off the screen from one the text proved outright.
+        "judged": True,
+    }
+
+
 async def _execute_action(
     target: UITarget,
     action: Dict[str, Any],
@@ -1002,35 +1354,36 @@ async def _execute_action(
         needle = (value or "").strip()
         if not needle:
             return {"ok": False, "message": "assert_absent needs a value", "element": None}
-        await asyncio.sleep(0.4)
-        fresh = await target.snapshot()
-        if fresh is None:
-            return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
-        # A blank or half-loaded page has nothing on it, so "not there" would
-        # pass for the wrong reason. Absence only counts on a screen that has
-        # something on it.
-        if len(fresh.visible_text()) < 3:
+        def gone(fresh: Snapshot) -> Dict[str, Any]:
+            # A blank or half-loaded page has nothing on it, so "not there"
+            # would pass for the wrong reason. Absence only counts on a screen
+            # that has something on it.
+            if len(fresh.visible_text()) < 3:
+                return {
+                    "ok": False,
+                    "message": (
+                        f'Could not prove "{needle}" is gone: the screen was '
+                        "still blank when it was checked."
+                    ),
+                    "element": None,
+                }
+            # Hidden views counted too, and deliberately: claiming something is
+            # gone is a stronger claim than claiming it is there, so it has to
+            # survive the wider search. A phrase the driver merely marked
+            # invisible has not left the screen.
+            if not fresh.contains_text(needle, include_hidden=True):
+                return {"ok": True, "message": f'"{needle}" is no longer on screen',
+                        "element": None}
             return {
                 "ok": False,
-                "message": (
-                    f'Could not prove "{needle}" is gone: the screen was still '
-                    "blank when it was checked."
-                ),
-                "element": None,
+                "message": f'Expected "{needle}" to be gone but it is still on screen.',
+                "element": _element_info(fresh.locate_text(needle)),
             }
-        # Hidden views counted too, and deliberately: claiming something is
-        # gone is a stronger claim than claiming it is there, so it has to
-        # survive the wider search. A phrase the driver merely marked
-        # invisible has not left the screen.
-        if not fresh.contains_text(needle, include_hidden=True):
-            return {"ok": True, "message": f'"{needle}" is no longer on screen', "element": None}
-        return {
-            "ok": False,
-            "message": f'Expected "{needle}" to be gone but it is still on screen.',
-            "element": _element_info(
-                fresh.locate_text(needle) if hasattr(fresh, "locate_text") else None
-            ),
-        }
+
+        # Waited out the same way: a dialog dismissed with an animation is
+        # still on the screen for a few hundred milliseconds after the click
+        # that closed it, and failing on that is failing on the animation.
+        return await _keep_looking(target, gone)
 
     if kind == "assert_disabled":
         if not element_id:
@@ -1054,88 +1407,7 @@ async def _execute_action(
         needle = (value or "").strip()
         if not needle:
             return {"ok": False, "message": "assert_text needs a value", "element": None}
-        # Re-read so the assertion sees the settled state, not the pre-action one.
-        await asyncio.sleep(0.4)
-        fresh = await target.snapshot()
-        if fresh is None:
-            return {"ok": False, "message": "Could not read the screen to assert against", "element": None}
-
-        # Scoped to one element when the model names one.
-        #
-        # Searching the whole screen cannot prove which field holds a value,
-        # and most of a booking form is exactly that question. Measured on the
-        # swap control: origin and destination trade places, and every reading
-        # of the screen as a whole passes before and after — both airports are
-        # on it either way. The scenario could not be made honest until the
-        # assertion could say *where*.
-        if element_id or selector:
-            element = fresh.elements_by_id.get(element_id) if element_id else None
-            if element is None and selector:
-                element = next(
-                    (e for e in fresh.get_all_elements()
-                     if getattr(e, "selector", None) == selector
-                     or getattr(e, "xpath", None) == selector),
-                    None,
-                )
-            if element is None:
-                return {
-                    "ok": False,
-                    "message": (f"{element_id or selector} is not on the screen "
-                                f"any more, so its text cannot be checked."),
-                    "element": None,
-                }
-            wanted = " ".join(needle.split()).lower()
-            # The whole region, not the node. A control's words are very often
-            # on its children, and reading only the node reported `it holds ""`
-            # about a field the screen was plainly showing a date in.
-            holds = _text_within(element)
-            info = _element_info(element)
-            label = (info or {}).get("label") or element_id or selector
-            if wanted in holds.lower():
-                return {"ok": True, "message": f'"{label}" contains "{needle}"',
-                        "element": info}
-            return {
-                "ok": False,
-                "message": (f'Expected "{label}" to contain "{needle}" but it '
-                            + (f'holds "{holds[:120]}".' if holds
-                               else "has no text in it.")),
-                "element": info,
-            }
-        # Three answers, not two. iOS decides `visible` by hit-testing, so a
-        # word under a keyboard accessory or a sheet mid-dismissal comes back
-        # hidden while the run's own screenshot shows it plainly — which is how
-        # an assertion for "ECONOMY" failed against a screen with ECONOMY on it.
-        # Both snapshot types answer this; the page's version simply has no
-        # third answer to give. The hasattr check that used to stand here hid
-        # the fact that the two had drifted apart, and the same drift in
-        # contains_text crashed every web run that reached an assert_absent.
-        where = fresh.find_text(needle)
-        if where:
-            # Carried back so the step's frame can box what was verified. The
-            # locate is best-effort — a phrase split across siblings has no one
-            # element — and a miss costs the box, never the verdict.
-            found = f'Found "{needle}" on screen'
-            if where == "hidden":
-                found += " (the driver reported it as not visible; matched on its position)"
-            return {
-                "ok": True,
-                "message": found,
-                "element": _element_info(
-                    fresh.locate_text(needle) if hasattr(fresh, "locate_text") else None
-                ),
-            }
-        # The whole screen, not the first dozen strings of it. Truncated, this
-        # read as though the screen held nothing else — it sent the reader, and
-        # me, looking for the wrong fault twice.
-        strings = fresh.visible_text()
-        visible = ", ".join(strings[:40])
-        if len(strings) > 40:
-            visible += f" … and {len(strings) - 40} more"
-        return {
-            "ok": False,
-            "message": f'Expected "{needle}" on screen but it is not there. Visible text: {visible}',
-            "element": None,
-        }
+        return await _assert_text(target, needle, element_id, selector)
 
     return as_dict(await target.act(kind, element_id, selector, value, snapshot_id))
 
@@ -1675,6 +1947,29 @@ async def run_agent(
             after_shot = await _fast_screenshot(target)
             publish_live_frame(target.session_id, after_shot)
             duration_ms = int((time.monotonic() - started) * 1000)
+
+            # The screen gets the last word. A check that failed on the text
+            # while the tester is looking at the thing it asked for is the
+            # complaint this exists for, and by here every cheaper explanation
+            # has been tried: the phrase was normalised, waited for, and looked
+            # for outside the named element. What is left is a screen that says
+            # it differently. The verdict is only allowed to move if the model
+            # can quote something that is provably on the screen — see
+            # `_judge_on_screen` — so it cannot simply wave a failure through.
+            if (not result["ok"] and kind in ASSERTION_ACTIONS and not replaying
+                    and use_vision):
+                judged = await _judge_on_screen(
+                    target, provider, model, api_key, effort,
+                    asked=scenario_steps[step_index] if stepwise else None,
+                    goal=goal, action=action, failure=result["message"],
+                    screenshot=after_shot, usage=run_usage,
+                )
+                if judged is not None:
+                    result = judged
+                    yield _event(
+                        "step_judged", step=step_no, action=kind,
+                        message=result["message"],
+                    )
 
             if kind in ASSERTION_ACTIONS and result["ok"]:
                 executed_assertion = True

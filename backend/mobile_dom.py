@@ -3,6 +3,8 @@ import uuid
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 
+import text_match
+
 # Regular expression to parse "[x1,y1][x2,y2]" bounds format
 BOUNDS_REGEX = re.compile(r'\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]')
 
@@ -477,10 +479,10 @@ class MobileDOMManager:
         Whitespace inside the phrase is still required — this forgives how the
         layout was split, not what it says.
         """
-        needle_norm = " ".join(needle.split()).lower()
+        needle_norm = text_match.normalise(needle)
         if not needle_norm:
             return False
-        parts: List[str] = []
+        readable: List[str] = []
         for elem in self.get_all_elements():
             if not (elem.displayed and elem.visible):
                 if not (include_hidden and elem.displayed and self._on_screen(elem)):
@@ -488,17 +490,13 @@ class MobileDOMManager:
             for value in (elem.text, elem.name, elem.value):
                 if not value:
                     continue
-                normalised = " ".join(value.split())
-                if not normalised:
-                    continue
-                if needle_norm in normalised.lower():
+                if text_match.contains(value, needle):
                     return True
-                # A label repeated back to back — a view's text and its
-                # accessible name usually agree — would otherwise put a phrase
-                # in the running text in an order the screen never shows.
-                if normalised != (parts[-1] if parts else None):
-                    parts.append(normalised)
-        return needle_norm in " ".join(parts).lower()
+                readable.append(value)
+        # A label repeated back to back — a view's text and its accessible name
+        # usually agree — would otherwise put a phrase in the running text in an
+        # order the screen never shows; `joined` drops the repeat.
+        return needle_norm in text_match.joined(readable)
 
     def locate_text(self, needle: str):
         """Which view a text assertion landed on, for drawing a box on it.
@@ -507,7 +505,7 @@ class MobileDOMManager:
         assertion's verdict must not depend on whether a box can be drawn.
         A phrase spanning two views points at the first one that contributes.
         """
-        needle_norm = " ".join(needle.split()).lower()
+        needle_norm = text_match.normalise(needle)
         if not needle_norm:
             return None
         visible = [
@@ -515,12 +513,11 @@ class MobileDOMManager:
             if elem.displayed and elem.visible
         ]
         for elem in visible:
-            for value in (elem.text, elem.name, elem.value):
-                if value and needle_norm in " ".join(value.split()).lower():
-                    return elem
+            if text_match.contains_any((elem.text, elem.name, elem.value), needle):
+                return elem
         for elem in visible:
             for value in (elem.text, elem.name, elem.value):
-                piece = " ".join((value or "").split()).lower()
+                piece = text_match.normalise(value)
                 if piece and piece in needle_norm:
                     return elem
         return None

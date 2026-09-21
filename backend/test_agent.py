@@ -1070,6 +1070,248 @@ class AControlsWordsAreOftenNotOnTheControl(unittest.IsolatedAsyncioTestCase):
         self.assertIn("28 Eyl Pazartesi", result["message"])
 
 
+class WhenTheCheckIsPointedAtTheWrongElement(unittest.IsolatedAsyncioTestCase):
+    """The biggest bucket of red steps in the real run history, and almost none
+    of them were the product.
+
+    The model names a wrapper that carries no text at all — 62 of the 193
+    interactive elements on the home page are like that — and the answer came
+    back `holds ""` about a field the screen was plainly showing a value in.
+    Climbing the tree to find the words is not an option: measured on the real
+    booker, one ancestor up from the origin field already pulls in the
+    destination field's text, which destroys the one thing a scoped assertion
+    is for. The boxes do not overlap, so geometry decides instead.
+    """
+
+    PAGE = {"nodes": [
+        # An icon button drawn inside the region that carries the label.
+        {"role": "group", "tag": "div", "id": "from-field", "text": None,
+         "label": None, "selector": "#from-field",
+         "bounds": {"x1": 0, "y1": 0, "x2": 300, "y2": 80}, "parentIndex": -1},
+        {"role": "text", "tag": "span", "text": "İstanbul (IST)",
+         "selector": "#from-field span",
+         "bounds": {"x1": 10, "y1": 10, "x2": 290, "y2": 70}, "parentIndex": 0},
+        {"role": "button", "tag": "button", "id": "from-icon", "text": None,
+         "label": None, "selector": "#from-icon",
+         "bounds": {"x1": 20, "y1": 20, "x2": 60, "y2": 60}, "parentIndex": -1},
+        # The neighbouring field, well away from the first one.
+        {"role": "group", "tag": "div", "id": "to-field", "text": None,
+         "label": None, "selector": "#to-field",
+         "bounds": {"x1": 400, "y1": 0, "x2": 700, "y2": 80}, "parentIndex": -1},
+        {"role": "text", "tag": "span", "text": "Ankara (ESB)",
+         "selector": "#to-field span",
+         "bounds": {"x1": 410, "y1": 10, "x2": 690, "y2": 70}, "parentIndex": 3},
+    ]}
+
+    def setUp(self):
+        self.snapshot = WebSnapshot(self.PAGE)
+        self.target = FakeTarget(self.snapshot)
+        self.target.kind = "web"
+        self.byId = {
+            element.html_id: element.element_id
+            for element in self.snapshot.get_all_elements() if element.html_id
+        }
+
+    async def _assert(self, **action):
+        with patch("asyncio.sleep", new=AsyncMock()):
+            return await agent._execute_action(
+                self.target, {"action": "assert_text", **action}, self.snapshot)
+
+    async def test_a_textless_control_is_read_from_the_region_around_it(self):
+        """`holds ""` was never an answer about the product. The words are
+        drawn around the button the model named, which is where the tester
+        reads them."""
+        result = await self._assert(elementId=self.byId["from-icon"], value="IST")
+        self.assertTrue(result["ok"], result["message"])
+        self.assertIn("region it is drawn in", result["message"])
+
+    async def test_the_neighbouring_field_is_still_a_failure(self):
+        """The guarantee this must not trade away: origin and destination are
+        different places, and a check on one must not pass on the other."""
+        result = await self._assert(elementId=self.byId["from-icon"], value="ESB")
+        self.assertFalse(result["ok"], result["message"])
+
+    async def test_the_failure_says_where_the_words_actually_are(self):
+        """So the next step can aim at the right element instead of dying on
+        a message that only said the check failed."""
+        result = await self._assert(elementId=self.byId["from-field"], value="ESB")
+        self.assertFalse(result["ok"])
+        self.assertIn("wrong element", result["message"])
+        self.assertIn("Ankara (ESB)", result["message"])
+
+    async def test_a_phrase_on_no_part_of_the_screen_says_that_instead(self):
+        result = await self._assert(elementId=self.byId["from-field"], value="Londra")
+        self.assertFalse(result["ok"])
+        self.assertIn("nowhere on the screen", result["message"])
+
+    async def test_a_region_that_is_most_of_the_screen_is_not_a_place(self):
+        """"The words are inside the page" is not an answer to "which field
+        holds them"."""
+        page = {"nodes": [
+            {"role": "group", "tag": "div", "id": "banner", "text": None,
+             "label": None, "selector": "#banner",
+             "bounds": {"x1": 0, "y1": 0, "x2": 1440, "y2": 880},
+             "parentIndex": -1},
+            {"role": "text", "tag": "p", "text": "Ankara (ESB)",
+             "selector": "#banner p",
+             "bounds": {"x1": 0, "y1": 0, "x2": 1440, "y2": 880},
+             "parentIndex": -1},
+            {"role": "button", "tag": "button", "id": "somewhere", "text": None,
+             "label": None, "selector": "#somewhere",
+             "bounds": {"x1": 20, "y1": 20, "x2": 60, "y2": 60},
+             "parentIndex": -1},
+        ], "viewport": {"width": 1440, "height": 900}}
+        snapshot = WebSnapshot(page)
+        target = FakeTarget(snapshot)
+        target.kind = "web"
+        by_id = {e.html_id: e.element_id
+                 for e in snapshot.get_all_elements() if e.html_id}
+        with patch("asyncio.sleep", new=AsyncMock()):
+            result = await agent._execute_action(
+                target,
+                {"action": "assert_text", "elementId": by_id["somewhere"],
+                 "value": "ESB"},
+                snapshot)
+        self.assertFalse(result["ok"], result["message"])
+
+    async def test_turkish_case_does_not_decide_a_verdict(self):
+        """`"İSTANBUL".lower()` is not `"istanbul"` to Python, and most
+        headings on this site are capitals."""
+        result = await self._assert(elementId=self.byId["from-field"],
+                                    value="istanbul")
+        self.assertTrue(result["ok"], result["message"])
+
+
+class AnAssertionKeepsLookingForAWhile(unittest.IsolatedAsyncioTestCase):
+    """A page that renders when its API answers is not finished when the click
+    is, and one look 0.4s later is a coin toss that reads as a product defect
+    whenever it lands wrong."""
+
+    PAGE = {"nodes": [
+        {"role": "text", "tag": "p", "text": "Aranıyor…", "selector": "p",
+         "bounds": {"x1": 0, "y1": 0, "x2": 100, "y2": 20}, "parentIndex": -1},
+    ]}
+    ARRIVED = {"nodes": [
+        {"role": "text", "tag": "p", "text": "3 uçuş bulundu", "selector": "p",
+         "bounds": {"x1": 0, "y1": 0, "x2": 100, "y2": 20}, "parentIndex": -1},
+        {"role": "text", "tag": "p", "text": "İstanbul - Ankara", "selector": "p+p",
+         "bounds": {"x1": 0, "y1": 20, "x2": 100, "y2": 40}, "parentIndex": -1},
+    ]}
+
+    async def test_it_waits_for_the_screen_to_arrive(self):
+        target = FakeTarget(WebSnapshot(self.PAGE))
+        target.kind = "web"
+        reads = {"n": 0}
+
+        async def snapshot():
+            reads["n"] += 1
+            # The results land on the third reading, as an API answer would.
+            return WebSnapshot(self.ARRIVED if reads["n"] >= 3 else self.PAGE)
+
+        target.snapshot = snapshot
+        with patch("asyncio.sleep", new=AsyncMock()), \
+             patch.object(agent, "ASSERT_WAIT_SECONDS", 5.0):
+            result = await agent._execute_action(
+                target, {"action": "assert_text", "value": "3 uçuş bulundu"}, None)
+        self.assertTrue(result["ok"], result["message"])
+        self.assertGreaterEqual(reads["n"], 3, "it looked more than once")
+
+    async def test_it_still_gives_up(self):
+        target = FakeTarget(WebSnapshot(self.PAGE))
+        target.kind = "web"
+        with patch("asyncio.sleep", new=AsyncMock()), \
+             patch.object(agent, "ASSERT_WAIT_SECONDS", 0.05):
+            result = await agent._execute_action(
+                target, {"action": "assert_text", "value": "3 uçuş bulundu"}, None)
+        self.assertFalse(result["ok"])
+
+
+class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
+    """The tester is looking at the thing the step asked for and the check says
+    it is not there.
+
+    The real one: a 404 page that says "Hiçbir yerde var olmayan bir sayfayı
+    aradınız" and never the digits 404. What keeps this from turning every red
+    into green is that the overrule has to quote the screen, and the quote is
+    checked against the snapshot before the verdict moves.
+    """
+
+    PAGE = {"nodes": [
+        {"role": "text", "tag": "h1",
+         "text": "Hiçbir yerde var olmayan bir sayfayı aradınız.",
+         "selector": "h1", "bounds": {"x1": 0, "y1": 0, "x2": 400, "y2": 40},
+         "parentIndex": -1},
+    ]}
+
+    def _target(self):
+        target = FakeTarget(WebSnapshot(self.PAGE))
+        target.kind = "web"
+        return target
+
+    async def _judge(self, reply):
+        class Provider:
+            async def stream(self, *a, **k):
+                yield reply
+
+        return await agent._judge_on_screen(
+            self._target(), Provider(), "m", "k", None,
+            asked={"action": "Sayfayı aç", "expected": "404 sayfası görünür"},
+            goal="404", action={"action": "assert_text", "value": "404"},
+            failure='Expected "404" on screen but it is not there.',
+            screenshot="ZmFrZQ==",
+        )
+
+    async def test_an_overrule_that_quotes_the_screen_is_taken(self):
+        result = await self._judge(json.dumps({
+            "holds": True,
+            "evidence": "Hiçbir yerde var olmayan bir sayfayı aradınız.",
+            "why": "This is the not-found page, worded rather than numbered.",
+        }))
+        self.assertIsNotNone(result)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["judged"], "and it is marked as a judgement")
+        self.assertIn("Judged from the screen", result["message"])
+
+    async def test_an_overrule_with_invented_evidence_is_thrown_away(self):
+        """The one failure mode worse than the one being fixed."""
+        result = await self._judge(json.dumps({
+            "holds": True,
+            "evidence": "Hata kodu 404 sayfanın altında yazıyor",
+            "why": "I can see it",
+        }))
+        self.assertIsNone(result, "the step keeps the answer it had")
+
+    async def test_saying_no_changes_nothing(self):
+        result = await self._judge(json.dumps({
+            "holds": False, "evidence": "", "why": "The page loaded normally.",
+        }))
+        self.assertIsNone(result)
+
+    async def test_an_unparseable_reply_changes_nothing(self):
+        self.assertIsNone(await self._judge("I think it probably passed?"))
+
+    async def test_a_provider_that_fails_changes_nothing(self):
+        class Provider:
+            async def stream(self, *a, **k):
+                raise RuntimeError("provider down")
+                yield ""  # pragma: no cover
+
+        result = await agent._judge_on_screen(
+            self._target(), Provider(), "m", "k", None, asked=None, goal="g",
+            action={"action": "assert_text", "value": "404"},
+            failure="no", screenshot="ZmFrZQ==",
+        )
+        self.assertIsNone(result)
+
+    async def test_without_a_screenshot_it_does_not_guess(self):
+        result = await agent._judge_on_screen(
+            self._target(), None, "m", "k", None, asked=None, goal="g",
+            action={"action": "assert_text", "value": "404"},
+            failure="no", screenshot=None,
+        )
+        self.assertIsNone(result)
+
+
 class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
     """A run used to carry straight on from a failed step, through every step
     after it, and the tester watching could only stop it or watch it finish.

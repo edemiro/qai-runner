@@ -10,6 +10,8 @@ that down to the nodes a tester could actually act on or read.
 import uuid
 from typing import Any, Dict, List, Optional
 
+import text_match
+
 # Roles shared with mobile_dom, plus the two the web has and mobile does not.
 INTERACTIVE_ROLES = {"button", "textbox", "checkbox", "switch", "link", "tab", "combobox", "radio"}
 
@@ -519,13 +521,12 @@ class WebSnapshot:
         same calls — `assert_absent` asks both this way — and a signature that
         only one of them took crashed every web run that used it.
         """
-        needle_norm = " ".join(needle.split()).lower()
+        needle_norm = text_match.normalise(needle)
         if not needle_norm:
             return False
         for element in self._flat:
-            for value in (element.text, element.name):
-                if value and needle_norm in " ".join(value.split()).lower():
-                    return True
+            if text_match.contains_any((element.text, element.name), needle):
+                return True
         return needle_norm in self._running_text()
 
     def find_text(self, needle: str) -> Optional[str]:
@@ -552,18 +553,17 @@ class WebSnapshot:
         there is no single element to point at, so it points at the first one
         that contributes to the phrase. That is where a reader's eye lands.
         """
-        needle_norm = " ".join(needle.split()).lower()
+        needle_norm = text_match.normalise(needle)
         if not needle_norm:
             return None
         for element in self._flat:
-            for value in (element.text, element.name):
-                if value and needle_norm in " ".join(value.split()).lower():
-                    return element
+            if text_match.contains_any((element.text, element.name), needle):
+                return element
         if needle_norm not in self._running_text():
             return None
         for element in self._flat:
             for value in (element.text, element.name):
-                piece = " ".join((value or "").split()).lower()
+                piece = text_match.normalise(value)
                 if piece and piece in needle_norm:
                     return element
         return None
@@ -579,15 +579,11 @@ class WebSnapshot:
         shows. Collapsing the repeat costs nothing and takes that with it.
         """
         if self._joined_text is None:
-            parts: List[str] = []
-            for element in self._flat:
-                for value in (element.text, element.name):
-                    if not value:
-                        continue
-                    normalised = " ".join(value.split())
-                    if normalised and normalised != (parts[-1] if parts else None):
-                        parts.append(normalised)
-            self._joined_text = " ".join(parts).lower()
+            self._joined_text = text_match.joined(
+                value
+                for element in self._flat
+                for value in (element.text, element.name)
+            )
         return self._joined_text
 
     def visible_text(self) -> List[str]:
