@@ -6,6 +6,7 @@ import agent
 import locator
 from drivers import ActionResult
 from mobile_dom import MobileDOMManager
+from web_dom import WebSnapshot
 
 SCREEN = """
 <hierarchy rotation="0">
@@ -877,16 +878,31 @@ class AskingAboutOneFieldRatherThanTheWholeScreen(unittest.IsolatedAsyncioTestCa
         self.assertIn("contains", result["message"])
 
     async def test_a_field_that_does_not_fails_even_though_the_screen_has_it(self):
-        """The whole point: the word is on the screen, in the other field."""
-        elements = list(self.snapshot.elements_by_id.values())
-        elements[0].text = "IST - İstanbul"
-        elements[1].text = "ESB - Ankara"
-        result = await self._assert(elementId=elements[0].element_id, value="ESB")
+        """The whole point: the word is on the screen, in the other field.
+
+        Two leaves, not the first two entries — the tree's first entries are
+        its root and its wrappers, and asserting on those *is* asserting on
+        the whole screen, which this is here to tell apart.
+        """
+        leaves = [element for element in self.snapshot.elements_by_id.values()
+                  if not element.children]
+        leaves[0].text = "IST - İstanbul"
+        leaves[1].text = "ESB - Ankara"
+        result = await self._assert(elementId=leaves[0].element_id, value="ESB")
         self.assertFalse(result["ok"])
         self.assertIn("holds", result["message"])
         # And unscoped, the same screen passes — which is what made the swap
         # scenario green whether or not the swap worked.
         self.assertTrue((await self._assert(value="ESB"))["ok"])
+
+    async def test_a_wrapper_holds_everything_inside_it(self):
+        """A container's subtree is the region it draws, so asserting on one
+        is asserting on all of it. That is the right answer — and the reason
+        the scenario has to name the field, not the panel around it."""
+        root = next(iter(self.snapshot.elements_by_id.values()))
+        self.assertTrue(root.children, "the first entry is a wrapper")
+        result = await self._assert(elementId=root.element_id, value="Sign out")
+        self.assertTrue(result["ok"])
 
     async def test_a_field_that_has_gone_is_said_so_not_silently_passed(self):
         result = await self._assert(elementId="el_does_not_exist", value="ESB")
@@ -898,3 +914,68 @@ class AskingAboutOneFieldRatherThanTheWholeScreen(unittest.IsolatedAsyncioTestCa
         result = await self._assert(value="Welcome back")
         self.assertTrue(result["ok"])
         self.assertIn("on screen", result["message"])
+
+
+class AControlsWordsAreOftenNotOnTheControl(unittest.IsolatedAsyncioTestCase):
+    """The extractor gives a node only its own text — direct text children —
+    and on the web a button's label routinely sits two divs down.
+
+    Measured on the booker: the date field showed "28 Eyl Pazartesi" on screen
+    and asserting on its button came back `Expected "button" to contain "28"
+    but it holds ""`. The node's own text really was empty. The date was in
+    its descendants, which is where anyone reading the screen saw it.
+    """
+
+    PAGE = {"nodes": [
+        {"role": "button", "tag": "button", "id": "booker-date",
+         "text": None, "label": None, "selector": "#booker-date",
+         "bounds": {"x1": 0, "y1": 0, "x2": 200, "y2": 60}, "parentIndex": -1},
+        {"role": "text", "tag": "span", "text": "Gidiş", "selector": "#booker-date span",
+         "bounds": {"x1": 0, "y1": 0, "x2": 100, "y2": 20}, "parentIndex": 0},
+        {"role": "text", "tag": "span", "text": "28 Eyl Pazartesi",
+         "selector": "#booker-date span:nth-of-type(2)",
+         "bounds": {"x1": 0, "y1": 20, "x2": 200, "y2": 60}, "parentIndex": 0},
+        {"role": "button", "tag": "button", "id": "empty-box",
+         "text": None, "label": None, "selector": "#empty-box",
+         "bounds": {"x1": 0, "y1": 80, "x2": 200, "y2": 120}, "parentIndex": -1},
+    ]}
+
+    def setUp(self):
+        self.snapshot = WebSnapshot(self.PAGE)
+        self.target = FakeTarget(self.snapshot)
+        self.target.kind = "web"
+        self.byId = {
+            element.html_id: element.element_id
+            for element in self.snapshot.get_all_elements() if element.html_id
+        }
+
+    async def _assert(self, **action):
+        with patch("asyncio.sleep", new=AsyncMock()):
+            return await agent._execute_action(
+                self.target, {"action": "assert_text", **action}, self.snapshot)
+
+    async def test_a_value_in_a_child_counts_as_the_field_holding_it(self):
+        result = await self._assert(elementId=self.byId["booker-date"], value="28")
+        self.assertTrue(result["ok"], result["message"])
+
+    async def test_the_whole_phrase_works_too(self):
+        result = await self._assert(
+            elementId=self.byId["booker-date"], value="28 Eyl Pazartesi")
+        self.assertTrue(result["ok"], result["message"])
+
+    async def test_a_field_that_really_is_empty_says_so_plainly(self):
+        """`it holds ""` told the reader nothing. Say there is no text."""
+        result = await self._assert(elementId=self.byId["empty-box"], value="28")
+        self.assertFalse(result["ok"])
+        self.assertIn("no text in it", result["message"])
+
+    async def test_a_value_in_another_field_still_fails(self):
+        """The whole point of scoping: the date is on the screen, and it is
+        not in this box."""
+        result = await self._assert(elementId=self.byId["empty-box"], value="Eyl")
+        self.assertFalse(result["ok"])
+
+    async def test_the_failure_shows_what_the_field_does_hold(self):
+        result = await self._assert(elementId=self.byId["booker-date"], value="29")
+        self.assertFalse(result["ok"])
+        self.assertIn("28 Eyl Pazartesi", result["message"])

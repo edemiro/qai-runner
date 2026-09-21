@@ -522,6 +522,36 @@ def _is_blank_frame(screenshot: Optional[str]) -> bool:
         return False
 
 
+def _text_within(element: Any, depth: int = 6) -> str:
+    """Everything a person reads inside this element.
+
+    A control's words are very often not on the control. The extractor gives a
+    node only its own text — direct text children — and on the web a button's
+    label routinely sits two divs down. Measured on the booker: the date field
+    showed "28 Eyl Pazartesi" and asserting on the button reported `it holds
+    ""`, because the button's own text node is empty and the date is in its
+    descendants.
+
+    Read as one running string, the way the region reads on screen.
+    """
+    parts: List[str] = []
+    stack = [(element, 0)]
+    while stack:
+        node, level = stack.pop(0)
+        if node is None or level > depth:
+            continue
+        for value in (getattr(node, "text", None), getattr(node, "name", None),
+                      getattr(node, "value", None)):
+            if not value:
+                continue
+            cleaned = " ".join(str(value).split())
+            if cleaned and cleaned not in parts:
+                parts.append(cleaned)
+        for child in getattr(node, "children", None) or ():
+            stack.append((child, level + 1))
+    return " ".join(parts)
+
+
 def _element_info(element: Any) -> Optional[Dict[str, Any]]:
     """A snapshot element in the shape a step record carries.
 
@@ -1004,21 +1034,20 @@ async def _execute_action(
                     "element": None,
                 }
             wanted = " ".join(needle.split()).lower()
-            holds = [
-                getattr(element, name, None)
-                for name in ("text", "name", "value", "label")
-            ]
+            # The whole region, not the node. A control's words are very often
+            # on its children, and reading only the node reported `it holds ""`
+            # about a field the screen was plainly showing a date in.
+            holds = _text_within(element)
             info = _element_info(element)
             label = (info or {}).get("label") or element_id or selector
-            if any(held and wanted in " ".join(str(held).split()).lower()
-                   for held in holds):
+            if wanted in holds.lower():
                 return {"ok": True, "message": f'"{label}" contains "{needle}"',
                         "element": info}
-            shown = next((str(h) for h in holds if h), "")
             return {
                 "ok": False,
                 "message": (f'Expected "{label}" to contain "{needle}" but it '
-                            f'holds "{shown[:80]}".'),
+                            + (f'holds "{holds[:120]}".' if holds
+                               else "has no text in it.")),
                 "element": info,
             }
         # Three answers, not two. iOS decides `visible` by hit-testing, so a
