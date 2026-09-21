@@ -6,11 +6,20 @@ that had not changed. A run already knows which element each action reached and
 how it addressed it, so the second run of an unchanged scenario has no reason
 to ask.
 
-What makes this safe rather than merely fast is what it refuses to keep. A
-recording taken from a run that failed, or from one step that failed inside a
-green run, would make the next run repeat the same wrong move faster and
-without the model present to notice — so most of this file is about the
-recordings that are thrown away.
+What makes this safe rather than merely fast is what it refuses to keep. A step
+is what is judged, because a step is what is replayed: one is kept when the
+step's own verdict held and every action under it passed, and what a later step
+did has nothing to do with that. A step closed as failed is never kept however
+clean its actions look — the agent got there and the expected result did not
+hold, so replaying the way there reproduces a failure quickly.
+
+The other half is what a bad turn costs. A step that was not proved keeps
+whatever it already had, rather than losing it to one stumble; only a recording
+that was actually replayed and came back red has disproved itself, and that one
+goes. Deleting on every stumble read as caution and measured as the opposite —
+recordings never accumulated, they were earned and lost again every turn.
+
+Most of this file is still about the recordings that are thrown away.
 """
 
 import pytest
@@ -151,9 +160,11 @@ def test_the_selector_comes_from_the_element_the_action_reached(db, case):
     assert recorded["label"] == "Uçuş ara"
 
 
-def test_a_failed_run_teaches_nothing(db, case):
-    """The failure this exists to prevent: a recording of a wrong move, replayed
-    faster and without the model present to notice it."""
+def test_a_failed_run_with_nothing_to_judge_per_step_teaches_nothing(db, case):
+    """A run whose steps were never written down cannot be read step by step,
+    so the old rule applies to it: green or nothing. The failure this exists to
+    prevent is a recording of a wrong move, replayed faster and without the
+    model present to notice it."""
     run_id = a_run(case, status="failed")
     did(run_id, 1, "click")
     assert db.promote_recording(run_id, case) == 0
@@ -174,9 +185,16 @@ def test_a_step_that_failed_inside_a_green_run_is_not_kept(db, case):
     assert "recorded" in steps[1]
 
 
-def test_a_recording_that_no_longer_applies_is_removed_not_left_behind(db, case):
-    """A scenario that stops producing a clean recording must lose the old one,
-    or the next run replays something two runs out of date."""
+def test_one_bad_turn_does_not_cost_a_step_its_recording(db, case):
+    """This used to delete the old recording whenever a step was not clean.
+
+    It reads as caution and measured as the opposite: recordings never
+    accumulated, they were earned and lost again every turn — ten steps on the
+    Android set, then two, then ten. A step that stumbles once has not
+    disproved what worked last time; the run after it replays that recording
+    and finds out, which costs one action rather than a whole step's worth of
+    model calls.
+    """
     first = a_run(case)
     did(first, 1, "click")
     did(first, 2, "click")
@@ -187,7 +205,28 @@ def test_a_recording_that_no_longer_applies_is_removed_not_left_behind(db, case)
     did(second, 1, "click")
     did(second, 2, "click")
     db.promote_recording(second, case)
+    assert db.get_case(case)["steps"][0].get("recorded"), "kept from the run that worked"
+
+
+def test_a_recording_that_fails_on_replay_is_dropped(db, case):
+    """The other half of it. A stored recording that was actually replayed and
+    came back red has disproved itself on this screen, so the next run works it
+    out again instead of repeating it faster."""
+    first = a_run(case)
+    did(first, 1, "click")
+    did(first, 2, "click")
+    assert db.promote_recording(first, case) == 2
+
+    second = a_run(case)
+    storage.add_step(
+        second, action="click", status="failed", target="click",
+        element={"xpath": "#click-target", "label": "click"}, scenario_idx=1,
+        reason="replayed from the last green run",
+    )
+    did(second, 2, "click")
+    db.promote_recording(second, case)
     assert "recorded" not in db.get_case(case)["steps"][0]
+    assert db.get_case(case)["steps"][1].get("recorded"), "the other step is untouched"
 
 
 def test_actions_outside_any_scenario_step_are_ignored(db, case):
@@ -412,3 +451,69 @@ def test_a_scenario_that_already_knows_is_left_alone(db):
     cases = db.cases_by_id([owner])
     assert db.lend_recordings(cases) == 0
     assert cases[0]["steps"][0]["recorded"][0]["selector"] == "#tek-yon"
+
+
+# --------------------------------------------------------------------------- #
+# A step is what is judged, not the run
+# --------------------------------------------------------------------------- #
+
+def _stepwise(run_id, verdicts):
+    """Open and close the scenario steps the way a written run does."""
+    for idx, status in verdicts.items():
+        row = storage.start_scenario_step(run_id, idx, f"step {idx}")
+        storage.finish_scenario_step(row, status)
+
+
+def test_a_clean_step_is_kept_even_though_a_later_one_failed(db, case):
+    """What a later step did has nothing to do with whether this one worked.
+
+    Measured on the booking flow: four steps, three of them clean, and the run
+    kept nothing because the fourth found a real defect — so the next run paid
+    full price for three steps that had just been proved.
+    """
+    run_id = a_run(case, status="failed")
+    _stepwise(run_id, {1: "passed", 2: "failed"})
+    did(run_id, 1, "click")
+    did(run_id, 2, "click", status="failed")
+
+    assert db.promote_recording(run_id, case) == 1
+    steps = db.get_case(case)["steps"]
+    assert steps[0].get("recorded"), "the step that worked"
+    assert not steps[1].get("recorded"), "the step that did not"
+
+
+def test_a_step_closed_as_failed_is_not_kept_however_clean_its_actions(db, case):
+    """Every action passed and the agent still judged the step wrong — the
+    expected result did not hold. Replaying the way there reproduces a failure,
+    quickly."""
+    run_id = a_run(case, status="failed")
+    _stepwise(run_id, {1: "failed", 2: "passed"})
+    did(run_id, 1, "click")
+    did(run_id, 2, "click")
+
+    assert db.promote_recording(run_id, case) == 1
+    assert not db.get_case(case)["steps"][0].get("recorded")
+
+
+def test_a_cancelled_run_teaches_nothing(db, case):
+    """Its later steps never ran, and an interrupted one looks clean because
+    nothing under it had the chance to fail."""
+    run_id = a_run(case, status="cancelled")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "click")
+
+    assert db.promote_recording(run_id, case) == 0
+    assert not db.get_case(case)["steps"][0].get("recorded")
+
+
+def test_an_older_run_with_no_step_record_still_needs_to_be_green(db, case):
+    """Runs from before the scenario steps were written down have nothing to
+    judge per step, so the rule that was there before applies to them."""
+    run_id = a_run(case, status="failed")
+    did(run_id, 1, "click")
+    assert db.promote_recording(run_id, case) == 0
+
+    green = a_run(case, status="passed")
+    did(green, 1, "click")
+    did(green, 2, "click")
+    assert db.promote_recording(green, case) == 2

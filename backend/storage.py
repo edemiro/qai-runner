@@ -1776,7 +1776,7 @@ def lend_recordings(cases: List[Dict[str, Any]]) -> int:
 
 
 def promote_recording(run_id: str, case_id: str) -> int:
-    """Keep what a green run did, on the scenario that ran.
+    """Keep what worked, step by step.
 
     Every execution re-derived the same clicks from the same screens: a
     screenshot and a model call per action, paid again on every run of a
@@ -1784,10 +1784,26 @@ def promote_recording(run_id: str, case_id: str) -> int:
     action reached and how it addressed it, so the second run of a scenario has
     no reason to ask the model how to do what the first one already did.
 
-    Only a green run is kept. A recording taken from a failed one would make
-    the next run repeat the same wrong move, faster and without the model
-    present to notice — and a scenario that has never passed has nothing worth
-    learning from. Returns how many steps came away with a recording.
+    This used to keep nothing unless the whole run was green, and to delete
+    what was already there whenever a step was not. Both were too blunt, and
+    together they meant recordings never accumulated — they were earned and
+    lost again every turn. Measured on the Android set across three turns:
+    ten steps recorded, then two, then ten.
+
+    A step is what is judged now, because a step is what is replayed. One is
+    kept when the scenario step passed and every action under it passed. What
+    a later step did has nothing to do with whether this one worked.
+
+    And a step this run did not prove keeps whatever it already had, rather
+    than losing it to one bad turn — unless the recording is the thing that
+    failed. An action replayed from the stored recording that comes back red
+    has disproved it on this screen, and that one is dropped so the next run
+    works it out again instead of repeating it faster.
+
+    A cancelled run is left out entirely: its later steps never ran, and a
+    step that was interrupted looks clean because nothing under it failed.
+
+    Returns how many steps came away with a recording.
     """
     case = get_case(case_id)
     if case is None:
@@ -1798,25 +1814,41 @@ def promote_recording(run_id: str, case_id: str) -> int:
 
     with _connect() as conn:
         run = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
-        if run is None or run["status"] != "passed":
+        if run is None or run["status"] == "cancelled":
             return 0
+
+        verdicts = {
+            row["idx"]: row["status"]
+            for row in conn.execute(
+                "SELECT idx, status FROM scenario_steps WHERE run_id = ?", (run_id,)
+            )
+        }
+        # Nothing recorded the steps themselves — an older run, or one that
+        # died before the first opened. Fall back to the rule that was there
+        # before rather than guessing which steps held.
+        if not verdicts and run["status"] != "passed":
+            return 0
+
         rows = conn.execute(
-            """SELECT scenario_idx, action, selector, value, target, status
+            """SELECT scenario_idx, action, selector, value, target, status, reason
                  FROM steps
                 WHERE run_id = ? AND scenario_idx IS NOT NULL
                 ORDER BY idx ASC""",
             (run_id,),
         ).fetchall()
-        # A scenario step is only worth keeping if every action under it
-        # worked. One failure in the middle means the agent recovered by doing
-        # something else, and replaying the recovery without what prompted it
-        # reproduces the mistake, not the fix.
+
         by_step: Dict[int, List[Dict[str, Any]]] = {}
         spoiled = set()
+        disproved = set()
         for row in rows:
             idx = row["scenario_idx"]
             if row["status"] != "passed":
+                # One failure in the middle means the agent recovered by doing
+                # something else, and replaying the recovery without what
+                # prompted it reproduces the mistake, not the fix.
                 spoiled.add(idx)
+                if "replayed" in (row["reason"] or "").lower():
+                    disproved.add(idx)
                 continue
             by_step.setdefault(idx, []).append({
                 "action": row["action"], "selector": row["selector"],
@@ -1825,12 +1857,18 @@ def promote_recording(run_id: str, case_id: str) -> int:
 
         kept = 0
         for position, step in enumerate(steps, start=1):
+            proved = (
+                verdicts.get(position, "passed" if run["status"] == "passed" else "failed")
+                == "passed"
+                and position not in spoiled
+            )
             recorded = clean_recorded(by_step.get(position) or [])
-            if position in spoiled or not recorded:
-                step.pop("recorded", None)
+            if proved and recorded:
+                step["recorded"] = recorded
+                kept += 1
                 continue
-            step["recorded"] = recorded
-            kept += 1
+            if position in disproved:
+                step.pop("recorded", None)
 
         conn.execute(
             "UPDATE suite_cases SET steps = ? WHERE id = ?",
