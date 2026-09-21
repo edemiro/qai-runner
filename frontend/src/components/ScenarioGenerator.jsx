@@ -38,6 +38,12 @@ export function ScenarioGenerator({
   // scenarios are written by reading a screen, and the tester was sent to
   // another page to arrange one.
   onConnectDevice = null,
+  // The phone the page is pointed at, and the pickers that set it. Held by
+  // the page because pressing Generate and pressing a scenario's run button
+  // are the same question, and answering it twice on one screen is what put
+  // a second picker here.
+  devices = [], deviceUdid = '', deviceAppId = '', deviceBuilds = [],
+  loadingBuilds = false, onPickDevice = null, onPickBuild = null,
   // Open the execution "Save & run" just started. Absent where the caller has
   // no way to switch tabs, in which case the toast says where to find it.
   onOpenExecution = null,
@@ -146,72 +152,34 @@ export function ScenarioGenerator({
     [sessions, kind, isMobile, os],
   );
 
-  /* The phones that could be opened, for the case where none is.
-     Listed rather than counted: saying "63 can be booked — open one in
-     Mobile" is a dead end in the middle of the one screen where scenarios get
-     written. On Web the tester picks an environment here and it opens; this
-     is the same gesture, one platform over. */
-  const [devices, setDevices] = useState([]);
-  const [pickedUdid, setPickedUdid] = useState('');
-  const [pickedApp, setPickedApp] = useState('');
-  const [builds, setBuilds] = useState([]);
+  /* The phone the page is pointed at. Held by the page rather than here,
+     because pressing Generate and pressing a scenario's run button are the
+     same question — which device — and answering it twice on one screen is
+     what made the second picker appear. */
   const [opening, setOpening] = useState(false);
 
-  // Phones first, newest first. The catalogue comes back in no order at
-  // all, so the first thing the list offered was an iPad from 2022.
+  // Phones first, newest first. The catalogue comes back in no order at all,
+  // so the first thing the list offered was an iPad.
   const bookable = useMemo(() => forPicking(devices, os), [devices, os]);
 
-  useEffect(() => {
-    if (sessionId || !isMobile) return undefined;
-    let cancelled = false;
-    (async () => {
-      const found = [];
-      for (const load of [api.devices, api.browserstackDevices]) {
-        try {
-          const data = await load();
-          found.push(...(data.devices || []));
-        } catch {
-          /* one source being unavailable must not hide the other */
-        }
-      }
-      if (!cancelled) setDevices(found);
-    })();
-    return () => { cancelled = true; };
-  }, [sessionId, isMobile]);
-
-  // What is installed on the phone about to be opened. A cloud device has
-  // nothing on it until a build is named, and will not start a session
-  // without one.
-  useEffect(() => {
-    if (!pickedUdid) return undefined;
-    const device = devices.find((item) => item.udid === pickedUdid);
-    if (!device) return undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.deviceApps(device.udid, device.platform);
-        if (!cancelled) setBuilds(data.environments || []);
-      } catch {
-        if (!cancelled) setBuilds([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pickedUdid, devices]);
-
-  /** Book the chosen phone and write the scenarios from its own screen. */
-  const openDevice = async () => {
-    const device = bookable.find((item) => item.udid === pickedUdid);
-    if (!device || !onConnectDevice) return;
+  /** Book the chosen phone, so the scenarios are written from its own screen.
+   *  Called by Generate rather than by a button of its own: opening a device
+   *  was never the thing the tester wanted, it was the step before it. */
+  const openPickedDevice = async () => {
+    const device = bookable.find((item) => item.udid === deviceUdid);
+    if (!device || !onConnectDevice) return null;
     setOpening(true);
     try {
-      const session = await onConnectDevice(device, pickedApp || null);
-      if (!session) return;
+      const session = await onConnectDevice(device, deviceAppId || null);
+      if (!session) return null;
       // Added here rather than waited for: the list this component holds is
-      // its own, and the tester pressed open to use it now.
+      // its own, and the run is about to use the session.
       setSessions((current) => [...current, session]);
       setSource(session.sessionId);
+      return session;
     } catch (err) {
       toast.error(err.message);
+      return null;
     } finally {
       setOpening(false);
     }
@@ -250,9 +218,17 @@ export function ScenarioGenerator({
   }, [needsTarget]);
 
   const generate = async (withAnswers = '') => {
+    // Open the phone that was picked, if one was and nothing is running.
+    // The tester asked for scenarios off a device; booking it is the step
+    // before that, not a separate errand.
+    let opened = null;
+    if (!sessionId && isMobile && !onThisTab.length && deviceUdid) {
+      opened = await openPickedDevice();
+      if (!opened) return;
+    }
     setBusy(true);
     try {
-      const liveSession = sessionId
+      const liveSession = sessionId || opened?.sessionId
         || (chosenSource !== 'url' && chosenSource !== 'brief' ? chosenSource : null);
       const body = {
         brief: fullBrief || null,
@@ -521,23 +497,19 @@ export function ScenarioGenerator({
             </select>
           </div>
         )}
-        {/* Pick a phone and open it, here. Scenarios are written by reading a
-            screen, so one has to be running — and sending the tester to
-            another page to arrange that, in the middle of the page where
-            scenarios get written, is the dead end this replaces. */}
+        {/* Pick a phone here and Generate opens it. There is no Open
+            button, because opening a device was never the thing the tester
+            wanted — it was the step before it, and a second picker for the
+            same question is what made this screen ask twice. */}
         {!sessionId && isMobile && !onThisTab.length && (
           bookable.length ? (
             <div className="generator-device">
               <Smartphone size={13} />
               <select
-                value={pickedUdid}
-                onChange={(event) => {
-                  setPickedUdid(event.target.value);
-                  setPickedApp('');
-                  setBuilds([]);
-                }}
+                value={deviceUdid}
+                onChange={(event) => onPickDevice?.(event.target.value)}
                 disabled={busy || opening}
-                aria-label="Device to open"
+                aria-label="Device to run on"
               >
                 <option value="">
                   {`Pick an ${os === 'android' ? 'Android' : 'iOS'} device…`}
@@ -550,28 +522,29 @@ export function ScenarioGenerator({
                 ))}
               </select>
               <select
-                value={pickedApp}
-                onChange={(event) => setPickedApp(event.target.value)}
-                disabled={busy || opening || !pickedUdid}
+                value={deviceAppId}
+                onChange={(event) => onPickBuild?.(event.target.value)}
+                disabled={busy || opening || !deviceUdid}
                 aria-label="Build to open on it"
               >
                 <option value="">
-                  {!pickedUdid ? 'Build' : builds.length ? 'Whatever is open' : 'No TK build'}
+                  {!deviceUdid ? 'Build'
+                    : loadingBuilds ? 'Looking…'
+                      : deviceBuilds.length ? 'Whatever is open' : 'No TK build'}
                 </option>
-                {builds.map((build) => (
-                  <option key={build.id || build.name} value={build.id}>
-                    {build.label || build.name}
+                {/* `appId`, not `id` — an environment row has no `id`, and the
+                    option fell back to its own text, so BrowserStack was asked
+                    to launch an app called "ThyReg". */}
+                {deviceBuilds.map((build) => (
+                  <option
+                    key={build.appId || build.label}
+                    value={build.appId || ''}
+                    disabled={!build.appId}
+                  >
+                    {build.label}{build.appId ? '' : ' — no build uploaded'}
                   </option>
                 ))}
               </select>
-              <button
-                className="btn btn-sm"
-                onClick={openDevice}
-                disabled={busy || opening || !pickedUdid || !onConnectDevice}
-              >
-                {opening ? <Loader2 size={13} className="spin" /> : null}
-                {opening ? 'Opening…' : 'Open'}
-              </button>
             </div>
           ) : (
             <span className="generator-nodevice">

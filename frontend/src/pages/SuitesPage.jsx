@@ -185,9 +185,19 @@ function RunTarget({
                 : deviceBuilds.length ? 'Whatever is open'
                   : 'No TK build on this device'}
           </option>
+          {/* `appId`, not `id`. An environment row has no `id`, so the option
+              fell back to its own text and BrowserStack was asked to launch an
+              app called "ThyReg" — which is how every mobile run started from
+              here died with INCOMPATIBLE_CAPABILITIES. One with no build
+              behind it is offered greyed rather than hidden, so the picker
+              still says the environment exists. */}
           {deviceBuilds.map((build) => (
-            <option key={build.id || build.name} value={build.id}>
-              {build.label || build.name}
+            <option
+              key={build.appId || build.label}
+              value={build.appId || ''}
+              disabled={!build.appId}
+            >
+              {build.label}{build.appId ? '' : ' — no build uploaded'}
             </option>
           ))}
         </select>
@@ -564,9 +574,16 @@ export function SuitesPage({
      a web suite. */
   const isMobileSet = (suite?.kind || 'web') === 'mobile';
 
+  // Fetched for the Mobile tab, not only for an open mobile set: the
+  // picker in Write scenarios sits above the sets and is offered before
+  // one is chosen. Declared here because `runOs` below reads it — it
+  // was further down, and the page crashed on every render with
+  // "Cannot access 'wantsDevices' before initialization".
+  const wantsDevices = isMobileSet || platform === 'mobile';
+
   /* Which phones this set can run on: what the set itself says, and for one
      written before that field existed, the tab it is being read on. */
-  const runOs = isMobileSet ? (suite?.os || os) : null;
+  const runOs = wantsDevices ? (suite?.os || os) : null;
 
   /* A device chosen on one OS must not survive into the other. Switching from
      the iOS set to the Android one used to keep the iPhone selected — gone
@@ -612,7 +629,7 @@ export function SuitesPage({
   };
 
   useEffect(() => {
-    if (!isMobileSet) return undefined;
+    if (!wantsDevices) return undefined;
     let cancelled = false;
     (async () => {
       const found = [];
@@ -632,12 +649,12 @@ export function SuitesPage({
     return () => {
       cancelled = true;
     };
-  }, [isMobileSet]);
+  }, [wantsDevices]);
 
   // The builds on the chosen phone, matched to ThyDev / ThyTest / ThyReg by the
   // backend — the same list the Mobile workspace offers.
   useEffect(() => {
-    if (!isMobileSet || !runUdid) return undefined;
+    if (!wantsDevices || !runUdid) return undefined;
     const device = devices.find((d) => d.udid === runUdid);
     if (!device) return undefined;
     let cancelled = false;
@@ -656,7 +673,7 @@ export function SuitesPage({
     return () => {
       cancelled = true;
     };
-  }, [isMobileSet, runUdid, devices]);
+  }, [wantsDevices, runUdid, devices]);
 
   const openDataForm = (item) => {
     setDataFor(item.id);
@@ -793,6 +810,18 @@ export function SuitesPage({
           kind={platform}
           os={platform === 'mobile' ? os : null}
           onConnectDevice={onConnectDevice}
+          devices={devices}
+          deviceUdid={runUdid}
+          deviceAppId={deviceAppId}
+          deviceBuilds={deviceBuilds}
+          loadingBuilds={loadingBuilds}
+          onPickDevice={(value) => {
+            setDeviceUdid(value);
+            setDeviceAppId('');
+            setDeviceBuilds([]);
+            setLoadingBuilds(Boolean(value));
+          }}
+          onPickBuild={setDeviceAppId}
           onAdded={loadSuites}
           onOpenExecution={onOpenExecution}
         />

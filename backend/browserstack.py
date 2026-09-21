@@ -204,6 +204,20 @@ async def _fetch_apps() -> List[Dict[str, Any]]:
     return apps
 
 
+def _looks_like_an_app_id(value: str) -> bool:
+    """Is this something a device could actually launch?
+
+    Two shapes are real: a `bs://` upload handle, and a reverse-DNS bundle id
+    or package. A bare word is a label that got sent instead of the id behind
+    it — "ThyReg" rather than the `bs://…` it stands for — and the session it
+    produces fails with a capabilities error that names neither.
+    """
+    value = (value or "").strip()
+    if value.startswith("bs://"):
+        return True
+    return "." in value and " " not in value
+
+
 def capabilities(
     *,
     udid: str,
@@ -264,6 +278,17 @@ def capabilities(
             always["appium:autoAcceptAlerts"] = True
         else:
             always["appium:autoGrantPermissions"] = True
+    if app_id and not _looks_like_an_app_id(app_id):
+        # A label that leaked through instead of the id behind it. The picker
+        # sent "ThyReg" for a while, because an environment row has no `id`
+        # field and the option fell back to its own text; BrowserStack then
+        # refused the session with a capabilities error naming neither. Better
+        # to say which value was wrong than to send it and read the wreckage.
+        raise ValueError(
+            f"{app_id!r} is not an app id. A build is either a bs:// handle "
+            f"BrowserStack installs, or the bundle id / package of an app "
+            f"already on the device."
+        )
     if app_id:
         # A bs:// handle is an app BrowserStack installs for the session; anything
         # else is the id of an app already on the device — a bundle id on iOS

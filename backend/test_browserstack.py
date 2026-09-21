@@ -170,3 +170,49 @@ class SessionRouting(unittest.TestCase):
         appium.bind_session("cloud-3", "https://hub.example/wd/hub")
         appium.release_session("cloud-3")
         self.assertEqual(appium._hub_for("/session/cloud-3/source"), appium.APPIUM_HOST)
+
+
+class TestALabelIsNotAnAppId:
+    """"ThyReg" is the name of an environment, not something a phone can launch.
+
+    The build picker read `build.id` from a row whose field is `appId`, so the
+    option fell back to its own text and every mobile run started from Test
+    Sets asked BrowserStack to open an app called "ThyReg". What came back was
+    BROWSERSTACK_INCOMPATIBLE_CAPABILITIES_PASSED, naming neither the device
+    nor the build — the reason it took so long to see.
+    """
+
+    def test_an_upload_handle_is_one(self):
+        assert browserstack._looks_like_an_app_id("bs://8dff9ca28e561e42bd")
+
+    def test_a_bundle_id_is_one(self):
+        assert browserstack._looks_like_an_app_id("com.thy.thytest")
+
+    def test_a_package_is_one(self):
+        assert browserstack._looks_like_an_app_id("com.turkishairlines.mobile")
+
+    def test_a_label_is_not(self):
+        for label in ("ThyReg", "ThyDev", "ThyTest", "Whatever is open", ""):
+            assert not browserstack._looks_like_an_app_id(label), label
+
+    def test_the_session_is_refused_with_the_value_in_the_message(self):
+        """Refused here rather than sent, so the error names the thing that was
+        wrong instead of arriving from the hub describing something else."""
+        try:
+            browserstack.capabilities(
+                udid="bs:iPhone 16 Pro Max:18", platform="iOS",
+                app_id="ThyReg", name="iPhone 16 Pro Max",
+            )
+        except ValueError as exc:
+            assert "ThyReg" in str(exc)
+        else:
+            raise AssertionError("a label was accepted as an app id")
+
+    def test_a_real_build_still_goes_through(self):
+        caps = browserstack.capabilities(
+            udid="bs:iPhone 16 Pro Max:18", platform="iOS",
+            app_id="bs://8dff9ca28e561e42bd", name="iPhone 16 Pro Max",
+        )
+        always = caps["capabilities"]["alwaysMatch"]
+        assert always["appium:app"] == "bs://8dff9ca28e561e42bd"
+        assert "browserName" not in always
