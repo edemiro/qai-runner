@@ -1049,3 +1049,86 @@ class NoBrowserWindowEverOpens(unittest.IsolatedAsyncioTestCase):
         calls = await self._launch_kwargs_for(Exception("net::ERR_NAME_NOT_RESOLVED"))
         self.assertEqual(len(calls), 1)
 
+
+
+STICKY_FIXTURE = """<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>Sabit alt bar</title>
+<style>
+  body { margin: 0; height: 3000px; font-family: sans-serif; }
+  .bar { position: fixed; left: 0; right: 0; height: 60px; background: #222;
+         color: #fff; display: flex; align-items: center; padding-left: 24px; }
+  .b1 { bottom: 0; } .b2 { bottom: 70px; } .b3 { bottom: 140px; }
+  .clip { overflow: hidden; height: 0; }
+  .zero { overflow: hidden; height: 0; width: 0; }
+  .gone { display: none; }
+</style></head>
+<body>
+  <h1>Uçuş seçimi</h1>
+  <div class="bar b1"><button id="plain-continue">Devam et</button></div>
+  <div class="clip">
+    <div class="bar b2"><button id="clipped-continue">Devam et 2</button></div>
+  </div>
+  <div class="zero">
+    <div class="bar b3"><button id="collapsed-continue">Devam et 3</button></div>
+  </div>
+  <div class="gone"><button id="hidden-continue">Devam et 4</button></div>
+</body></html>
+"""
+
+
+class TheStickyBarEveryCheckoutEndsWith(unittest.IsolatedAsyncioTestCase):
+    """A `position: fixed` footer escapes the overflow of whatever container
+    the markup put it in.
+
+    These bars are built as collapsed drawers — an ancestor with
+    `overflow: hidden` and no height — so reading visibility off the ancestor's
+    box drops a button that is painted on the screen and takes clicks.
+
+    Measured on the booking flow: the fare was chosen, "Devam et" went live in
+    the bottom bar, and the agent scrolled nine times looking for a button that
+    was never in the tree it had been given. The scenario failed at the step
+    before passenger details, on a page where a person would simply have
+    clicked.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        with open(os.path.join(cls.tmpdir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(STICKY_FIXTURE)
+        cls.server = _serve(cls.tmpdir)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/index.html"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    async def asyncSetUp(self):
+        self.target = await WebTarget.launch(
+            self.url, viewport="desktop", headless=True, accept_consent=False,
+        )
+        self.ids = {
+            element.resource_id
+            for element in (await self.target.snapshot()).get_all_elements()
+        }
+
+    async def asyncTearDown(self):
+        await self.target.close()
+
+    async def test_a_plain_fixed_bar_is_in_the_tree(self):
+        """The case that always worked, kept so a fix to the others cannot
+        quietly break it."""
+        self.assertIn("plain-continue", self.ids)
+
+    async def test_a_bar_inside_a_collapsed_drawer_is_too(self):
+        self.assertIn("clipped-continue", self.ids)
+
+    async def test_and_one_inside_an_ancestor_with_no_size_at_all(self):
+        self.assertIn("collapsed-continue", self.ids)
+
+    async def test_something_genuinely_hidden_stays_out(self):
+        """The ancestor walk exists for a reason, and rescuing the sticky bar
+        must not turn it off: a display:none button is not on the screen by
+        any reading, and offering it as a target is how a run clicks something
+        nobody can see."""
+        self.assertNotIn("hidden-continue", self.ids)

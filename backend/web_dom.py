@@ -66,20 +66,59 @@ EXTRACT_JS = r"""
     return text.replace(/\s+/g, ' ').trim();
   }
 
-  // Three ways an ancestor hides a child without the child's own computed
-  // style or rect showing it: `opacity: 0` and `aria-hidden` do not inherit as
-  // computed values, and a zero-sized clipping ancestor (the collapsed-drawer
-  // pattern) leaves the child's own box intact. Checking only the element
-  // itself lets all three through.
+  // What a click at this element's middle would actually land on.
+  //
+  // The browser's own answer, used to overrule the ancestor walk below when
+  // the two disagree. They disagree on the sticky bar every checkout flow
+  // ends with: a `position: fixed` footer is painted against the viewport and
+  // escapes the overflow of whatever container the markup happened to put it
+  // in, so an ancestor with `overflow: hidden` and no height — a collapsed
+  // drawer, which is how these bars are usually built — makes the walk drop a
+  // button that is plainly on the screen and takes clicks. Measured on the
+  // booking flow: the fare was chosen, "Devam et" went live in the bottom
+  // bar, and the agent scrolled nine times looking for a button that was
+  // never in the tree it was given.
+  //
+  // Only asked within the viewport, because elementFromPoint cannot answer
+  // for anything outside it — the lookahead below the fold keeps the cheap
+  // answer.
+  function reallyOnScreen(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (cx < 0 || cx > vw || cy < 0 || cy > vh) return false;
+    const hit = document.elementFromPoint(cx, cy);
+    return !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+  }
+
+  // Two ways an ancestor hides a child without the child's own computed style
+  // showing it: `opacity: 0` and `aria-hidden` do not inherit as computed
+  // values, so checking only the element itself lets both through.
+  //
+  // Kept apart from the clipping test below because a hit test cannot see
+  // either of them — a fully transparent element still takes clicks, and an
+  // aria-hidden one is still painted — so these two are never overruled.
   function hiddenByAncestor(el) {
-    const own = el.getBoundingClientRect();
     let node = el.parentElement;
     for (let depth = 0; node && node !== document.documentElement && depth < 20; depth++, node = node.parentElement) {
       if (node.hasAttribute('aria-hidden') && node.getAttribute('aria-hidden') !== 'false') return true;
+      if (parseFloat(getComputedStyle(node).opacity) === 0) return true;
+    }
+    return false;
+  }
 
+  // A zero-sized clipping ancestor — the collapsed-drawer pattern — leaves the
+  // child's own box intact, so the child looks fine and is not on the screen.
+  //
+  // Usually. A `position: fixed` child escapes the clip entirely, which is
+  // what this gets wrong and why the verdict is checked against the browser
+  // before it is acted on.
+  function clippedByAncestor(el) {
+    const own = el.getBoundingClientRect();
+    let node = el.parentElement;
+    for (let depth = 0; node && node !== document.documentElement && depth < 20; depth++, node = node.parentElement) {
       const style = getComputedStyle(node);
-      if (parseFloat(style.opacity) === 0) return true;
-
       const clips = !(style.overflow === 'visible' && style.overflowX === 'visible' && style.overflowY === 'visible');
       if (clips) {
         const box = node.getBoundingClientRect();
@@ -146,6 +185,11 @@ EXTRACT_JS = r"""
     if (rect.width < 2 || rect.height < 2) continue;
     if (rect.bottom < 0 || rect.top > yLimit || rect.right < 0 || rect.left > vw) continue;
     if (hiddenByAncestor(el)) continue;
+    // Geometry is the cheap answer and is right almost everywhere; where it
+    // disagrees with the browser about something inside the viewport, the
+    // browser wins. Only this verdict — a hit test cannot see transparency or
+    // aria-hidden, so those stay final above.
+    if (clippedByAncestor(el) && !reallyOnScreen(el)) continue;
 
     const role = roleOf(el, style);
     if (role === null) continue;
@@ -450,7 +494,7 @@ class WebSnapshot:
         for child_dict, child in zip(node.get("children", []), element.children):
             self._stamp_ids(child_dict, child)
 
-    def contains_text(self, needle: str) -> bool:
+    def contains_text(self, needle: str, include_hidden: bool = False) -> bool:
         """Is this phrase on screen, as a person reading the screen would say?
 
         Matched against the page as one running text, not element by element.
@@ -465,6 +509,15 @@ class WebSnapshot:
         the phrase matches whether the page puts a space, a newline or nothing
         at all between the two. Whitespace inside the phrase is still required:
         this forgives how the markup was split, not what it says.
+
+        `include_hidden` is accepted and makes no difference here, which is why
+        it is documented rather than implemented. On a phone the whole view
+        tree arrives and each node says whether the driver considers it
+        visible, so there is a wider reading to ask for; a web snapshot has
+        already dropped what is not on the page by the time it is built, so
+        there is nothing hidden left to include. The two snapshots answer the
+        same calls — `assert_absent` asks both this way — and a signature that
+        only one of them took crashed every web run that used it.
         """
         needle_norm = " ".join(needle.split()).lower()
         if not needle_norm:
@@ -474,6 +527,19 @@ class WebSnapshot:
                 if value and needle_norm in " ".join(value.split()).lower():
                     return True
         return needle_norm in self._running_text()
+
+    def find_text(self, needle: str) -> Optional[str]:
+        """Where a phrase is: "visible", or None for not there.
+
+        The phone's version has a third answer — "hidden", for a view iOS says
+        is not visible while the screen plainly shows it — and a page has no
+        equivalent: anything not on it was dropped when the snapshot was
+        built. Both types answer this call so the agent does not have to ask
+        which kind of screen it is looking at; a `hasattr` check there is how
+        the same gap in `contains_text` went unnoticed until a web run
+        crashed on it.
+        """
+        return "visible" if self.contains_text(needle) else None
 
     def locate_text(self, needle: str) -> Optional["WebElement"]:
         """Which element a text assertion landed on, for drawing a box on it.

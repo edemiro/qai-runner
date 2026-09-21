@@ -955,9 +955,11 @@ async def _execute_action(
         # word under a keyboard accessory or a sheet mid-dismissal comes back
         # hidden while the run's own screenshot shows it plainly — which is how
         # an assertion for "ECONOMY" failed against a screen with ECONOMY on it.
-        where = fresh.find_text(needle) if hasattr(fresh, "find_text") else (
-            "visible" if fresh.contains_text(needle) else None
-        )
+        # Both snapshot types answer this; the page's version simply has no
+        # third answer to give. The hasattr check that used to stand here hid
+        # the fact that the two had drifted apart, and the same drift in
+        # contains_text crashed every web run that reached an assert_absent.
+        where = fresh.find_text(needle)
         if where:
             # Carried back so the step's frame can box what was verified. The
             # locate is best-effort — a phrase split across siblings has no one
