@@ -12,6 +12,11 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   const [timeline, setTimeline] = useState([]);
   const [status, setStatus] = useState('idle'); // idle | running | passed | failed | cancelled
   const [runId, setRunId] = useState(null);
+  // Where a held run is waiting, and whether it will hold again. Both come
+  // off the stream, so a reconnecting panel shows the buttons without
+  // having to ask.
+  const [waitingAt, setWaitingAt] = useState(null);
+  const [stepping, setStepping] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [maxSteps, setMaxSteps] = useState(0);
   // Only set while running a scenario that was written as steps.
@@ -48,6 +53,8 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   const reset = useCallback(() => {
     setTimeline([]);
     setStatus('idle');
+    setWaitingAt(null);
+    setStepping(false);
     setRunId(null);
     setCurrentStep(0);
     setScenarioProgress(null);
@@ -64,6 +71,9 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
       // browser first if none is open, and the hook's own `sessionId` is a
       // render behind at that moment.
       on = null,
+      // Hold from the first step — debug mode asked for before the run,
+      // rather than arrived at by a failure.
+      stepFromTheStart = false,
     } = {}) => {
       const session = on || sessionId;
       if (!session || status === 'running') return;
@@ -73,6 +83,8 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
 
       setTimeline([{ key: 'goal', type: 'goal', text: goal }]);
       setStatus('running');
+      setWaitingAt(null);
+      setStepping(Boolean(stepFromTheStart));
       setCurrentStep(0);
       setScenarioProgress(null);
       setProposed(null);
@@ -91,6 +103,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
             ...(steps?.length ? { steps } : {}),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
+            ...(stepFromTheStart ? { stepping: true } : {}),
           },
           (event) => {
             switch (event.event) {
@@ -176,6 +189,21 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
                   kind: event.targetKind || null,
                 });
                 break;
+              // The run is holding at a step boundary. A failed step puts it
+              // there on its own — carrying straight on through every step
+              // after one that went wrong is what nobody wanted to watch.
+              case 'waiting':
+                setWaitingAt(event);
+                setStepping(true);
+                append({
+                  type: 'waiting', index: event.index, total: event.total,
+                  reason: event.reason, text: event.action,
+                });
+                break;
+              case 'resumed':
+                setWaitingAt(null);
+                setStepping(Boolean(event.stepping));
+                break;
               case 'finished':
                 setStatus(event.status);
                 append({ type: 'verdict', status: event.status, text: event.summary });
@@ -222,8 +250,31 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
     setStatus((current) => (current === 'running' ? 'cancelled' : current));
   }, [sessionId]);
 
+  /** One more step, or the rest of the way. */
+  const step = useCallback(async (one = true) => {
+    if (!sessionId) return;
+    try {
+      await api.continueAgent(sessionId, one);
+      setWaitingAt(null);
+      setStepping(one);
+    } catch {
+      /* the run ended between the button and the request */
+    }
+  }, [sessionId]);
+
+  /** Hold at every step from now on, or stop doing so. */
+  const setStepMode = useCallback(async (on) => {
+    setStepping(on);
+    if (!sessionId) return;
+    try {
+      await api.setStepMode(sessionId, on);
+    } catch {
+      /* nothing running to tell */
+    }
+  }, [sessionId]);
+
   return {
     timeline, status, runId, currentStep, maxSteps, scenarioProgress, start, stop, reset,
-    proposed, clearProposed,
+    proposed, clearProposed, waitingAt, stepping, step, setStepMode,
   };
 }

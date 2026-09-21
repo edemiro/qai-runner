@@ -1068,3 +1068,250 @@ class AControlsWordsAreOftenNotOnTheControl(unittest.IsolatedAsyncioTestCase):
         result = await self._assert(elementId=self.byId["booker-date"], value="29")
         self.assertFalse(result["ok"])
         self.assertIn("28 Eyl Pazartesi", result["message"])
+
+
+class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
+    """A run used to carry straight on from a failed step, through every step
+    after it, and the tester watching could only stop it or watch it finish.
+
+    What they want at that moment is a debugger: hold here, let me look at the
+    screen, then take one more step.
+    """
+
+    ASSERT = WrittenScenarioSteps.ASSERT
+
+    @staticmethod
+    def _close(verdict, reason="r"):
+        return WrittenScenarioSteps._close(verdict, reason)
+
+    async def _run(self, script, steps, state, driver=None, attended=True,
+                   execute=None):
+        self_outer = self
+
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, *a, **k):
+                reply = (script[self.i] if self.i < len(script)
+                         else self_outer._close("pass"))
+                self.i += 1
+                yield reply
+
+        class Snapshot:
+            snapshot_id = "s"
+
+            def get_optimized_tree_for_llm(self):
+                return {"elementId": "el_1"}
+
+        class Target:
+            kind, session_id = "web", "stepping"
+
+            def describe(self):
+                return {"name": "t", "platform": "Web"}
+
+            async def snapshot(self):
+                return Snapshot()
+
+            async def screenshot(self):
+                return None
+
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", execute or AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                Target(), "senaryo", steps=steps, session_state=state,
+                stepping=state.stepping, attended=attended,
+            ):
+                event = json.loads(line)
+                events.append(event)
+                if driver:
+                    await driver(event, state)
+        return events
+
+    @staticmethod
+    def _kinds(events, *wanted):
+        return [e for e in events if e["event"] in wanted]
+
+    TWO = [
+        {"action": "Adim 1", "expected": "Beklenen 1"},
+        {"action": "Adim 2", "expected": "Beklenen 2"},
+    ]
+
+    async def test_a_failed_step_holds_instead_of_carrying_on(self):
+        """The complaint, exactly: it should stop there and wait."""
+        state = agent.AgentSession()
+        seen = []
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                seen.append(event)
+                # Let it take one more step, the way the button does.
+                agent._sessions["stepping"] = st
+                agent.resume("stepping", one_step=True)
+
+        events = await self._run(
+            [self.ASSERT, self._close("fail", "olmadi"),
+             self.ASSERT, self._close("pass")],
+            self.TWO, state, watch,
+        )
+        self.assertEqual(len(seen), 1, "it held once, at the failure")
+        self.assertEqual(seen[0]["index"], 2, "before the step after the failed one")
+        self.assertEqual(seen[0]["reason"], "failed")
+        # And it did carry on once told to.
+        verdicts = [(e["index"], e["status"])
+                    for e in self._kinds(events, "scenario_step_finished")]
+        self.assertEqual(verdicts, [(1, "failed"), (2, "passed")])
+
+    async def test_debug_mode_holds_at_every_step(self):
+        """Asked for before the run: click through from the first step."""
+        state = agent.AgentSession()
+        state.stepping = True
+        held = []
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                held.append(event["index"])
+                agent._sessions["stepping"] = st
+                agent.resume("stepping", one_step=True)
+
+        await self._run(
+            [self.ASSERT, self._close("pass"), self.ASSERT, self._close("pass")],
+            self.TWO, state, watch,
+        )
+        self.assertEqual(held, [2], "held before every step after the first")
+
+    async def test_letting_it_flow_stops_the_holding(self):
+        """One press of Continue and the rest of the scenario runs itself."""
+        state = agent.AgentSession()
+        state.stepping = True
+        held = []
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                held.append(event["index"])
+                agent._sessions["stepping"] = st
+                agent.resume("stepping", one_step=False)
+
+        three = self.TWO + [{"action": "Adim 3", "expected": "Beklenen 3"}]
+        await self._run(
+            [self.ASSERT, self._close("pass")] * 3, three, state, watch,
+        )
+        self.assertEqual(held, [2], "held once, then flowed to the end")
+
+    async def test_a_flowing_run_never_waits(self):
+        """The normal path must not gain a pause nobody asked for."""
+        state = agent.AgentSession()
+        events = await self._run(
+            [self.ASSERT, self._close("pass"), self.ASSERT, self._close("pass")],
+            self.TWO, state,
+        )
+        self.assertEqual(self._kinds(events, "waiting"), [])
+
+    async def test_stopping_releases_a_held_run(self):
+        """Otherwise Stop does nothing to a scenario sitting at a failure, and
+        the only way out is to close the page."""
+        state = agent.AgentSession()
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                agent._sessions["stepping"] = st
+                agent.cancel("stepping")
+
+        events = await self._run(
+            [self.ASSERT, self._close("fail", "olmadi"),
+             self.ASSERT, self._close("pass")],
+            self.TWO, state, watch,
+        )
+        self.assertTrue(self._kinds(events, "cancelled"), "the run ended")
+        self.assertEqual(
+            [e["index"] for e in self._kinds(events, "scenario_step_started")], [1],
+            "it did not open the step it was holding before",
+        )
+
+    async def test_an_unattended_run_is_never_held_by_a_failure(self):
+        """A Test Set grinding through at night has nobody to press the button,
+        so a hold there is a hang — the whole suite stops on one red step."""
+        state = agent.AgentSession()
+        events = await self._run(
+            [self.ASSERT, self._close("fail", "olmadi"),
+             self.ASSERT, self._close("pass")],
+            self.TWO, state, attended=False,
+        )
+        self.assertEqual(self._kinds(events, "waiting"), [])
+        self.assertFalse(state.stepping, "and it was not switched into stepping")
+        verdicts = [(e["index"], e["status"])
+                    for e in self._kinds(events, "scenario_step_finished")]
+        self.assertEqual(verdicts, [(1, "failed"), (2, "passed")])
+
+    async def test_a_failed_assertion_holds_rather_than_ending_the_run(self):
+        """The screen that broke the assertion is the one worth looking at, and
+        ending the run there is exactly what takes it away."""
+        state = agent.AgentSession()
+        seen = []
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                seen.append(event)
+                agent._sessions["stepping"] = st
+                agent.resume("stepping", one_step=True)
+
+        # The assertion itself fails, which used to end the run on the spot.
+        verdicts = iter([False, True, True])
+
+        async def execute(*a, **k):
+            ok = next(verdicts, True)
+            return {"ok": ok, "message": "ok" if ok else "yok", "element": None}
+
+        events = await self._run(
+            [self.ASSERT, self.ASSERT, self._close("pass"),
+             self.ASSERT, self._close("pass")],
+            self.TWO, state, watch, execute=execute,
+        )
+        # Twice: on the assertion itself, and then at the step boundary —
+        # the failure put the run into stepping, so it holds from there on.
+        self.assertEqual([(e["index"], e["reason"]) for e in seen],
+                         [(1, "assertion"), (2, "stepping")],
+                         "on the check itself, naming the step it is inside")
+        self.assertEqual(
+            [(e["index"], e["status"])
+             for e in self._kinds(events, "scenario_step_finished")],
+            [(1, "passed"), (2, "passed")],
+            "and carried on once released, instead of the run ending there",
+        )
+
+    async def test_an_unattended_failed_assertion_still_ends_the_run(self):
+        """The old contract, unchanged where nobody is watching."""
+        state = agent.AgentSession()
+
+        async def execute(*a, **k):
+            return {"ok": False, "message": "yok", "element": None}
+
+        events = await self._run(
+            [self.ASSERT, self._close("pass")], self.TWO, state,
+            attended=False, execute=execute,
+        )
+        self.assertEqual(self._kinds(events, "waiting"), [])
+        finished = self._kinds(events, "finished")
+        self.assertEqual(finished[-1]["status"], "failed")
+
+    async def test_the_session_is_left_flowing_for_the_next_run(self):
+        state = agent.AgentSession()
+        state.stepping = True
+
+        async def watch(event, st):
+            if event["event"] == "waiting":
+                agent._sessions["stepping"] = st
+                agent.resume("stepping", one_step=False)
+
+        await self._run(
+            [self.ASSERT, self._close("pass"), self.ASSERT, self._close("pass")],
+            self.TWO, state, watch,
+        )
+        self.assertFalse(state.stepping)
+        self.assertTrue(state.go.is_set())

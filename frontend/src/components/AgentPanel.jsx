@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser,
-  FileText, Image as ImageIcon, ImageOff, Loader2, PlayCircle, Send, Sparkles,
-  Square, Target, XCircle, Zap,
+  FileText, Image as ImageIcon, ImageOff, Loader2, PauseCircle, Play, PlayCircle,
+  Send, SkipForward, Sparkles, Square, Target, XCircle, Zap,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -131,6 +131,10 @@ function normaliseSuggestions(examples) {
 export function AgentPanel({
   timeline, status, currentStep, maxSteps, onStart, onStop, onReset, onOpenRun, runId,
   onWriteScenarios = null,
+  // Where a held run is waiting, and the two ways out of it. A run holds
+  // on its own the moment a step fails; from there the tester takes one
+  // step at a time or lets it finish.
+  waitingAt = null, stepping = false, onStep = null, onStepMode = null,
   placeholder = 'What should QAi test? e.g. “Search for headphones and verify results appear”',
   examples = DEFAULT_EXAMPLES,
   pageSummary = null,
@@ -380,6 +384,24 @@ export function AgentPanel({
               );
             }
             if (entry.type === 'step') return <StepEntry key={entry.key} entry={entry} />;
+            {/* Left in the timeline after it has been released, so the record
+                shows where the run was held and why — reading it back later,
+                "it stopped here" is the thing worth knowing. */}
+            if (entry.type === 'waiting') {
+              return (
+                <div key={entry.key} className="timeline-hold">
+                  <PauseCircle size={14} />
+                  <span>
+                    {entry.reason === 'assertion'
+                      ? `Held in step ${entry.index} — a check there failed`
+                      : entry.reason === 'failed'
+                        ? `Held before step ${entry.index} — the step before it failed`
+                        : `Held before step ${entry.index} of ${entry.total}`}
+                  </span>
+                  {entry.text && <em>{entry.text}</em>}
+                </div>
+              );
+            }
             if (entry.type === 'error') {
               return (
                 <div key={entry.key} className="verdict failed">
@@ -419,7 +441,34 @@ export function AgentPanel({
       </div>
 
       <div className="agent-composer">
-        {running && (
+        {/* Holding. Shown instead of the progress bar, because the run is
+            not progressing — it is waiting to be told to. */}
+        {running && waitingAt && (
+          <div className="run-holding">
+            <PauseCircle size={14} />
+            <span className="holding-where">
+              {/* Three places a run holds: on an assertion that did not hold,
+                  after a step that failed, and at every boundary in step mode.
+                  They read differently because they are different moments. */}
+              {waitingAt.reason === 'assertion'
+                ? `A check failed in step ${waitingAt.index} — holding there`
+                : waitingAt.reason === 'failed'
+                  ? `Step ${waitingAt.index - 1} failed — holding before step ${waitingAt.index}`
+                  : `Holding before step ${waitingAt.index} of ${waitingAt.total}`}
+            </span>
+            <button className="btn btn-primary btn-sm" onClick={() => onStep?.(true)}>
+              <SkipForward size={12} /> One step
+            </button>
+            <button className="btn btn-sm" onClick={() => onStep?.(false)}>
+              <Play size={12} /> Run on
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={onStop}>
+              <Square size={12} /> Stop
+            </button>
+          </div>
+        )}
+
+        {running && !waitingAt && (
           <div className="run-progress">
             <Loader2 size={13} className="spin" />
             <span>
@@ -428,6 +477,19 @@ export function AgentPanel({
             <div className="progress-track">
               <div className="progress-fill" style={{ width: `${Math.min(100, (currentStep / Math.max(maxSteps, 1)) * 100)}%` }} />
             </div>
+            {/* Turned on mid-run, the scenario holds at the next step —
+                which is how a tester follows one they can already see going
+                wrong without waiting for it to fail. */}
+            <button
+              className={`btn btn-sm ${stepping ? 'on' : ''}`}
+              onClick={() => onStepMode?.(!stepping)}
+              title={stepping
+                ? 'Stop holding at every step'
+                : 'Hold at every step from here'}
+              aria-pressed={stepping}
+            >
+              <PauseCircle size={12} /> Step
+            </button>
             <button className="btn btn-danger btn-sm" onClick={onStop}>
               <Square size={12} />
               Stop

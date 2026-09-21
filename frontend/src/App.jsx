@@ -719,6 +719,10 @@ export default function App() {
         {agentSubTab === 'chat' ? (
           <AgentPanel
             timeline={agent.timeline}
+            waitingAt={agent.waitingAt}
+            stepping={agent.stepping}
+            onStep={agent.step}
+            onStepMode={agent.setStepMode}
             status={agent.status}
             currentStep={agent.currentStep}
             maxSteps={agent.maxSteps}

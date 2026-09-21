@@ -260,6 +260,23 @@ class AgentSession:
     run_id: Optional[str] = None
     history: List[Dict[str, Any]] = field(default_factory=list)
 
+    # --- stepping ---------------------------------------------------------
+    #
+    # A run used to carry straight on from a step that failed, through every
+    # step after it, and a tester watching a scenario go wrong could only stop
+    # it or let it finish. What they want at that moment is a debugger: hold
+    # here, let me look at the screen, then take one more step.
+    #
+    # Two states, not a pile of flags. A run is either flowing or stepping.
+    # A failed step puts it into stepping; from there it holds at every step
+    # boundary until the tester either takes one more or lets it flow again.
+    stepping: bool = False
+    # What the run waits on at a boundary. Set means "carry on"; the run sets
+    # it back to flowing itself once it has passed.
+    go: asyncio.Event = field(default_factory=asyncio.Event)
+    # Which step it is holding before, so a UI that reconnects can say so.
+    waiting_at: Optional[int] = None
+
 
 _sessions: Dict[str, AgentSession] = {}
 
@@ -273,6 +290,40 @@ def cancel(session_id: str) -> bool:
     if state is None or not state.running:
         return False
     state.cancel.set()
+    # Released as well, or a run holding at a failed step would sit there
+    # until it timed out rather than noticing it had been stopped.
+    state.go.set()
+    return True
+
+
+def resume(session_id: str, one_step: bool = True) -> bool:
+    """Let a held run carry on — one step, or the rest of the way.
+
+    One step is the button a tester presses repeatedly while reading a screen
+    that has gone wrong, so it is the default; letting it flow again is the
+    deliberate one.
+    """
+    state = _sessions.get(session_id)
+    if state is None or not state.running:
+        return False
+    state.stepping = one_step
+    state.waiting_at = None
+    state.go.set()
+    return True
+
+
+def step_mode(session_id: str, on: bool) -> bool:
+    """Hold at every step from now on, or stop doing so.
+
+    Turned on before a run, this is debug mode from the first step. Turned off
+    while one is held, it is the same as letting it flow.
+    """
+    state = _sessions.get(session_id)
+    if state is None:
+        return False
+    state.stepping = on
+    if not on:
+        state.go.set()
     return True
 
 
@@ -1098,6 +1149,13 @@ async def run_agent(
     effort: Optional[str] = None,
     session_state: Optional["AgentSession"] = None,
     steps: Optional[List[Dict[str, str]]] = None,
+    # Hold at every step from the first one — debug mode, asked for before the
+    # run rather than arrived at by a failure.
+    stepping: bool = False,
+    # Whether anyone is watching this run and can release it. A failure holds
+    # the run only when they are: a suite running overnight has nobody to press
+    # the button, and a hold there is a hang, not a pause.
+    attended: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Drive `target` toward `goal`, yielding NDJSON events as it goes.
 
@@ -1173,6 +1231,10 @@ async def run_agent(
     state.running = True
     state.run_id = run_id
     state.cancel.clear()
+    # Flowing unless the tester asked for debug mode before pressing run.
+    state.go.set()
+    state.stepping = bool(stepping)
+    state.waiting_at = None
     state.history = []
 
     yield _event("run_started", runId=run_id, goal=goal, maxSteps=ceiling)
@@ -1215,6 +1277,41 @@ async def run_agent(
     # green, replaces the recording.
     replay_queue: List[Dict[str, Any]] = []
     replayed_actions = 0
+
+    async def hold(index: Optional[int], reason: str):
+        """Wait when the run is being stepped, so the tester drives it.
+
+        Anything but "stepping" is a failure, and a failure puts an attended
+        run into stepping on its own: carrying on past something that went
+        wrong is what a tester watching it does not want, and stopping the
+        whole run was the only alternative they had. From here they take one
+        step at a time, or let it flow. Unattended — a Test Set grinding
+        through overnight — a failure changes nothing, because a hold nobody
+        can release is a hang.
+
+        `index` is the scenario step about to be opened; None means the hold is
+        inside the step that is already running, on the failure itself, and
+        `index` in the event then names that step rather than the next one.
+
+        Yields the events the caller streams on. Nothing is waited for when
+        the run is flowing, so this costs a branch on the normal path.
+        """
+        if reason != "stepping" and attended:
+            state.stepping = True
+        if not state.stepping or state.cancel.is_set():
+            return
+        within = index is None
+        at = (step_index if within else index) + 1 if stepwise else 0
+        state.go.clear()
+        state.waiting_at = at
+        yield _event(
+            "waiting", index=at, total=len(scenario_steps), reason=reason,
+            action=scenario_steps[at - 1]["action"] if stepwise else None,
+        )
+        await state.go.wait()
+        state.waiting_at = None
+        if not state.cancel.is_set():
+            yield _event("resumed", index=at, stepping=state.stepping)
 
     def open_step(index: int):
         nonlocal step_closed, replay_queue, replayed_actions
@@ -1283,6 +1380,10 @@ async def run_agent(
                         summary=final_error or f"All {len(scenario_steps)} steps passed.",
                     )
                     break
+                async for held in hold(step_index, "failed" if not optional else "stepping"):
+                    yield held
+                if state.cancel.is_set():
+                    continue
                 scenario_row_id = open_step(step_index)
                 step_actions = 0
                 step_asserted = False
@@ -1502,6 +1603,13 @@ async def run_agent(
                     yield _event("finished", status=final_status, summary=summary)
                     break
 
+                async for held in hold(
+                    step_index,
+                    "failed" if (not passed and not optional) else "stepping",
+                ):
+                    yield held
+                if state.cancel.is_set():
+                    continue
                 scenario_row_id = open_step(step_index)
                 step_actions = 0
                 step_asserted = False
@@ -1637,9 +1745,25 @@ async def run_agent(
             # case the model is there for — ending the run on it would make a
             # scenario that has passed before fail for having passed before.
             if not result["ok"] and kind in ASSERTION_ACTIONS and not replaying:
-                final_status, final_error = "failed", result["message"]
-                yield _event("finished", status="failed", summary=result["message"])
-                break
+                # Attended, this is the moment worth stopping at: the screen
+                # that broke the assertion is still on it, and ending the run
+                # here is exactly what takes it away. Hold first. Releasing
+                # hands the failure back to the model like a failed
+                # interaction, so the step can still be rescued; Stop cancels
+                # and the run ends as it always did.
+                async for held in hold(None, "assertion"):
+                    yield held
+                # Attended, `hold` always holds here — it turns stepping on
+                # itself — so reaching this uncancelled means the tester let it
+                # go, whether by one step or by Run on.
+                if attended and not state.cancel.is_set():
+                    result = dict(result, message=(
+                        result["message"] + " — released by the tester, carrying on."
+                    ))
+                else:
+                    final_status, final_error = "failed", result["message"]
+                    yield _event("finished", status="failed", summary=result["message"])
+                    break
 
             state.history.append({
                 "role": "user",
@@ -1685,4 +1809,9 @@ async def run_agent(
         storage.record_run_usage(run_id, run_usage)
         state.running = False
         state.cancel.clear()
+        # Left flowing, or the next run on this session would hold at its
+        # first step for a reason nobody had asked for.
+        state.stepping = False
+        state.waiting_at = None
+        state.go.set()
         yield _event("run_closed", runId=run_id, status=final_status, steps=step_no)

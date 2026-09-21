@@ -1101,6 +1101,11 @@ class AgentRunRequest(BaseModel):
     # on one scenario without editing a global default between attempts.
     model: Optional[str] = None
     effort: Optional[str] = None
+    # Hold at every step from the first one. A run also holds on its own the
+    # moment a step fails, which is the case this exists for — carrying
+    # straight on through every step after one that went wrong left the
+    # tester a choice between stopping the run and watching it finish.
+    stepping: bool = False
 
 
 @app.post("/api/session/{session_id}/agent/run")
@@ -1118,6 +1123,11 @@ async def agent_run(session_id: str, req: AgentRunRequest):
         use_vision=req.useVision,
         model=req.model,
         effort=req.effort,
+        stepping=req.stepping,
+        # Someone is on the other end of this stream with the buttons in front
+        # of them, which is what makes holding at a failure safe here and not
+        # in the suite runner.
+        attended=True,
     )
     return StreamingResponse(
         _with_page_events(stream, target, req.tags, req.failOnPageError),
@@ -1199,11 +1209,41 @@ async def agent_stop(session_id: str):
     return {"status": "success", "stopped": stopped}
 
 
+class StepRequest(BaseModel):
+    # One more step, or the rest of the way. Stepping is the default
+    # because it is the button pressed repeatedly while reading a screen
+    # that has gone wrong; flowing again is the deliberate choice.
+    one: bool = True
+
+
+@app.post("/api/session/{session_id}/agent/continue")
+@app.post("/api/appium/session/{session_id}/agent/continue")
+async def agent_continue(session_id: str, body: StepRequest):
+    """Let a held run take one more step, or carry on to the end."""
+    return {"resumed": agent.resume(session_id, one_step=body.one)}
+
+
+class StepModeRequest(BaseModel):
+    on: bool
+
+
+@app.post("/api/session/{session_id}/agent/step-mode")
+@app.post("/api/appium/session/{session_id}/agent/step-mode")
+async def agent_step_mode(session_id: str, body: StepModeRequest):
+    """Hold at every step from now on, or stop doing so."""
+    return {"stepping": body.on, "changed": agent.step_mode(session_id, body.on)}
+
+
 @app.get("/api/session/{session_id}/agent/status")
 @app.get("/api/appium/session/{session_id}/agent/status")
 async def agent_status(session_id: str):
     state = agent.get_session(session_id)
-    return {"running": state.running, "runId": state.run_id}
+    return {
+        "running": state.running, "runId": state.run_id,
+        # So a UI that reconnects mid-run knows the scenario is holding
+        # rather than thinking it has stalled.
+        "stepping": state.stepping, "waitingAt": state.waiting_at,
+    }
 
 
 # --------------------------------------------------------------------------- #

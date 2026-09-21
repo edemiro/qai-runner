@@ -215,6 +215,12 @@ export const api = {
 
   stopAgent: (sessionId) => request(`/api/session/${sessionId}/agent/stop`, { method: 'POST' }),
   agentStatus: (sessionId) => request(`/api/session/${sessionId}/agent/status`),
+  // A run holds on its own the moment a step fails. These are the two ways
+  // out of that: one more step, or let it finish.
+  continueAgent: (sessionId, one = true) =>
+    request(`/api/session/${sessionId}/agent/continue`, { method: 'POST', body: { one } }),
+  setStepMode: (sessionId, on) =>
+    request(`/api/session/${sessionId}/agent/step-mode`, { method: 'POST', body: { on } }),
 
   runs: (limit = 50, q = '', offset = 0, kind = null, os = null) =>
     request(`/api/runs?limit=${limit}&offset=${offset}`

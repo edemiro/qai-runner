@@ -5623,6 +5623,47 @@ textarea,
 /* A step that is carried out and not judged. Marked on the step rather than
    listed somewhere else, because the question it answers — "why is this run
    green with that check red" — is asked while reading the steps. */
+/* A run that is holding, shown where the progress bar would be — because the
+   run is not progressing, it is waiting to be told to. */
+.run-holding {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  margin-bottom: var(--gap-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+
+.run-holding > svg { color: var(--accent); flex: none; }
+.run-holding .holding-where { flex: 1; min-width: 0; color: var(--text-primary); }
+
+/* Left in the timeline after it is released: reading a run back later, "it
+   stopped here" is the thing worth knowing. */
+.timeline-hold {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent-border);
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+.timeline-hold > svg { color: var(--accent); flex: none; align-self: center; }
+.timeline-hold em { color: var(--text-secondary); font-style: normal; }
+
+/* The Step toggle, lit while the run will hold at the next boundary. */
+.run-progress .btn.on {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
 .step-optional-tag {
   margin-left: 7px;
   padding: 1px 6px;
