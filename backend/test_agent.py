@@ -494,6 +494,7 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
         class Snapshot:
             snapshot_id = "s"
             def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
+            def visible_text(self): return ["Bir ekran"]
 
         class Target:
             kind, session_id = "web", "written-scenario"
@@ -611,6 +612,9 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
             def get_optimized_tree_for_llm(self):
                 return {"elementId": "el_1"}
 
+            def visible_text(self):
+                return ["Bir ekran"]
+
         class Target:
             kind, session_id = "web", "optional-prompt"
 
@@ -711,6 +715,7 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         class Snapshot:
             snapshot_id = "s"
             def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
+            def visible_text(self): return ["Bir ekran"]
 
         class Target:
             kind, session_id = "web", "replay-test"
@@ -1312,6 +1317,76 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class ACheckThatWasAlreadyTrueProvesNothing(unittest.TestCase):
+    """Found on the swap control, and it had eight scenarios in the suite.
+
+    Pressing swap exchanges origin and destination. A step that checks
+    "İstanbul is on the screen" passes whether the swap worked or not, because
+    both airports are on the screen either way — so none of those scenarios
+    could ever go red. Asking the field itself is the only check that can tell
+    a working swap from a broken one.
+    """
+
+    BEFORE = ["Nereden", "İstanbul", "Nereye", "Ankara Esenboğa Havalimanı",
+              "(ESB)", "Uçuş ara"]
+
+    def test_a_phrase_already_on_the_screen_is_caught(self):
+        self.assertTrue(agent._already_true(
+            {"action": "assert_text", "value": "Ankara"}, self.BEFORE))
+        self.assertTrue(agent._already_true(
+            {"action": "assert_text", "value": "İstanbul"}, self.BEFORE))
+
+    def test_turkish_case_does_not_let_one_slip_through(self):
+        self.assertTrue(agent._already_true(
+            {"action": "assert_text", "value": "ISTANBUL"}, self.BEFORE))
+        self.assertTrue(agent._already_true(
+            {"action": "assert_text", "value": "ucus ara"}, self.BEFORE))
+
+    def test_something_new_on_the_screen_is_a_real_check(self):
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "value": "3 uçuş bulundu"}, self.BEFORE))
+
+    def test_a_scoped_check_is_a_real_answer_about_a_real_field(self):
+        """Scoping is the fix, so it must never be called worthless — a scoped
+        check on a field whose value has not changed is exactly the case the
+        scoped form exists to catch."""
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "elementId": "el_40", "value": "Ankara"},
+            self.BEFORE))
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "selector": "#fromPort", "value": "Ankara"},
+            self.BEFORE))
+
+    def test_other_checks_are_not_judged_here(self):
+        # assert_absent is about something leaving, and assert_visible is about
+        # an element rather than a phrase; neither is the trap.
+        self.assertFalse(agent._already_true(
+            {"action": "assert_absent", "value": "Ankara"}, self.BEFORE))
+        self.assertFalse(agent._already_true(
+            {"action": "assert_visible", "elementId": "el_1"}, self.BEFORE))
+
+    def test_the_first_step_is_not_judged(self):
+        """It has no before: the screen it opens on is the screen it is about,
+        so everything it proves is true on arrival by construction."""
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "value": "Uçuş ara"}, self.BEFORE,
+            first_step=True))
+
+    def test_a_later_step_that_only_reads_is_still_judged(self):
+        """"Check what Nereye holds now" is exactly the step that has to ask
+        the field — exempting it for not having clicked would exempt the case
+        this is here for."""
+        self.assertTrue(agent._already_true(
+            {"action": "assert_text", "value": "İstanbul"}, self.BEFORE,
+            first_step=False))
+
+    def test_nothing_to_compare_against_judges_nothing(self):
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "value": "Ankara"}, None))
+        self.assertFalse(agent._already_true(
+            {"action": "assert_text", "value": ""}, self.BEFORE))
+
+
 class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
     """A run used to carry straight on from a failed step, through every step
     after it, and the tester watching could only stop it or watch it finish.
@@ -1347,6 +1422,9 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
 
             def get_optimized_tree_for_llm(self):
                 return {"elementId": "el_1"}
+
+            def visible_text(self):
+                return ["Bir ekran"]
 
         class Target:
             kind, session_id = "web", "stepping"

@@ -195,6 +195,14 @@ carry out that step and prove its expected result — nothing else.
   is proved by the banner's own text being gone, not by some other control
   being visible; a step that sets a field is proved by the value in that field.
   Re-proving what an earlier step already established says nothing new.
+- When the expected result names a field — "Nereden shows Ankara", "the total
+  reads 1.250 TL" — scope the assertion to that field with `elementId`. An
+  unscoped check asks whether the words are anywhere on the screen, and for a
+  step like this they were there before it ran too, so it passes whether or not
+  the step did anything. The swap control is the clearest case: after swapping
+  origin and destination, both airports are on the screen either way, and only
+  "does THIS field now hold that one" can tell a working swap from a broken
+  one. A check that cannot fail is worse than no check, because it is trusted.
 - ONE assertion is enough when it proves the expected result. Do not check the
   same fact two or three ways: a scenario carries dozens of steps and an
   end-to-end run carries hundreds, each costing a model call and a screenshot,
@@ -1117,6 +1125,43 @@ async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
     )
 
 
+def _already_true(action: Dict[str, Any], before: Optional[List[str]],
+                  first_step: bool = False) -> bool:
+    """Was this check already satisfied when the step opened?
+
+    Then it proves nothing about the step. The swap control is where this was
+    found: pressing it exchanges origin and destination, and a scenario that
+    checks "İstanbul is on the screen" passes whether the swap worked or not,
+    because both airports are on the screen either way. Eight scenarios in the
+    suite were written that way and none of them could go red.
+
+    Not the first step, which has no before to be compared against: the screen
+    it opens on is the screen it is about — "wait for the home page; the search
+    button is visible" — so everything it proves is true on arrival by
+    construction, and judging it would be judging the arrangement rather than
+    the check.
+
+    Every later step is judged whether or not it interacted with anything. A
+    step that only reads a field — "check what Nereye holds now" — is exactly
+    the one that has to ask the field, and exempting it for not having clicked
+    would exempt the case this is here for.
+
+    Only unscoped text checks are judged. Scoping to a field is the fix, and a
+    scoped check on a field whose value has not changed is a real answer about
+    a real field — that is the case the scoped form exists to catch.
+    """
+    if first_step:
+        return False
+    if (action.get("action") or "").lower() != "assert_text":
+        return False
+    if action.get("elementId") or action.get("xpath") or action.get("selector"):
+        return False
+    needle = (action.get("value") or "").strip()
+    if not needle or not before:
+        return False
+    return text_match.contains(text_match.joined(before), needle)
+
+
 def _first_json_object(reply: str) -> Optional[Dict[str, Any]]:
     """The first JSON object in a reply, fenced or bare.
 
@@ -1536,6 +1581,10 @@ async def run_agent(
     step_asserted = False
     step_started = time.monotonic()
     failed_steps = 0
+    # What the screen said when the current step opened, so a check that was
+    # already satisfied before the step ran can be recognised as proving
+    # nothing about it.
+    screen_at_step_open: Optional[List[str]] = None
     # A step that never closes itself would otherwise spend the whole run's
     # budget and starve every step after it.
     ACTIONS_PER_STEP = 12
@@ -1586,11 +1635,15 @@ async def run_agent(
             yield _event("resumed", index=at, stepping=state.stepping)
 
     def open_step(index: int):
-        nonlocal step_closed, replay_queue, replayed_actions
+        nonlocal step_closed, replay_queue, replayed_actions, screen_at_step_open
         entry = scenario_steps[index]
         step_closed = False
         replay_queue = [dict(item) for item in (entry.get("recorded") or [])]
         replayed_actions = 0
+        # Taken on the first look after the step opens, and kept so an
+        # assertion can be told whether it is proving anything — see
+        # `_already_true`.
+        screen_at_step_open = None
         return storage.start_scenario_step(
             run_id, index + 1, entry["action"], entry.get("expected") or None,
         )
@@ -1673,6 +1726,8 @@ async def run_agent(
             publish_live_frame(target.session_id, screenshot)
             if snapshot is not None:
                 yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
+                if stepwise and screen_at_step_open is None:
+                    screen_at_step_open = snapshot.visible_text()
 
             # In a written scenario the model is shown the step it is on, not
             # the scenario as a whole — handing it the finished article invites
@@ -1971,7 +2026,25 @@ async def run_agent(
                         message=result["message"],
                     )
 
-            if kind in ASSERTION_ACTIONS and result["ok"]:
+            # A check that held before the step ran did not prove the step. It
+            # still passes — it is a true statement about the screen — but the
+            # record says so, and the model is told, because the alternative is
+            # a green step that could never have gone red.
+            if (result["ok"] and stepwise
+                    and _already_true(action, screen_at_step_open,
+                                      first_step=step_index == 0)):
+                result = dict(result, message=(
+                    result["message"] + " — but this was already true when the "
+                    "step opened, so it does not prove the step did anything. "
+                    "Scope the check to the field with elementId."
+                ), proves_nothing=True)
+
+            # Passing, but not counted as having proved the step: the model has
+            # to produce a real check before it can close it. The message above
+            # tells it how, and if it never does, the step fails as one closed
+            # without verifying its expected result — which is the truth.
+            if (kind in ASSERTION_ACTIONS and result["ok"]
+                    and not result.get("proves_nothing")):
                 executed_assertion = True
                 step_asserted = True
 
