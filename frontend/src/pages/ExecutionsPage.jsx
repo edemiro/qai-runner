@@ -485,11 +485,30 @@ export function ExecutionsPage({
                   )}
                   {/* Exports, not actions. They stood at the same weight as
                       Stop and Delete, so four buttons competed where one of
-                      them ends a running job and another destroys a record. */}
+                      them ends a running job and another destroys a record.
+                      And "JUnit" and "JSON" alone named the file formats
+                      without ever saying what the file was. */}
                   <span className="execution-exports">
                     <Download size={13} />
-                    <a href={api.suiteReportUrl(execution.id, 'junit')} download>JUnit</a>
-                    <a href={api.suiteReportUrl(execution.id, 'json')} download>JSON</a>
+                    <span className="execution-exports-label">Report</span>
+                    {/* The format names stay: a tester wiring this into Jenkins
+                        needs to know which file is the JUnit one. What they
+                        never said is what the file is, which the label does. */}
+                    <a
+                      href={api.suiteReportUrl(execution.id, 'junit')}
+                      download
+                      title="JUnit XML — the format a build server reads"
+                    >
+                      JUnit
+                    </a>
+                    <span className="execution-exports-sep">·</span>
+                    <a
+                      href={api.suiteReportUrl(execution.id, 'json')}
+                      download
+                      title="JSON — every scenario and step of this execution"
+                    >
+                      JSON
+                    </a>
                   </span>
                   <button
                     className="btn-icon danger"
@@ -555,26 +574,32 @@ export function ExecutionsPage({
                       </span>
                     )}
                     <Verdict status={run.status} />
-                    {run.status === 'failed' && (
+                    {/* Both buttons in one cell. The row is a grid, and Bug
+                        only exists on a failed scenario — counted as columns,
+                        a failed row had one child more than there were columns
+                        and Details fell onto a line of its own underneath. */}
+                    <span className="scenario-actions">
+                      {run.status === 'failed' && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => raiseBug(run)}
+                          disabled={drafting === run.id}
+                          title="Raise a bug from this failure — written from the run"
+                        >
+                          {drafting === run.id
+                            ? <Loader2 size={14} className="spin" />
+                            : <Bug size={14} />}
+                          Bug
+                        </button>
+                      )}
                       <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => raiseBug(run)}
-                        disabled={drafting === run.id}
-                        title="Raise a bug from this failure — written from the run"
+                        className="btn btn-ghost btn-sm scenario-details"
+                        onClick={() => onOpenRun?.(run.id)}
+                        title="Open the full step-by-step report for this scenario"
                       >
-                        {drafting === run.id
-                          ? <Loader2 size={14} className="spin" />
-                          : <Bug size={14} />}
-                        Bug
+                        Details
                       </button>
-                    )}
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onOpenRun?.(run.id)}
-                      title="Open the full step-by-step report for this scenario"
-                    >
-                      Details
-                    </button>
+                    </span>
 
                     {/* The scenario as it was written, with what each step
                         proved. "Which step went wrong and what did it say" is

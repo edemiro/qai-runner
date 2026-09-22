@@ -5069,18 +5069,21 @@ textarea,
 }
 
 /* One icon-sized way in, not a bordered button repeated fifteen times down the
-   page. It steps forward on hover, which is when it is wanted. */
-.scenario-result .btn-ghost {
+   page. It steps forward on hover, which is when it is wanted.
+
+   Named rather than "any ghost button in the row": Bug is one of those too,
+   and it was being blanked to font-size 0 and given a chevron of its own, so
+   a failed scenario showed a bug icon and an arrow crushed into 30px. */
+.scenario-result .scenario-details {
   width: 30px;
   height: 30px;
   padding: 0;
-  justify-self: end;
   font-size: 0;
   border-radius: var(--radius-sm);
   opacity: 0.55;
 }
 
-.scenario-result .btn-ghost::after {
+.scenario-result .scenario-details::after {
   content: '›';
   font-size: 19px;
   line-height: 1;
@@ -5088,7 +5091,7 @@ textarea,
 }
 
 .scenario-result:hover { background: var(--bg-hover); border-radius: var(--radius-sm); }
-.scenario-result:hover .btn-ghost { opacity: 1; }
+.scenario-result:hover .scenario-details { opacity: 1; }
 
 /* The chips keep a fixed width so Critical/High/Medium and the layer line up
    down the column instead of jittering with the length of each word. */
@@ -6786,33 +6789,46 @@ textarea,
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.execution-search {
+/* Built like `.run-search`, which is the one of these that has always worked:
+   the container draws the field and the input inside it draws nothing.
+
+   Written as two classes on purpose. This is a <label>, and `.suites-layout
+   label` — the shell both this page and Test Sets sit in — stacks labels into
+   a column at one specificity point more than a single class. One class lost
+   that argument silently: the icon sat above the field, the input kept its own
+   border inside the container's, and the box ended up outside the box. */
+.execution-filters .execution-search {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 7px;
-  padding: 0 10px;
-  height: var(--control-h, 34px);
-  border-radius: var(--radius-sm);
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg-base);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
 }
 
-.execution-search > svg { color: var(--text-tertiary); flex: none; }
+.execution-filters .execution-search > svg {
+  color: var(--text-tertiary);
+  flex: none;
+}
 
-.execution-search input {
+.execution-filters .execution-search input {
   flex: 1;
   min-width: 0;
   height: auto;
   padding: 0;
-  border: 0;
-  background: none;
+  border: none;
+  background: transparent;
   color: var(--text-primary);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  outline: none;
 }
 
-.execution-search input:focus { outline: none; }
-.execution-search:focus-within { border-color: var(--accent); }
+.execution-filters .execution-search input::placeholder { color: var(--text-tertiary); }
+.execution-filters .execution-search:focus-within { border-color: var(--accent); }
 
 .execution-status-filter { display: flex; flex-wrap: wrap; gap: 4px; }
 
@@ -6849,20 +6865,34 @@ textarea,
 .execution-exports {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 4px;
+  gap: 6px;
+  height: var(--control-h-sm, 28px);
+  padding: 0 8px;
   color: var(--text-tertiary);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .execution-exports > svg { flex: none; }
-.execution-exports a { color: var(--text-tertiary); text-decoration: none; }
+.execution-exports-label { font-weight: 600; letter-spacing: 0.02em; }
+.execution-exports-sep { opacity: 0.45; }
+.execution-exports a { color: var(--text-secondary); text-decoration: none; }
 .execution-exports a:hover { color: var(--accent); text-decoration: underline; }
 
 /* Room for the disclosure, and a place for what it opens: the steps go across
-   the whole row rather than in the column the arrow sits in. */
+   the whole row rather than in the column the arrow sits in. The last column
+   holds both trailing buttons, so a failed scenario — the only kind with a Bug
+   button — does not have one child more than there are columns. */
 .scenario-result {
-  grid-template-columns: 22px 34px minmax(0, 1fr) 84px 78px 68px 34px;
+  grid-template-columns: 22px 34px minmax(0, 1fr) 84px 78px 68px auto;
+}
+
+.scenario-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  justify-self: end;
 }
 
 .scenario-open {
