@@ -1328,6 +1328,72 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class ALongStepIsNotAStuckStep(unittest.IsolatedAsyncioTestCase):
+    """A step is cut off for getting nowhere, not for taking a while.
+
+    Measured on the booking scenario: the step that fills in a passenger —
+    title, name, surname, date of birth, email, country code, phone, then two
+    checks — spends fourteen actions and every one of them succeeds. At the old
+    flat ceiling of twelve it was cut off one `step_done` from closing green,
+    and the report blamed the product for the runner's own limit.
+    """
+
+    STEPS = [{"action": "Formu doldur", "expected": "Alanlar dolu"}]
+
+    async def _run(self, actions_succeed):
+        """`actions_succeed` decides what every action reports back."""
+        script = ['```json\n{"type":"action","action":"click",'
+                  '"elementId":"el_1","reason":"alan"}\n```'] * 30
+
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, *a, **k):
+                yield script[self.i] if self.i < len(script) else (
+                    '```json\n{"type":"action","action":"step_done",'
+                    '"value":"pass"}\n```')
+                self.i += 1
+
+        target = FakeTarget(_manager())
+        target.kind = "web"
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(return_value={
+                 "ok": actions_succeed, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                target, "senaryo", steps=self.STEPS,
+                session_state=agent.AgentSession(), use_vision=False,
+            ):
+                events.append(json.loads(line))
+        spent = len([e for e in events if e["event"] == "step_finished"])
+        closed = [e for e in events if e["event"] == "scenario_step_finished"]
+        return spent, (closed[0] if closed else None)
+
+    async def test_a_step_whose_actions_all_work_gets_room(self):
+        spent, closed = await self._run(actions_succeed=True)
+        self.assertGreater(spent, 12,
+                           "the old ceiling would have stopped it at twelve")
+        self.assertIn("24 actions", closed["message"])
+
+    async def test_a_step_getting_nowhere_is_cut_off_sooner_than_before(self):
+        """The other half: the ceiling went up, so the stuck case must not have
+        gained the same rope."""
+        spent, closed = await self._run(actions_succeed=False)
+        self.assertLessEqual(spent, 6, "it stopped grinding early")
+        self.assertIn("no progress", closed["message"])
+
+    # That one long step must not starve the steps behind it is checked by
+    # `test_a_step_that_never_closes_is_cut_off_not_left_running` above, which
+    # runs a scenario whose first step never closes and asserts the second one
+    # still gets its turn. Raising the per-step allowance broke that test, which
+    # is how the trade-off was noticed at all.
+
+
 class NotStartingAgainstAScreenThatIsNotThere(unittest.IsolatedAsyncioTestCase):
     """A closed page answered every action with "the page is gone" and the
     model kept being asked what to do about it — a whole scenario's worth of

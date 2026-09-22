@@ -1134,6 +1134,29 @@ async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None)
             return result
 
 
+# What ends a scenario step that will not close itself.
+#
+# Being stuck, not being long. Measured on the booking scenario: the step that
+# fills in a passenger — title, name, surname, date of birth, email, country
+# code, phone, then two checks — spends fourteen actions and every one of them
+# succeeds. At the old flat ceiling of twelve it was cut off one `step_done`
+# from closing green, and the report blamed the product for the runner's own
+# limit. So the ceiling is generous and the real cut-off is a run of actions
+# that achieve nothing, which is both kinder to a long step and quicker on a
+# model grinding at one it cannot do.
+ACTIONS_PER_STEP = 24
+FUTILE_ACTIONS = 4
+
+# The whole run's allowance is every step's, so no step can starve the ones
+# behind it by spending its own — which is what the old, smaller per-step
+# number was really protecting, and what raising it would have quietly traded
+# away. It reads large and is not: measured on the twelve-step booking
+# scenario, the run spent forty actions against a ceiling of a hundred and
+# fifty-four. What keeps a run from ever approaching it is the futility cut,
+# which ends a step that is getting nowhere in four rather than in twenty-four.
+RUN_CEILING_HEADROOM = 10
+
+
 # Typing is the one action whose result does not come from the action.
 #
 # A search field answers a keystroke by asking a server, so the list arrives
@@ -1582,7 +1605,9 @@ async def run_agent(
     # steps cannot possibly fit in the 40 actions an open-ended run gets.
     planned_steps = storage.clean_steps(steps) if steps else []
     if planned_steps:
-        ceiling = max_steps or (len(planned_steps) * 12 + 10)
+        ceiling = max_steps or (
+            len(planned_steps) * ACTIONS_PER_STEP + RUN_CEILING_HEADROOM
+        )
     else:
         ceiling = min(max_steps or MAX_AGENT_STEPS, MAX_AGENT_STEPS)
 
@@ -1680,9 +1705,8 @@ async def run_agent(
     # already satisfied before the step ran can be recognised as proving
     # nothing about it.
     screen_at_step_open: Optional[List[str]] = None
-    # A step that never closes itself would otherwise spend the whole run's
-    # budget and starve every step after it.
-    ACTIONS_PER_STEP = 12
+    # How many actions in a row have achieved nothing. Reset by any that works.
+    futile = 0
 
     # A scenario that has passed before does not need the model to work out how
     # to do it again. `promote_recording` keeps what a green run did on the
@@ -1768,8 +1792,12 @@ async def run_agent(
             # stop the model grinding at a step it cannot do; a recording that
             # turned out to be stale should hand over the full budget rather
             # than a step already half spent. The report still shows the total.
-            if stepwise and (step_actions - replayed_actions) >= ACTIONS_PER_STEP:
+            spent = step_actions - replayed_actions
+            if stepwise and (spent >= ACTIONS_PER_STEP or futile >= FUTILE_ACTIONS):
                 stalled = (
+                    f"Step {step_index + 1} made no progress across its last "
+                    f"{FUTILE_ACTIONS} actions."
+                    if futile >= FUTILE_ACTIONS else
                     f"Step {step_index + 1} used {ACTIONS_PER_STEP} actions without "
                     "reaching its expected result."
                 )
@@ -1806,6 +1834,7 @@ async def run_agent(
                     continue
                 scenario_row_id = open_step(step_index)
                 step_actions = 0
+                futile = 0
                 step_asserted = False
                 step_started = time.monotonic()
                 state.history = state.history[-4:]
@@ -2034,6 +2063,7 @@ async def run_agent(
                     continue
                 scenario_row_id = open_step(step_index)
                 step_actions = 0
+                futile = 0
                 step_asserted = False
                 step_started = time.monotonic()
                 # Only the newest screen is carried forward: the previous step's
@@ -2166,6 +2196,10 @@ async def run_agent(
                 last_shot_digest = shot_digest
 
             step_actions += 1
+            # An action that worked says the step is getting somewhere, whatever
+            # number it is. Only a run of actions that achieve nothing means the
+            # model is grinding, and that is what the step is cut off for.
+            futile = 0 if result["ok"] else futile + 1
             step_status = "passed" if result["ok"] else "failed"
             step_row_id = storage.add_step(
                 run_id,
