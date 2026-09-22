@@ -1118,6 +1118,41 @@ async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None)
             return result
 
 
+# How long a run waits for its first screen.
+#
+# A page opened a moment ago is often still painting, and the model cannot tell
+# a screen that has not arrived from one with nothing on it: it tries
+# something, the action fails for want of anything to act on, and it gets asked
+# again. A twelve-step scenario can spend its whole budget that way before the
+# home page has finished loading.
+#
+# The bar is one readable string — the difference between a screen and no
+# screen, nothing more. Judging whether the *right* page arrived is the
+# scenario's first step, not this; a higher bar would only mean sitting out the
+# 25 seconds on a screen that is legitimately sparse.
+FIRST_SCREEN_SECONDS = 25.0
+
+
+async def _wait_for_a_screen(target: UITarget) -> tuple:
+    """Wait until there is something to look at. Returns (ready, why not)."""
+    deadline = time.monotonic() + FIRST_SCREEN_SECONDS
+    while True:
+        if not target.is_alive():
+            return False, (
+                "The page closed before the run could read it, so nothing ran."
+            )
+        snapshot = await target.snapshot()
+        if snapshot is not None and snapshot.visible_text():
+            return True, ""
+        if time.monotonic() >= deadline:
+            return False, (
+                f"Nothing had rendered after {int(FIRST_SCREEN_SECONDS)} seconds, "
+                "so the run was not started and no model calls were spent on it. "
+                "The page may still be loading, or it may have opened blank."
+            )
+        await asyncio.sleep(1.0)
+
+
 async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
                        selector: Optional[str]) -> Dict[str, Any]:
     return await _keep_looking(
@@ -1502,6 +1537,16 @@ async def run_agent(
         yield _event("error", message="An agent run is already in progress for this session.")
         return
 
+    # Nothing to drive. A closed or crashed page answers every action with
+    # "the page is gone" and the model keeps being asked what to do about it —
+    # a whole scenario's worth of calls spent on a browser that is not there.
+    if not target.is_alive():
+        yield _event("error", message=(
+            "The page is no longer open, so there is nothing to run against. "
+            "Reopen it and start the run again."
+        ))
+        return
+
     # A written scenario needs room for every step, so the ceiling is scaled to
     # the number of steps rather than capped at the free-roaming limit — 20
     # steps cannot possibly fit in the 40 actions an open-ended run gets.
@@ -1555,6 +1600,26 @@ async def run_agent(
     state.history = []
 
     yield _event("run_started", runId=run_id, goal=goal, maxSteps=ceiling)
+
+    # Wait for the screen before spending anything on it. A page that is still
+    # loading looks to the model like a page with nothing on it, and it answers
+    # the only way it can — by trying something, failing, and being asked
+    # again. Every one of those is a model call against a screen that was about
+    # to arrive on its own.
+    ready, why = await _wait_for_a_screen(target)
+    if not ready:
+        # Closed by hand rather than through the loop's teardown, which has not
+        # been entered yet — and the run is still recorded, because pressing Run
+        # and getting nothing is a thing the tester needs to find in the history.
+        storage.finish_run(run_id, "failed", error=why)
+        state.running = False
+        state.cancel.clear()
+        state.stepping = False
+        state.waiting_at = None
+        state.go.set()
+        yield _event("error", message=why)
+        yield _event("run_closed", runId=run_id, status="failed", steps=0)
+        return
 
     final_status = "passed"
     final_error: Optional[str] = None

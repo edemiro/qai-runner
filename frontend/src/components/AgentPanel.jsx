@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser,
+  AlertTriangle, ArrowUp, CheckCircle2, ChevronRight, CircleSlash, Eraser,
   FileText, Image as ImageIcon, ImageOff, Loader2, PauseCircle, Play, PlayCircle,
   Send, SkipForward, Sparkles, Square, Target, XCircle, Zap,
 } from 'lucide-react';
@@ -140,6 +140,11 @@ export function AgentPanel({
   pageSummary = null,
   onAction = null,
   suggestionsLoading = false,
+  // Why a run cannot start right now, in a sentence, or null when it can. The
+  // composer says it and refuses rather than letting the run begin and fail a
+  // step at a time — each of those is a model call against a screen that is
+  // not there.
+  cannotRun = null,
   heading = 'Describe a test scenario',
   intro = 'QAi reads the live screen, decides one action at a time, executes it on the device'
     + ' and records every step. Finish with an assertion so the run has a verdict.',
@@ -260,6 +265,7 @@ export function AgentPanel({
       setGoal('');
       return;
     }
+    if (cannotRun) return;
     // No step ceiling from here: the server enforces MAX_AGENT_STEPS, and a
     // number the tester has to guess before the run is a worse guard than one.
     onStart(instruction(), { useVision, model, effort });
@@ -300,7 +306,8 @@ export function AgentPanel({
                     key={action.id}
                     className="action-chip"
                     onClick={() => onAction?.(action)}
-                    title={action.text}
+                    disabled={Boolean(cannotRun)}
+                    title={cannotRun || action.text}
                   >
                     <Sparkles size={13} />
                     <span>
@@ -560,6 +567,12 @@ export function AgentPanel({
             </div>
           )}
 
+          {cannotRun && (
+            <p className="composer-blocked">
+              <AlertTriangle size={13} /> {cannotRun}
+            </p>
+          )}
+
           {mode !== 'run' && (
             <label className="field-group">
               {mode !== 'drive' && <span className="field-label">Açıklama</span>}
@@ -577,7 +590,7 @@ export function AgentPanel({
                     submit();
                   }
                 }}
-                disabled={running}
+                disabled={running || Boolean(cannotRun)}
               />
             </label>
           )}
@@ -652,8 +665,10 @@ export function AgentPanel({
               <button
                 className="btn btn-primary btn-icon"
                 onClick={submit}
-                disabled={running || (mode === 'drive' && !goal.trim()) || (mode === 'run' && !knownSet)}
-                title={MODES.find((m) => m.id === mode)?.hint}
+                disabled={running || Boolean(cannotRun)
+                  || (mode === 'drive' && !goal.trim())
+                  || (mode === 'run' && !knownSet)}
+                title={cannotRun || MODES.find((m) => m.id === mode)?.hint}
               >
                 <ArrowUp size={17} />
               </button>

@@ -342,6 +342,14 @@ export function WebWorkspace({
     [agent, llmConfigured, onNeedsKey],
   );
 
+  /* A dead page still had a live Run button, and pressing it started a
+     scenario that failed every step on "the page is closed" — a model call
+     each, for a browser that was not there. The server refuses these now; this
+     is so nobody is invited to ask. */
+  const cannotRun = pageLost
+    ? 'The page is no longer open. Reopen it before starting a run.'
+    : null;
+
   const handleOpen = async (url, viewport, headless) => {
     setBusy(true);
     try {
@@ -783,6 +791,7 @@ export function WebWorkspace({
               currentStep={agent.currentStep}
               maxSteps={agent.maxSteps}
               runId={agent.runId}
+              cannotRun={cannotRun}
               onStart={startAgent}
               onWriteScenarios={(b) => setWriteBrief(b || '')}
               onStop={agent.stop}

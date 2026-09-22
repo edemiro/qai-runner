@@ -6927,3 +6927,23 @@ textarea,
   .scenario-step { grid-template-columns: 1fr; }
   .scenario-step-verdict { justify-self: start; }
 }
+
+/* A run that cannot start, said where the run would be started rather than
+   after it has failed a step at a time. */
+.composer-blocked {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--danger, #f87171) 35%, transparent);
+  background: color-mix(in srgb, var(--danger, #f87171) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.composer-blocked > svg { color: var(--danger, #f87171); flex: none; }
+
+.action-chip:disabled { opacity: 0.4; cursor: not-allowed; }

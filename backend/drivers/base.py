@@ -73,4 +73,15 @@ class UITarget(Protocol):
         """Metadata recorded on every run this target produces."""
         ...
 
+    def is_alive(self) -> bool:
+        """Is there still a screen behind this session?
+
+        A crashed page and a device whose session has gone answer every request
+        the same way a slow one does, so nothing downstream can tell them apart
+        without asking. Both drivers implement it; it is declared here because
+        a run now refuses to start without it, and a driver that quietly lacked
+        it would fail at the moment it was needed rather than at import.
+        """
+        ...
+
     async def close(self) -> None: ...

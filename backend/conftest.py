@@ -61,3 +61,19 @@ def _assertions_do_not_wait():
         yield
     finally:
         agent.ASSERT_WAIT_SECONDS = original
+
+
+@pytest.fixture(autouse=True)
+def _the_first_screen_is_already_there():
+    """A fake target answers the moment it is asked.
+
+    A run waits for its first screen before spending a model call on it, which
+    against a real page is a second or two and against a fixture is the whole
+    window, once per test that starts a run.
+    """
+    original = agent.FIRST_SCREEN_SECONDS
+    agent.FIRST_SCREEN_SECONDS = 0.0
+    try:
+        yield
+    finally:
+        agent.FIRST_SCREEN_SECONDS = original

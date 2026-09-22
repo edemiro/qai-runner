@@ -171,6 +171,12 @@ class FakeTarget:
     async def element_at(self, x, y):
         return None
 
+    # Set False to stand in for a page that was closed or crashed.
+    alive = True
+
+    def is_alive(self):
+        return self.alive
+
     def describe(self):
         return {"kind": self.kind, "platform": "Fake", "name": "fake",
                 "udid": "fake", "appId": None}
@@ -499,6 +505,7 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
         class Target:
             kind, session_id = "web", "written-scenario"
             def describe(self): return {"name": "t", "platform": "Web"}
+            def is_alive(self): return True
             async def snapshot(self): return Snapshot()
             async def screenshot(self): return None
 
@@ -621,6 +628,9 @@ class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
             def describe(self):
                 return {"name": "t", "platform": "Web"}
 
+            def is_alive(self):
+                return True
+
             async def snapshot(self):
                 return Snapshot()
 
@@ -720,6 +730,7 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         class Target:
             kind, session_id = "web", "replay-test"
             def describe(self): return {"name": "t", "platform": "Web"}
+            def is_alive(self): return True
             async def snapshot(self): return Snapshot()
             async def screenshot(self): return None
 
@@ -1317,6 +1328,100 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class NotStartingAgainstAScreenThatIsNotThere(unittest.IsolatedAsyncioTestCase):
+    """A closed page answered every action with "the page is gone" and the
+    model kept being asked what to do about it — a whole scenario's worth of
+    calls spent on a browser that was not there. And a page still painting
+    looks to the model exactly like a page with nothing on it.
+    """
+
+    STEPS = [{"action": "Tek yön seç", "expected": "Tek yön seçilidir"}]
+
+    def _provider(self, asked):
+        class Provider:
+            id, label = "fake", "Fake"
+
+            async def stream(self, *a, **k):
+                asked.append(1)
+                yield ('```json\n{"type":"action","action":"step_done",'
+                       '"value":"pass"}\n```')
+
+        return Provider()
+
+    async def _run(self, target):
+        asked = []
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: self._provider(asked)), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                target, "senaryo", steps=self.STEPS,
+                session_state=agent.AgentSession(),
+            ):
+                events.append(json.loads(line))
+        return events, asked
+
+    async def test_a_closed_page_spends_nothing(self):
+        target = FakeTarget(_manager())
+        target.alive = False
+        events, asked = await self._run(target)
+        self.assertEqual(asked, [], "the model was never asked")
+        errors = [e for e in events if e["event"] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("no longer open", errors[0]["message"])
+        self.assertFalse([e for e in events if e["event"] == "run_started"],
+                         "and no run was opened for it")
+
+    async def test_a_page_that_never_renders_spends_nothing(self):
+        """Alive, but nothing on it — the case the screenshot showed."""
+        class Blank:
+            snapshot_id = "s"
+            def get_optimized_tree_for_llm(self): return {}
+            def visible_text(self): return []
+
+        target = FakeTarget(Blank())
+        events, asked = await self._run(target)
+        self.assertEqual(asked, [], "the model was never asked")
+        errors = [e for e in events if e["event"] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("Nothing had rendered", errors[0]["message"])
+        # Recorded, because pressing Run and getting nothing is a thing to find
+        # in the history later.
+        self.assertTrue([e for e in events if e["event"] == "run_started"])
+        closed = [e for e in events if e["event"] == "run_closed"]
+        self.assertEqual(closed[-1]["status"], "failed")
+
+    async def test_a_page_that_dies_while_being_waited_for_says_so(self):
+        target = FakeTarget(_manager())
+
+        class Dies:
+            def __init__(self): self.n = 0
+            def __call__(self):
+                self.n += 1
+                return self.n < 2
+
+        target.is_alive = Dies()
+        with patch.object(agent, "FIRST_SCREEN_SECONDS", 5.0), \
+             patch("asyncio.sleep", new=AsyncMock()):
+            events, asked = await self._run(target)
+        self.assertEqual(asked, [])
+        errors = [e for e in events if e["event"] == "error"]
+        self.assertIn("closed before the run could read it", errors[0]["message"])
+
+    async def test_a_screen_that_is_there_runs_as_it_always_did(self):
+        """The gate must not become a third way for a run to not happen."""
+        events, asked = await self._run(FakeTarget(_manager()))
+        self.assertTrue(asked, "the model was asked")
+        self.assertTrue([e for e in events if e["event"] == "scenario_step_started"],
+                        "and the scenario got as far as opening its first step")
+        self.assertFalse(
+            [e for e in events if e["event"] == "error"],
+            "with nothing refused on the way in",
+        )
+
+
 class ACheckThatWasAlreadyTrueProvesNothing(unittest.TestCase):
     """Found on the swap control, and it had eight scenarios in the suite.
 
@@ -1431,6 +1536,9 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
 
             def describe(self):
                 return {"name": "t", "platform": "Web"}
+
+            def is_alive(self):
+                return True
 
             async def snapshot(self):
                 return Snapshot()
