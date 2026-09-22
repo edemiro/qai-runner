@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Ban, Bug, CheckCircle2, ChevronRight, ClipboardList, Clock, Download, Loader2, Radio, Square,
-  Trash2, X, XCircle,
+  Ban, Bug, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock, Download, Loader2,
+  Radio, Search, Square, Trash2, X, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
-import { DEFAULT_PLATFORM, PlatformTabs, PlatformTag } from '../components/PlatformTabs';
+import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { OS_TABS, matchesOs } from '../lib/platforms';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -31,16 +31,28 @@ const VERDICT = {
   cancelled: { icon: Ban, className: 'verdict-cancelled', label: 'Stopped' },
 };
 
-function Verdict({ status }) {
+/* `of` says whose verdict this is. The same badge stood for a whole execution
+   on a list row and for one scenario on a result row, in the same shape and
+   colour a few centimetres apart, so a red execution and a red scenario read as
+   the same fact. The execution's is the quieter of the two: it is a summary of
+   the rows, and the rows are the subject. */
+function Verdict({ status, of = 'scenario' }) {
   const shape = VERDICT[status] || { icon: Clock, className: 'verdict-other', label: status || '—' };
   const Icon = shape.icon;
   return (
-    <span className={`verdict ${shape.className}`}>
+    <span className={`verdict ${shape.className} ${of === 'execution' ? 'verdict-summary' : ''}`}>
       <Icon size={13} className={status === 'running' ? 'spin' : ''} />
       {shape.label}
     </span>
   );
 }
+
+const STATUS_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'passed', label: 'Passed' },
+  { id: 'failed', label: 'Failed' },
+  { id: 'running', label: 'Running' },
+];
 
 function when(seconds) {
   if (!seconds) return '—';
@@ -90,9 +102,22 @@ export function ExecutionsPage({
     ios: onPlatform.filter((e) => e.os !== 'android').length,
     android: onPlatform.filter((e) => e.os !== 'ios').length,
   };
-  const visible = platform === 'mobile'
+  const onOs = platform === 'mobile'
     ? onPlatform.filter((e) => matchesOs(e, os))
     : onPlatform;
+
+  /* Fifty executions arrive in this list and the tabs were the only way to cut
+     it, which is no way to find last Tuesday's run of one Test Set among ten
+     runs of the others. Name and verdict are what anyone says out loud when
+     they are looking for one. */
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const needle = search.trim().toLocaleLowerCase('tr');
+  const visible = onOs.filter((item) => {
+    if (statusFilter !== 'all' && item.status !== statusFilter) return false;
+    if (!needle) return true;
+    return (item.suite_name || '').toLocaleLowerCase('tr').includes(needle);
+  });
 
   /* Derived rather than synced through an effect: switching platform with an
      execution of the other one open used to leave the detail pane reporting a
@@ -145,6 +170,30 @@ export function ExecutionsPage({
   // Which scenario's bug is being composed, and the draft once it arrives.
   const [draft, setDraft] = useState(null);
   const [drafting, setDrafting] = useState(null);
+
+  /* Which scenarios have been opened, and what their steps turned out to be.
+     Fetched on the first open rather than with the execution: a twenty-scenario
+     run would be twenty requests for steps nobody has asked to see, and the
+     page is read verdict-first — most rows are never opened at all. */
+  const [openRuns, setOpenRuns] = useState(() => new Set());
+  const [runSteps, setRunSteps] = useState({});
+
+  const toggleRun = async (runId) => {
+    setOpenRuns((current) => {
+      const next = new Set(current);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+    if (runSteps[runId] !== undefined) return;
+    setRunSteps((current) => ({ ...current, [runId]: 'loading' }));
+    try {
+      const data = await api.run(runId);
+      setRunSteps((current) => ({ ...current, [runId]: data.scenarioSteps || [] }));
+    } catch (err) {
+      setRunSteps((current) => ({ ...current, [runId]: { error: err.message } }));
+    }
+  };
 
   /* Compose a bug from the failed scenario and show it before saving. The run
      already holds the step that failed, what it was meant to prove, what the
@@ -280,6 +329,36 @@ export function ExecutionsPage({
 
       <div className="suites-layout">
         <aside className="suite-list card">
+          {/* Above the list rather than below it: the reason to reach for this
+              is that the list is too long to scroll, so a filter you have to
+              scroll to is no filter. */}
+          {executions.length > 0 && (
+            <div className="execution-filters">
+              <label className="execution-search">
+                <Search size={13} />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Find a Test Set"
+                  aria-label="Filter executions by Test Set name"
+                />
+              </label>
+              <div className="execution-status-filter" role="group" aria-label="Filter by verdict">
+                {STATUS_FILTERS.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`chip ${statusFilter === option.id ? 'on' : ''}`}
+                    onClick={() => setStatusFilter(option.id)}
+                    aria-pressed={statusFilter === option.id}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {loading ? (
             <p className="muted small">Loading…</p>
           ) : executions.length === 0 ? (
@@ -288,9 +367,20 @@ export function ExecutionsPage({
               and a report CI can read.
             </EmptyState>
           ) : visible.length === 0 ? (
-            <EmptyState icon={ClipboardList} title={`No ${platform} executions`} compact>
-              Nothing has been run on {platform} yet.
-            </EmptyState>
+            /* Two different nothings: a platform that has never been run, and a
+               filter that happens to match none of what is there. Told apart,
+               because the second is undone by clearing a box and the first is
+               not. */
+            (needle || statusFilter !== 'all') ? (
+              <EmptyState icon={Search} title="Nothing matches" compact>
+                {onOs.length} execution{onOs.length === 1 ? '' : 's'} here, none
+                of them matching what you typed.
+              </EmptyState>
+            ) : (
+              <EmptyState icon={ClipboardList} title={`No ${platform} executions`} compact>
+                Nothing has been run on {platform} yet.
+              </EmptyState>
+            )
           ) : (
             <ul className="execution-list">
               {visible.map((item) => (
@@ -309,7 +399,7 @@ export function ExecutionsPage({
                     {/* Status, not just a score: a failed execution that never
                         got a scenario off the ground reads 0/0, exactly like
                         one that is still starting. */}
-                    <Verdict status={item.status} />
+                    <Verdict status={item.status} of="execution" />
                     <span className={`score ${item.passed === item.total ? 'all-pass' : 'has-fail'}`}>
                       {item.passed}/{item.total}
                     </span>
@@ -339,8 +429,9 @@ export function ExecutionsPage({
               <div className="card-head">
                 <div className="execution-headline">
                   <h2 className="card-title">{execution.suite_name || 'Test Set'}</h2>
+                  {/* No platform badge: the tab above this is set to it, and a
+                      page cannot be showing a mobile execution under Web. */}
                   <p className="muted small execution-meta">
-                    <PlatformTag kind={execution.kind} />
                     {when(execution.started_at)} · {duration(execution.duration_ms)} ·{' '}
                     {execution.workers} worker{execution.workers === 1 ? '' : 's'}
                   </p>
@@ -392,20 +483,14 @@ export function ExecutionsPage({
                       {stopping ? 'Stopping…' : 'Stop'}
                     </button>
                   )}
-                  <a
-                    className="btn btn-sm"
-                    href={api.suiteReportUrl(execution.id, 'junit')}
-                    download
-                  >
-                    <Download size={14} /> JUnit
-                  </a>
-                  <a
-                    className="btn btn-sm"
-                    href={api.suiteReportUrl(execution.id, 'json')}
-                    download
-                  >
-                    <Download size={14} /> JSON
-                  </a>
+                  {/* Exports, not actions. They stood at the same weight as
+                      Stop and Delete, so four buttons competed where one of
+                      them ends a running job and another destroys a record. */}
+                  <span className="execution-exports">
+                    <Download size={13} />
+                    <a href={api.suiteReportUrl(execution.id, 'junit')} download>JUnit</a>
+                    <a href={api.suiteReportUrl(execution.id, 'json')} download>JSON</a>
+                  </span>
                   <button
                     className="btn-icon danger"
                     onClick={() => removeExecution(execution.id)}
@@ -440,6 +525,16 @@ export function ExecutionsPage({
               <ul className="scenario-results">
                 {execution.runs.map((run, index) => (
                   <li key={run.id} className={`scenario-result ${run.status}`}>
+                    <button
+                      className="scenario-open"
+                      onClick={() => toggleRun(run.id)}
+                      aria-expanded={openRuns.has(run.id)}
+                      title="Show the steps this scenario ran"
+                    >
+                      {openRuns.has(run.id)
+                        ? <ChevronDown size={13} />
+                        : <ChevronRight size={13} />}
+                    </button>
                     <span className="case-idx" title="Scenario number in the Test Set">
                       #{run.case_idx ?? index + 1}
                     </span>
@@ -480,6 +575,55 @@ export function ExecutionsPage({
                     >
                       Details
                     </button>
+
+                    {/* The scenario as it was written, with what each step
+                        proved. "Which step went wrong and what did it say" is
+                        the first question a red row raises, and answering it
+                        used to mean leaving the page. Screenshots and the
+                        agent's own actions stay in the full report — this is
+                        the scenario, not the transcript. */}
+                    {openRuns.has(run.id) && (
+                      <div className="scenario-steps">
+                        {runSteps[run.id] === 'loading' && (
+                          <p className="muted small">
+                            <Loader2 size={12} className="spin" /> Reading the run…
+                          </p>
+                        )}
+                        {runSteps[run.id]?.error && (
+                          <p className="muted small">{runSteps[run.id].error}</p>
+                        )}
+                        {Array.isArray(runSteps[run.id]) && (
+                          runSteps[run.id].length === 0 ? (
+                            <p className="muted small">
+                              This scenario recorded no steps — it ended before the
+                              first one opened.
+                            </p>
+                          ) : (
+                            <ol className="scenario-step-list">
+                              {runSteps[run.id].map((step) => (
+                                <li key={step.id} className={`scenario-step ${step.status}`}>
+                                  <span className="scenario-step-verdict">
+                                    <Verdict status={step.status} />
+                                  </span>
+                                  <div>
+                                    <span className="scenario-step-action">{step.action}</span>
+                                    {step.expected && (
+                                      <span className="scenario-step-expected">
+                                        → {step.expected}
+                                      </span>
+                                    )}
+                                    {step.message && (
+                                      <span className="scenario-step-message">{step.message}</span>
+                                    )}
+                                  </div>
+                                  <span className="muted small">{duration(step.duration_ms)}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          )
+                        )}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   ChevronDown,
@@ -235,8 +235,20 @@ export function SuitesPage({
   const [newSuiteModule, setNewSuiteModule] = useState('');
   const [draft, setDraft] = useState(EMPTY_CASE);
   const [datasetError, setDatasetError] = useState(null);
+
+  /* Everything that writes something new lives at the foot of the page, folded
+     away. A tester opens a set to run it and to read what it covers; the forms
+     that name a set and write scenarios into it were the first thing on screen,
+     and pushed the scenarios they came for a thousand pixels down. */
+  const [showAdd, setShowAdd] = useState(false);
   const [showCaseForm, setShowCaseForm] = useState(false);
-  const [showGenerator, setShowGenerator] = useState(false);
+  const [showNewSet, setShowNewSet] = useState(false);
+  /* Settings of a run rather than the decision to make one, and reference
+     material rather than the job: closed until somebody asks. */
+  const [showOptions, setShowOptions] = useState(false);
+  const [showCi, setShowCi] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const addRef = useRef(null);
 
   /* Selection is held by case id, not by Test Set, and survives switching sets.
      That is what makes "combine two sets into one execution" the same gesture
@@ -296,6 +308,25 @@ export function SuitesPage({
       if (next.has(caseId)) next.delete(caseId); else next.add(caseId);
       return next;
     });
+  };
+
+  /* The builds belong to the phone that was chosen, so choosing another one
+     invalidates them. In one place because the run bar and the generator set
+     the same phone, and a copy of this that forgot a line is how the two ended
+     up naming different builds. */
+  const pickDevice = (value) => {
+    setDeviceUdid(value);
+    setDeviceAppId('');
+    setDeviceBuilds([]);
+    setLoadingBuilds(Boolean(value));
+  };
+
+  /* The section is at the foot of a page that is mostly scenario list, so the
+     button in the set's header takes you to it rather than silently unfolding
+     something two screens down. */
+  const openAdd = () => {
+    setShowAdd(true);
+    addRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const counts = {
@@ -791,80 +822,12 @@ export function SuitesPage({
         )}
       </header>
 
-      {/* Writing the scenarios is what this page is for, so it is the first
-          thing on it rather than a button inside whichever set happens to be
-          open. Name the module, or hand it the analysis document the module
-          was specified in, and the scenarios come back for review. */}
-      <section className="generate-hero card">
-        <div className="generate-hero-head">
-          <Sparkles size={17} />
-          <div>
-            <h2>Write scenarios</h2>
-            <p className="muted small">
-              Name a module — “Uçuş Arama”, “Check-in” — or upload the analysis
-              document it was specified in. Nothing is saved until you have read it.
-            </p>
-          </div>
-        </div>
-        <ScenarioGenerator
-          kind={platform}
-          os={platform === 'mobile' ? os : null}
-          onConnectDevice={onConnectDevice}
-          devices={devices}
-          deviceUdid={runUdid}
-          deviceAppId={deviceAppId}
-          deviceBuilds={deviceBuilds}
-          loadingBuilds={loadingBuilds}
-          onPickDevice={(value) => {
-            setDeviceUdid(value);
-            setDeviceAppId('');
-            setDeviceBuilds([]);
-            setLoadingBuilds(Boolean(value));
-          }}
-          onPickBuild={setDeviceAppId}
-          onAdded={loadSuites}
-          onOpenExecution={onOpenExecution}
-        />
-      </section>
-
       <div className="suites-layout">
         {/* ------------------------------------------------------- list ---- */}
         <aside className="suite-list card">
-          <form className="suite-create" onSubmit={createSuite}>
-            <input
-              value={newSuiteName}
-              onChange={(event) => setNewSuiteName(event.target.value)}
-              placeholder="New test set name"
-              aria-label="New test set name"
-            />
-            <input
-              className="suite-create-module"
-              value={newSuiteModule}
-              onChange={(event) => setNewSuiteModule(event.target.value)}
-              placeholder="Module (optional) — e.g. Uçuş Arama"
-              aria-label="Module the new test set belongs to"
-              title="Sets sharing a module are listed together"
-            />
-            {/* Chosen at creation, not later: the platform decides which
-                scenarios can go in and which device can run them, so a set
-                that changed platform afterwards would strand its own cases. */}
-            <select
-              value={newSuiteTarget}
-              onChange={(event) => setNewSuiteKind(event.target.value)}
-              aria-label="Platform for the new test set"
-            >
-              <option value="web">Web</option>
-              <option value="ios">iOS</option>
-              <option value="android">Android</option>
-            </select>
-            <button className="btn btn-primary btn-sm" type="submit" disabled={!newSuiteName.trim()}>
-              <Plus size={14} /> Add
-            </button>
-          </form>
-
           {suites.length === 0 ? (
             <EmptyState icon={Layers} title="No Test Sets yet" compact>
-              Name one above to get started, then generate scenarios into it — or
+              Name one below to get started, then generate scenarios into it — or
               save a run you already like from Test Runs.
             </EmptyState>
           ) : visible.length === 0 ? (
@@ -915,85 +878,111 @@ export function SuitesPage({
                 ))}
             </ul>
           )}
+
+          {/* A set is named once and read from every day after, so the form
+              that names one sits under the list it adds to. */}
+          <div className="suite-new">
+            <button
+              type="button"
+              className="card-toggle sub"
+              onClick={() => setShowNewSet((value) => !value)}
+              aria-expanded={showNewSet}
+            >
+              {showNewSet ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              New Test Set
+            </button>
+            {showNewSet && (
+              <form className="suite-create" onSubmit={createSuite}>
+                <input
+                  value={newSuiteName}
+                  onChange={(event) => setNewSuiteName(event.target.value)}
+                  placeholder="New test set name"
+                  aria-label="New test set name"
+                />
+                <input
+                  className="suite-create-module"
+                  value={newSuiteModule}
+                  onChange={(event) => setNewSuiteModule(event.target.value)}
+                  placeholder="Module (optional) — e.g. Uçuş Arama"
+                  aria-label="Module the new test set belongs to"
+                  title="Sets sharing a module are listed together"
+                />
+                {/* Chosen at creation, not later: the platform decides which
+                    scenarios can go in and which device can run them, so a set
+                    that changed platform afterwards would strand its own cases. */}
+                <select
+                  value={newSuiteTarget}
+                  onChange={(event) => setNewSuiteKind(event.target.value)}
+                  aria-label="Platform for the new test set"
+                >
+                  <option value="web">Web</option>
+                  <option value="ios">iOS</option>
+                  <option value="android">Android</option>
+                </select>
+                <button className="btn btn-primary btn-sm" type="submit" disabled={!newSuiteName.trim()}>
+                  <Plus size={14} /> Add
+                </button>
+              </form>
+            )}
+          </div>
         </aside>
 
         {/* ---------------------------------------------------- detail ----- */}
-        {!suite ? (
-          <section className="card suite-detail">
-            <EmptyState icon={Layers} title="Nothing selected">
-              {suites.length
-                ? 'Pick a Test Set on the left to see and run its scenarios.'
-                : 'Create a Test Set to start collecting scenarios.'}
-            </EmptyState>
-          </section>
-        ) : (
-          <section className="suite-detail">
+        <section className="suite-detail">
+          {!suite ? (
             <div className="card">
-              <div className="card-head">
-                <div>
-                  {suite.module && (
-                    <div className="suite-module-label" title="Module this set belongs to">
-                      {suite.module}
-                    </div>
-                  )}
-                  <h2 className="card-title">{suite.name}</h2>
-                  <p className="muted small">
-                    {suite.cases.filter((c) => c.enabled).length} enabled ·{' '}
-                    {executionCount} execution{executionCount === 1 ? '' : 's'}
-                    {executionCount !== suite.cases.filter((c) => c.enabled).length
-                      && ' (dataset rows expand)'}
-                  </p>
-                  <PriorityStrip cases={suite.cases} />
+              <EmptyState icon={Layers} title="Nothing selected">
+                {suites.length
+                  ? 'Pick a Test Set on the left to see and run its scenarios.'
+                  : 'Create a Test Set to start collecting scenarios.'}
+              </EmptyState>
+            </div>
+          ) : (
+            <>
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    {suite.module && (
+                      <div className="suite-module-label" title="Module this set belongs to">
+                        {suite.module}
+                      </div>
+                    )}
+                    <h2 className="card-title">{suite.name}</h2>
+                    <p className="muted small">
+                      {suite.cases.filter((c) => c.enabled).length} enabled ·{' '}
+                      {executionCount} execution{executionCount === 1 ? '' : 's'}
+                      {executionCount !== suite.cases.filter((c) => c.enabled).length
+                        && ' (dataset rows expand)'}
+                    </p>
+                    <PriorityStrip cases={suite.cases} />
+                  </div>
+                  <div className="row-actions">
+                    <button className="btn btn-sm" onClick={pickAllInSet} disabled={!suite.cases.length}>
+                      Select all
+                    </button>
+                    <button className="btn btn-sm" onClick={openAdd}>
+                      <Plus size={14} /> Add scenarios
+                    </button>
+                    <button className="btn btn-danger btn-sm" onClick={removeSuite}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div className="row-actions">
-                  <button className="btn btn-sm" onClick={pickAllInSet} disabled={!suite.cases.length}>
-                    Select all
-                  </button>
-                  <button className="btn btn-sm" onClick={() => setShowGenerator((v) => !v)}>
-                    <Sparkles size={14} /> Generate
-                  </button>
-                  <button className="btn btn-sm" onClick={() => setShowCaseForm((v) => !v)}>
-                    <Plus size={14} /> Case
-                  </button>
-                  <button className="btn btn-danger btn-sm" onClick={removeSuite}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
 
-              {picked.size > 0 && (
-                <div className="pick-bar">
-                  <span className="pick-count">
-                    <strong>{picked.size}</strong> scenario{picked.size === 1 ? '' : 's'} picked
-                    {pickedSets.size > 1 && ` from ${pickedSets.size} Test Sets`}
-                  </span>
-                  <input
-                    className="pick-name"
-                    type="text"
-                    value={executionName}
-                    onChange={(event) => setExecutionName(event.target.value)}
-                    placeholder={pickedSets.size > 1
-                      ? `Execution name — e.g. “${[...pickedSets].join(' + ')}”`
-                      : 'Execution name — required'}
-                    disabled={running}
-                  />
-
-                  {/* The same target control as the Run panel below. Without it
-                      here, picking mobile scenarios and pressing Run asked for
-                      a device with nothing on screen to choose one with. */}
+                {/* Where this run points, and the button that starts it — the
+                    first thing under the set's name because it is what the page
+                    is opened to do. A set carries the address each scenario was
+                    written against and whatever phone happened to be plugged in;
+                    neither is a choice anyone made at the moment they pressed
+                    Run, which is when it matters. */}
+                <div className="run-bar">
                   <RunTarget
-                    compact
                     isMobile={isMobileSet}
                     os={runOs}
                     devices={devices}
                     sessions={sessions}
                     deviceUdid={runUdid}
-                    onDevice={(value) => {
-                      setDeviceUdid(value);
-                      setDeviceAppId('');
-                      setDeviceBuilds([]);
-                      setLoadingBuilds(Boolean(value));
-                    }}
+                    onDevice={pickDevice}
                     deviceAppId={deviceAppId}
                     onBuild={setDeviceAppId}
                     deviceBuilds={deviceBuilds}
@@ -1003,582 +992,662 @@ export function SuitesPage({
                     onEnv={setEnvUrl}
                   />
 
-                  {/* Disabled rather than warned about after the click: both
-                      the name and, on mobile, the device are required, so say
-                      so before the button is pressed rather than after. */}
+                  {/* Workers, tags and the recordings are settings of a run, not
+                      the decision to make one: they keep their value between runs
+                      and are changed once in a while, so they fold away. */}
                   <button
-                    className="btn btn-primary btn-sm"
-                    onClick={runPicked}
-                    disabled={running || connecting || !executionName.trim()
-                      || (isMobileSet && !runUdid)}
-                    title={
-                      !executionName.trim() ? 'Name the execution first'
-                        : (isMobileSet && !runUdid) ? 'Pick the device to run on'
-                          : undefined
-                    }
+                    type="button"
+                    className="run-bar-options"
+                    onClick={() => setShowOptions((value) => !value)}
+                    aria-expanded={showOptions}
                   >
-                    <Play size={14} /> Run execution
-                  </button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Map())} disabled={running}>
-                    Clear
+                    {showOptions ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    Options
                   </button>
 
-                  {/* Splitting a set: the picked scenarios go to another set,
-                      existing or named here, so one set that collected several
-                      requests can be broken back into one set per request. */}
-                  <div className="pick-move">
-                    <select
-                      value={moveTarget}
-                      onChange={(event) => setMoveTarget(event.target.value)}
-                      disabled={moving || running}
-                      aria-label="Test Set to move the picked scenarios into"
-                    >
-                      <option value="">Move to…</option>
-                      {suites.filter((s) => s.id !== suite.id && s.kind === suite.kind).map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.module ? `${s.module} / ` : ''}{s.name}
-                        </option>
-                      ))}
-                      <option value={MOVE_NEW}>＋ New Test Set…</option>
-                    </select>
-                    {moveTarget === MOVE_NEW && (
-                      <>
-                        <input
-                          type="text"
-                          value={moveNewName}
-                          onChange={(event) => setMoveNewName(event.target.value)}
-                          placeholder="New set name — e.g. Tek yön uçuş ara"
-                          disabled={moving}
-                        />
-                        <input
-                          type="text"
-                          value={moveNewModule}
-                          onChange={(event) => setMoveNewModule(event.target.value)}
-                          placeholder={suite.module ? `Module — ${suite.module}` : 'Module (optional)'}
-                          disabled={moving}
-                        />
-                      </>
-                    )}
-                    {moveTarget && (
-                      <button className="btn btn-sm" onClick={movePicked} disabled={moving || running}>
-                        {moving ? <Loader2 size={14} className="spin" /> : <ArrowRight size={14} />}
-                        Move {picked.size}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {showGenerator && (
-                <ScenarioGenerator
-                  suiteId={suite.id}
-                  kind={suite.kind || 'web'}
-                  os={suite.os || (isMobileSet ? os : null)}
-                  onConnectDevice={onConnectDevice}
-                  onAdded={async () => {
-                    setShowGenerator(false);
-                    setSuite(await api.suite(suite.id));
-                    await loadSuites();
-                  }}
-                />
-              )}
-
-              {showCaseForm && (
-                <form className="case-form" onSubmit={addCase}>
-                  <div className="field-row">
-                    <label>
-                      Name
-                      <input
-                        value={draft.name}
-                        onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                        placeholder="Sepete ürün eklenebiliyor"
-                      />
-                    </label>
-                    <label>
-                      URL
-                      <input
-                        value={draft.url}
-                        onChange={(e) => setDraft({ ...draft, url: e.target.value })}
-                        placeholder="https://example.com/"
-                      />
-                    </label>
-                  </div>
-
-                  <label>
-                    Goal
-                    <textarea
-                      rows={3}
-                      value={draft.goal}
-                      onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
-                      placeholder={'Ara kutusuna {{terim}} yaz, Ara\'ya bas, sonuç çıktığını doğrula.'}
-                    />
-                    <span className="field-hint">
-                      Use <code>{'{{placeholders}}'}</code> to pull values from the dataset below.
-                    </span>
-                  </label>
-
-                  <StepEditor
-                    steps={draft.steps}
-                    onChange={(steps) => setDraft({ ...draft, steps })}
-                  />
-
-                  <div className="field-row">
-                    <label>
-                      Tags
-                      <input
-                        value={draft.tags}
-                        onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
-                        placeholder="smoke, checkout"
-                      />
-                    </label>
-                    <label>
-                      Dataset (CSV or JSON, optional)
-                      <textarea
-                        rows={3}
-                        value={draft.dataset}
-                        onChange={(e) => {
-                          setDraft({ ...draft, dataset: e.target.value });
-                          setDatasetError(null);
-                        }}
-                        placeholder={'terim\nistanbul\nankara'}
-                      />
-                      {datasetError && <span className="field-error">{datasetError}</span>}
-                    </label>
-                  </div>
-
-                  <div className="row-actions end">
-                    <button type="button" className="btn btn-sm" onClick={() => setShowCaseForm(false)}>
-                      Cancel
+                  {running ? (
+                    <button className="btn btn-primary btn-sm" disabled>
+                      <Loader2 size={14} className="spin" /> Starting…
                     </button>
-                    <button type="submit" className="btn btn-primary btn-sm">Add case</button>
-                  </div>
-                </form>
-              )}
-
-              {suite.cases.length === 0 ? (
-                <p className="muted small">No cases yet.</p>
-              ) : (
-                <ul className="case-list">
-                  {suite.cases.map((item) => (
-                    /* A card per scenario rather than a table row. These titles
-                       are a full standard-format sentence; on one line they were
-                       clipped to an ellipsis, which hides exactly the part that
-                       tells two scenarios apart. Given its own block the title
-                       wraps in full, and every scenario is bounded by its own
-                       edge instead of a hairline shared with its neighbour. */
-                    <li
-                      key={item.id}
-                      className={`case-card ${item.enabled ? '' : 'disabled'} ${item.needsData ? 'awaiting' : ''}`}
+                  ) : (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={runSuite}
+                      disabled={executionCount === 0}
                     >
-                      <div className="case-card-head">
-                        <input
-                          type="checkbox"
-                          checked={picked.has(item.id)}
-                          onChange={() => togglePick(item)}
-                          disabled={item.needsData}
-                          aria-label={`Select ${item.name}`}
-                          title={item.needsData
-                            ? 'Waiting on its precondition data — fill that in first'
-                            : 'Pick this scenario for an execution'}
-                        />
-                        <span className="case-idx" title="Scenario number in this Test Set">
-                          #{item.idx}
-                        </span>
-                        <h3 className="case-name">{item.name}</h3>
-                        <div className="case-meta">
-                          {/* The step count lives on the toggle now, so it is not
-                              repeated here. */}
-                          {item.priority && (
-                            <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
-                              {item.priority}
-                            </span>
-                          )}
-                          {item.layer && <span className="layer-tag">{item.layer}</span>}
-                          {item.scenario_type && (
-                            <span className={`type-tag t-${item.scenario_type.toLowerCase()}`}>
-                              {item.scenario_type}
-                            </span>
-                          )}
-                          {item.dataset && <span className="pill">×{item.dataset.length}</span>}
+                      <Play size={14} /> Run suite
+                    </button>
+                  )}
+                </div>
 
-                          {/* What the next run already knows how to do. A step
-                              with a recording is replayed rather than reasoned
-                              about, so a fully recorded scenario runs without
-                              costing a single model call — and a tester should
-                              be able to see that on the scenario rather than
-                              work it out from a bill. */}
-                          {item.recordedSteps > 0 && (
-                            <span
-                              className={`recorded-tag ${
-                                item.recordedSteps === item.stepCount ? 'full' : 'partial'
-                              }`}
-                              title={item.recordedSteps === item.stepCount
-                                ? 'Every step was recorded on a green run — the next run replays it and asks the model nothing'
-                                : `${item.recordedSteps} of ${item.stepCount} steps replay from a recording; the rest are worked out again`}
+                {showOptions && (
+                  <div className="run-options">
+                    <label>
+                      Workers
+                      <input
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={options.workers}
+                        onChange={(e) => setOptions({ ...options, workers: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Only these tags
+                      <input
+                        value={options.tags}
+                        onChange={(e) => setOptions({ ...options, tags: e.target.value })}
+                        placeholder="smoke"
+                      />
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={options.headless}
+                        onChange={(e) => setOptions({ ...options, headless: e.target.checked })}
+                      />
+                      Headless
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={options.trace}
+                        onChange={(e) => setOptions({ ...options, trace: e.target.checked })}
+                      />
+                      Record trace
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={options.recordVideo}
+                        onChange={(e) => setOptions({ ...options, recordVideo: e.target.checked })}
+                      />
+                      Record video
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={options.failOnPageError}
+                        onChange={(e) => setOptions({ ...options, failOnPageError: e.target.checked })}
+                      />
+                      Fail on console/network errors
+                    </label>
+                  </div>
+                )}
+
+                {picked.size > 0 && (
+                  <div className="pick-bar">
+                    <span className="pick-count">
+                      <strong>{picked.size}</strong> scenario{picked.size === 1 ? '' : 's'} picked
+                      {pickedSets.size > 1 && ` from ${pickedSets.size} Test Sets`}
+                    </span>
+                    <input
+                      className="pick-name"
+                      type="text"
+                      value={executionName}
+                      onChange={(event) => setExecutionName(event.target.value)}
+                      placeholder={pickedSets.size > 1
+                        ? `Execution name — e.g. “${[...pickedSets].join(' + ')}”`
+                        : 'Execution name — required'}
+                      disabled={running}
+                    />
+
+                    {/* No target control here: the run bar above this one owns
+                        that choice for the whole page, and it is the same state.
+                        Two of them meant one screen could show NUAT in one place
+                        and PROD in the other, both live. */}
+
+                    {/* Disabled rather than warned about after the click: both
+                        the name and, on mobile, the device are required, so say
+                        so before the button is pressed rather than after. */}
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={runPicked}
+                      disabled={running || connecting || !executionName.trim()
+                        || (isMobileSet && !runUdid)}
+                      title={
+                        !executionName.trim() ? 'Name the execution first'
+                          : (isMobileSet && !runUdid) ? 'Pick the device to run on'
+                            : undefined
+                      }
+                    >
+                      <Play size={14} /> Run execution
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Map())} disabled={running}>
+                      Clear
+                    </button>
+
+                    {/* Splitting a set: the picked scenarios go to another set,
+                        existing or named here, so one set that collected several
+                        requests can be broken back into one set per request. */}
+                    <div className="pick-move">
+                      <select
+                        value={moveTarget}
+                        onChange={(event) => setMoveTarget(event.target.value)}
+                        disabled={moving || running}
+                        aria-label="Test Set to move the picked scenarios into"
+                      >
+                        <option value="">Move to…</option>
+                        {suites.filter((s) => s.id !== suite.id && s.kind === suite.kind).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.module ? `${s.module} / ` : ''}{s.name}
+                          </option>
+                        ))}
+                        <option value={MOVE_NEW}>＋ New Test Set…</option>
+                      </select>
+                      {moveTarget === MOVE_NEW && (
+                        <>
+                          <input
+                            type="text"
+                            value={moveNewName}
+                            onChange={(event) => setMoveNewName(event.target.value)}
+                            placeholder="New set name — e.g. Tek yön uçuş ara"
+                            disabled={moving}
+                          />
+                          <input
+                            type="text"
+                            value={moveNewModule}
+                            onChange={(event) => setMoveNewModule(event.target.value)}
+                            placeholder={suite.module ? `Module — ${suite.module}` : 'Module (optional)'}
+                            disabled={moving}
+                          />
+                        </>
+                      )}
+                      {moveTarget && (
+                        <button className="btn btn-sm" onClick={movePicked} disabled={moving || running}>
+                          {moving ? <Loader2 size={14} className="spin" /> : <ArrowRight size={14} />}
+                          Move {picked.size}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {suite.cases.length === 0 ? (
+                  <p className="muted small">No cases yet.</p>
+                ) : (
+                  <ul className="case-list">
+                    {suite.cases.map((item) => (
+                      /* A card per scenario rather than a table row. These titles
+                         are a full standard-format sentence; on one line they were
+                         clipped to an ellipsis, which hides exactly the part that
+                         tells two scenarios apart. Given its own block the title
+                         wraps in full, and every scenario is bounded by its own
+                         edge instead of a hairline shared with its neighbour. */
+                      <li
+                        key={item.id}
+                        className={`case-card ${item.enabled ? '' : 'disabled'} ${item.needsData ? 'awaiting' : ''}`}
+                      >
+                        <div className="case-card-head">
+                          <input
+                            type="checkbox"
+                            checked={picked.has(item.id)}
+                            onChange={() => togglePick(item)}
+                            disabled={item.needsData}
+                            aria-label={`Select ${item.name}`}
+                            title={item.needsData
+                              ? 'Waiting on its precondition data — fill that in first'
+                              : 'Pick this scenario for an execution'}
+                          />
+                          <span className="case-idx" title="Scenario number in this Test Set">
+                            #{item.idx}
+                          </span>
+                          <h3 className="case-name">{item.name}</h3>
+                          <div className="case-meta">
+                            {/* The step count lives on the toggle now, so it is not
+                                repeated here. */}
+                            {item.priority && (
+                              <span className={`priority-tag p-${item.priority.toLowerCase()}`}>
+                                {item.priority}
+                              </span>
+                            )}
+                            {item.layer && <span className="layer-tag">{item.layer}</span>}
+                            {item.scenario_type && (
+                              <span className={`type-tag t-${item.scenario_type.toLowerCase()}`}>
+                                {item.scenario_type}
+                              </span>
+                            )}
+                            {item.dataset && <span className="pill">×{item.dataset.length}</span>}
+
+                            {/* What the next run already knows how to do. A step
+                                with a recording is replayed rather than reasoned
+                                about, so a fully recorded scenario runs without
+                                costing a single model call — and a tester should
+                                be able to see that on the scenario rather than
+                                work it out from a bill. */}
+                            {item.recordedSteps > 0 && (
+                              <span
+                                className={`recorded-tag ${
+                                  item.recordedSteps === item.stepCount ? 'full' : 'partial'
+                                }`}
+                                title={item.recordedSteps === item.stepCount
+                                  ? 'Every step was recorded on a green run — the next run replays it and asks the model nothing'
+                                  : `${item.recordedSteps} of ${item.stepCount} steps replay from a recording; the rest are worked out again`}
+                              >
+                                <Repeat size={11} />
+                                {item.recordedSteps === item.stepCount
+                                  ? 'Recorded'
+                                  : `Recorded ${item.recordedSteps}/${item.stepCount}`}
+                              </span>
+                            )}
+                            {/* A tag that just repeats the layer is noise — the layer
+                                chip already says it, so it is dropped here. */}
+                            {item.tags
+                              .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
+                              .map((tag) => (
+                                <span key={tag} className="tag">{tag}</span>
+                              ))}
+                          </div>
+                          {/* Actions stay grouped on the right so a long title or a
+                              stack of chips never pushes them onto their own line. */}
+                          <div className="case-actions">
+                          {/* Trying one scenario against the browser or device
+                              already open, without waiting for a whole Test Set
+                              run — this is how a scenario gets debugged while it
+                              is being written. */}
+                          {onRunHere && (
+                            <button
+                              className="btn-icon"
+                              disabled={connecting}
+                              onClick={async () => {
+                                /* Whatever this scenario needs to run, get it —
+                                   the same way pressing Run on the whole set
+                                   does. A web one opens a browser at the chosen
+                                   environment; a mobile one books the phone
+                                   picked in the Run panel, connecting it if it
+                                   is not open yet. Asking the tester to go and
+                                   connect something first was asking for a step
+                                   they had already taken by pressing this. */
+                                const scenario = { ...item, kind: suite.kind || 'web' };
+                                if (!isMobileSet) {
+                                  onRunHere(scenario, { envUrl });
+                                  return;
+                                }
+                                const target = await resolveTarget('mobile');
+                                if (!target) return;
+                                onRunHere(scenario, {
+                                  sessionId: target.deviceSessionId,
+                                });
+                              }}
+                              title={item.steps?.length
+                                ? 'Run here, step by step — connects what it needs'
+                                : 'Run here — connects what it needs'}
+                              aria-label={`Run ${item.name} here`}
                             >
-                              <Repeat size={11} />
-                              {item.recordedSteps === item.stepCount
-                                ? 'Recorded'
-                                : `Recorded ${item.recordedSteps}/${item.stepCount}`}
-                            </span>
+                              <Play size={14} />
+                            </button>
                           )}
-                          {/* A tag that just repeats the layer is noise — the layer
-                              chip already says it, so it is dropped here. */}
-                          {item.tags
-                            .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
-                            .map((tag) => (
-                              <span key={tag} className="tag">{tag}</span>
-                            ))}
-                        </div>
-                        {/* Actions stay grouped on the right so a long title or a
-                            stack of chips never pushes them onto their own line. */}
-                        <div className="case-actions">
-                        {/* Trying one scenario against the browser or device
-                            already open, without waiting for a whole Test Set
-                            run — this is how a scenario gets debugged while it
-                            is being written. */}
-                        {onRunHere && (
+                          {/* Picking and enabling are different decisions: one is
+                              "run this now", the other is "this scenario is out of
+                              service". They get separate controls. */}
                           <button
                             className="btn-icon"
-                            disabled={connecting}
-                            onClick={async () => {
-                              /* Whatever this scenario needs to run, get it —
-                                 the same way pressing Run on the whole set
-                                 does. A web one opens a browser at the chosen
-                                 environment; a mobile one books the phone
-                                 picked in the Run panel, connecting it if it
-                                 is not open yet. Asking the tester to go and
-                                 connect something first was asking for a step
-                                 they had already taken by pressing this. */
-                              const scenario = { ...item, kind: suite.kind || 'web' };
-                              if (!isMobileSet) {
-                                onRunHere(scenario, { envUrl });
-                                return;
-                              }
-                              const target = await resolveTarget('mobile');
-                              if (!target) return;
-                              onRunHere(scenario, {
-                                sessionId: target.deviceSessionId,
-                              });
-                            }}
-                            title={item.steps?.length
-                              ? 'Run here, step by step — connects what it needs'
-                              : 'Run here — connects what it needs'}
-                            aria-label={`Run ${item.name} here`}
+                            onClick={() => toggleCase(item)}
+                            title={item.enabled
+                              ? 'Disable — leave it out of runs'
+                              : 'Enable — include it in runs'}
+                            aria-label={item.enabled ? `Disable ${item.name}` : `Enable ${item.name}`}
                           >
-                            <Play size={14} />
+                            {item.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
                           </button>
-                        )}
-                        {/* Picking and enabling are different decisions: one is
-                            "run this now", the other is "this scenario is out of
-                            service". They get separate controls. */}
-                        <button
-                          className="btn-icon"
-                          onClick={() => toggleCase(item)}
-                          title={item.enabled
-                            ? 'Disable — leave it out of runs'
-                            : 'Enable — include it in runs'}
-                          aria-label={item.enabled ? `Disable ${item.name}` : `Enable ${item.name}`}
-                        >
-                          {item.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
-                        </button>
-                          <button
-                            className="btn-icon danger"
-                            onClick={() => removeCase(item.id)}
-                            aria-label={`Delete ${item.name}`}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* The state the scenario needs before step 1. Shown above
-                          the goal because it is what has to be true first, and
-                          a scenario that silently assumes it fails on the setup
-                          while the report names the feature. */}
-                      {item.precondition && (
-                        <p className="case-precondition">
-                          <span className="case-precondition-label">Precondition</span>
-                          {item.precondition}
-                        </p>
-                      )}
-
-                      {/* A scenario waiting on its setup data is not run — it
-                          would fail on the missing member number and the report
-                          would name the feature. It says what it is waiting for
-                          and offers the form to end the wait. */}
-                      {item.needsData && (
-                        <div className="case-awaiting">
-                          <div className="case-awaiting-head">
-                            <span className="awaiting-chip">Needs data</span>
-                            <span className="muted small">
-                              Not run until {item.missingData.length} field
-                              {item.missingData.length === 1 ? '' : 's'} below
-                              {item.missingData.length === 1 ? ' is' : ' are'} filled in.
-                            </span>
-                            {dataFor !== item.id && (
-                              <button
-                                className="btn btn-primary btn-sm"
-                                onClick={() => openDataForm(item)}
-                              >
-                                Provide data
-                              </button>
-                            )}
+                            <button
+                              className="btn-icon danger"
+                              onClick={() => removeCase(item.id)}
+                              aria-label={`Delete ${item.name}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
                           </div>
+                        </div>
 
-                          {dataFor === item.id && (
-                            <div className="case-data-form">
-                              {(item.required_data || []).map((field) => (
-                                <label key={field.key}>
-                                  {field.label}
-                                  <input
-                                    value={dataValues[field.key] || ''}
-                                    placeholder={field.example || ''}
-                                    onChange={(e) => setDataValues({
-                                      ...dataValues, [field.key]: e.target.value,
-                                    })}
-                                  />
-                                </label>
-                              ))}
-                              <div className="case-data-actions">
-                                <button
-                                  className="btn btn-ghost btn-sm"
-                                  onClick={() => setDataFor(null)}
-                                >
-                                  Cancel
-                                </button>
+                        {/* The state the scenario needs before step 1. Shown above
+                            the goal because it is what has to be true first, and
+                            a scenario that silently assumes it fails on the setup
+                            while the report names the feature. */}
+                        {item.precondition && (
+                          <p className="case-precondition">
+                            <span className="case-precondition-label">Precondition</span>
+                            {item.precondition}
+                          </p>
+                        )}
+
+                        {/* A scenario waiting on its setup data is not run — it
+                            would fail on the missing member number and the report
+                            would name the feature. It says what it is waiting for
+                            and offers the form to end the wait. */}
+                        {item.needsData && (
+                          <div className="case-awaiting">
+                            <div className="case-awaiting-head">
+                              <span className="awaiting-chip">Needs data</span>
+                              <span className="muted small">
+                                Not run until {item.missingData.length} field
+                                {item.missingData.length === 1 ? '' : 's'} below
+                                {item.missingData.length === 1 ? ' is' : ' are'} filled in.
+                              </span>
+                              {dataFor !== item.id && (
                                 <button
                                   className="btn btn-primary btn-sm"
-                                  onClick={() => saveData(item)}
-                                  disabled={savingData}
+                                  onClick={() => openDataForm(item)}
                                 >
-                                  Save and enable
+                                  Provide data
                                 </button>
-                              </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      )}
-                      {item.goal && <p className="case-goal">{item.goal}</p>}
 
-                      {/* Open by default. The steps are the scenario — what a
-                          reviewer checks, and what the run is judged against —
-                          so keeping them behind a click made the page look
-                          tidier and the work harder. Collapsing stays, for a
-                          set being scanned rather than read. */}
-                      {item.steps?.length > 0 && (
-                        <div className="case-steps-block">
-                          <button
-                            type="button"
-                            className="case-steps-toggle"
-                            onClick={() => toggleSteps(item.id)}
-                            aria-expanded={!closedSteps.has(item.id)}
-                          >
-                            {closedSteps.has(item.id)
-                              ? <ChevronRight size={12} />
-                              : <ChevronDown size={12} />}
-                            {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
-                          </button>
-                          {!closedSteps.has(item.id) && (
-                            <ol className="case-steps">
-                              {item.steps.map((step, i) => (
-                                <li key={i}>
-                                  <span className="case-step-action">
-                                    {step.action}
-                                    {step.optional && (
-                                      <span
-                                        className="step-optional-tag"
-                                        title="Carried out, but a failed check does not fail the run"
-                                      >
-                                        optional
-                                      </span>
+                            {dataFor === item.id && (
+                              <div className="case-data-form">
+                                {(item.required_data || []).map((field) => (
+                                  <label key={field.key}>
+                                    {field.label}
+                                    <input
+                                      value={dataValues[field.key] || ''}
+                                      placeholder={field.example || ''}
+                                      onChange={(e) => setDataValues({
+                                        ...dataValues, [field.key]: e.target.value,
+                                      })}
+                                    />
+                                  </label>
+                                ))}
+                                <div className="case-data-actions">
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => setDataFor(null)}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => saveData(item)}
+                                    disabled={savingData}
+                                  >
+                                    Save and enable
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {item.goal && <p className="case-goal">{item.goal}</p>}
+
+                        {/* Open by default. The steps are the scenario — what a
+                            reviewer checks, and what the run is judged against —
+                            so keeping them behind a click made the page look
+                            tidier and the work harder. Collapsing stays, for a
+                            set being scanned rather than read. */}
+                        {item.steps?.length > 0 && (
+                          <div className="case-steps-block">
+                            <button
+                              type="button"
+                              className="case-steps-toggle"
+                              onClick={() => toggleSteps(item.id)}
+                              aria-expanded={!closedSteps.has(item.id)}
+                            >
+                              {closedSteps.has(item.id)
+                                ? <ChevronRight size={12} />
+                                : <ChevronDown size={12} />}
+                              {item.steps.length} step{item.steps.length === 1 ? '' : 's'}
+                            </button>
+                            {!closedSteps.has(item.id) && (
+                              <ol className="case-steps">
+                                {item.steps.map((step, i) => (
+                                  <li key={i}>
+                                    <span className="case-step-action">
+                                      {step.action}
+                                      {step.optional && (
+                                        <span
+                                          className="step-optional-tag"
+                                          title="Carried out, but a failed check does not fail the run"
+                                        >
+                                          optional
+                                        </span>
+                                      )}
+                                    </span>
+                                    {step.expected && (
+                                      <span className="case-step-expected">{step.expected}</span>
                                     )}
-                                  </span>
-                                  {step.expected && (
-                                    <span className="case-step-expected">{step.expected}</span>
-                                  )}
-                                  {/* What "Recorded" is actually made of. The
-                                      badge said a step replays; it did not say
-                                      what it replays, so the one thing a tester
-                                      would want to check before trusting it —
-                                      which element, which value — was only
-                                      readable out of the database. */}
-                                  {step.recorded?.length > 0 && (
-                                    <ol className="case-step-recorded">
-                                      {step.recorded.map((action, j) => (
-                                        <li key={j}>
-                                          <span className="recorded-verb">{action.action}</span>
-                                          {action.selector && (
-                                            <code className="recorded-target">{action.selector}</code>
-                                          )}
-                                          {action.value && (
-                                            <span className="recorded-value">“{action.value}”</span>
-                                          )}
-                                          {!action.selector && !action.value && action.label && (
-                                            <span className="recorded-value">{action.label}</span>
-                                          )}
-                                        </li>
-                                      ))}
-                                    </ol>
-                                  )}
-                                </li>
-                              ))}
-                            </ol>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {/* ------------------------------------------------- run ------- */}
-            <div className="card">
-              <div className="card-head">
-                <h2 className="card-title">Run</h2>
-                {running ? (
-                  <button className="btn btn-sm" disabled>
-                    <Loader2 size={14} className="spin" /> Starting…
-                  </button>
-                ) : (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={runSuite}
-                    disabled={executionCount === 0}
-                  >
-                    <Play size={14} /> Run suite
-                  </button>
+                                    {/* What "Recorded" is actually made of. The
+                                        badge said a step replays; it did not say
+                                        what it replays, so the one thing a tester
+                                        would want to check before trusting it —
+                                        which element, which value — was only
+                                        readable out of the database. */}
+                                    {step.recorded?.length > 0 && (
+                                      <ol className="case-step-recorded">
+                                        {step.recorded.map((action, j) => (
+                                          <li key={j}>
+                                            <span className="recorded-verb">{action.action}</span>
+                                            {action.selector && (
+                                              <code className="recorded-target">{action.selector}</code>
+                                            )}
+                                            {action.value && (
+                                              <span className="recorded-value">“{action.value}”</span>
+                                            )}
+                                            {!action.selector && !action.value && action.label && (
+                                              <span className="recorded-value">{action.label}</span>
+                                            )}
+                                          </li>
+                                        ))}
+                                      </ol>
+                                    )}
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
 
-              {/* Where this run points. A set carries the address each scenario
-                  was written against and whatever phone happened to be plugged
-                  in; neither is a choice anyone made at the moment they pressed
-                  Run, which is when it matters. */}
-              <RunTarget
-                isMobile={isMobileSet}
-                os={runOs}
+              {/* --------------------------------------------- CI recipe -----
+                  Reference rather than the job, so it costs a line until it is
+                  asked for. Progress and the report live on Test Executions,
+                  which is where a run is opened the moment it starts. */}
+              <div className="card">
+                <button
+                  type="button"
+                  className="card-toggle"
+                  onClick={() => setShowCi((value) => !value)}
+                  aria-expanded={showCi}
+                >
+                  {showCi ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  Run this from CI
+                </button>
+                {showCi && (
+                  <>
+                    <p className="muted small">
+                      The same suite, headless, with a report your build server already
+                      knows how to read. A non-zero exit code fails the build.
+                    </p>
+                    <pre className="code-block">
+  {`python -m cli run --suite ${suite.id} \\
+      ${parseTags(options.tags).map((t) => `--tag ${t} `).join('')}--workers ${options.workers} \\
+      --junit results.xml --json report.json`}
+                    </pre>
+                  </>
+                )}
+              </div>
+
+              {history.length > 0 && (
+                <div className="card">
+                  <button
+                    type="button"
+                    className="card-toggle"
+                    onClick={() => setShowHistory((value) => !value)}
+                    aria-expanded={showHistory}
+                  >
+                    {showHistory ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    Recent suite runs
+                    <span className="pill">{history.length}</span>
+                  </button>
+                  {showHistory && (
+                    <ul className="history-list">
+                      {history.map((row) => (
+                        <li key={row.id} className="history-row">
+                          <span className={`badge ${row.status === 'passed' ? 'ok' : 'bad'}`}>
+                            {row.status}
+                          </span>
+                          <span className="muted small">
+                            {row.passed}/{row.total} passed
+                          </span>
+                          <span className="muted small">
+                            {new Date(row.started_at * 1000).toLocaleString()}
+                          </span>
+                          <a
+                            className="btn-link"
+                            href={api.suiteReportUrl(row.id, 'junit')}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            report
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ------------------------------------------------- add --------
+              The one place on this page that writes something new, and the
+              last thing on it. Folded rather than unmounted: a review of
+              twenty generated scenarios is half an hour of somebody's
+              reading, and collapsing the section must not throw it away. */}
+          <div className="card add-card" ref={addRef}>
+            <button
+              type="button"
+              className="card-toggle"
+              onClick={() => setShowAdd((value) => !value)}
+              aria-expanded={showAdd}
+            >
+              {showAdd ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <Sparkles size={14} className="card-toggle-mark" />
+              Add scenarios
+            </button>
+
+            <div className="add-body" hidden={!showAdd}>
+              <p className="muted small">
+                Name a module — “Uçuş Arama”, “Check-in” — or upload the analysis
+                document it was specified in. Nothing is saved until you have read
+                it{suite ? `, and what you keep lands in “${suite.name}”` : ''}.
+              </p>
+
+              <ScenarioGenerator
+                suiteId={suite?.id || null}
+                kind={suite ? (suite.kind || 'web') : platform}
+                os={suite ? (suite.os || (isMobileSet ? os : null)) : (platform === 'mobile' ? os : null)}
+                onConnectDevice={onConnectDevice}
                 devices={devices}
-                sessions={sessions}
                 deviceUdid={runUdid}
-                onDevice={(value) => {
-                  setDeviceUdid(value);
-                  setDeviceAppId('');
-                  setDeviceBuilds([]);
-                  setLoadingBuilds(Boolean(value));
-                }}
                 deviceAppId={deviceAppId}
-                onBuild={setDeviceAppId}
                 deviceBuilds={deviceBuilds}
                 loadingBuilds={loadingBuilds}
-                loadingDevices={loadingDevices}
+                onPickDevice={pickDevice}
+                onPickBuild={setDeviceAppId}
                 envUrl={envUrl}
-                onEnv={setEnvUrl}
+                onEnvUrl={setEnvUrl}
+                onOpenExecution={onOpenExecution}
+                onAdded={async () => {
+                  if (suite) setSuite(await api.suite(suite.id));
+                  await loadSuites();
+                }}
               />
 
-              <div className="run-options">
-                <label>
-                  Workers
-                  <input
-                    type="number"
-                    min={1}
-                    max={8}
-                    value={options.workers}
-                    onChange={(e) => setOptions({ ...options, workers: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Only these tags
-                  <input
-                    value={options.tags}
-                    onChange={(e) => setOptions({ ...options, tags: e.target.value })}
-                    placeholder="smoke"
-                  />
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={options.headless}
-                    onChange={(e) => setOptions({ ...options, headless: e.target.checked })}
-                  />
-                  Headless
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={options.trace}
-                    onChange={(e) => setOptions({ ...options, trace: e.target.checked })}
-                  />
-                  Record trace
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={options.recordVideo}
-                    onChange={(e) => setOptions({ ...options, recordVideo: e.target.checked })}
-                  />
-                  Record video
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={options.failOnPageError}
-                    onChange={(e) => setOptions({ ...options, failOnPageError: e.target.checked })}
-                  />
-                  Fail on console/network errors
-                </label>
-              </div>
+              {/* A scenario nobody needs the model for. Only with a set open,
+                  because unlike the generator this form has no picker for
+                  where the case goes. */}
+              {suite && (
+                <>
+                  <button
+                    type="button"
+                    className="card-toggle sub"
+                    onClick={() => setShowCaseForm((value) => !value)}
+                    aria-expanded={showCaseForm}
+                  >
+                    {showCaseForm ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                    Write one by hand
+                  </button>
 
+                  {showCaseForm && (
+                    <form className="case-form" onSubmit={addCase}>
+                      <div className="field-row">
+                        <label>
+                          Name
+                          <input
+                            value={draft.name}
+                            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                            placeholder="Sepete ürün eklenebiliyor"
+                          />
+                        </label>
+                        <label>
+                          URL
+                          <input
+                            value={draft.url}
+                            onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+                            placeholder="https://example.com/"
+                          />
+                        </label>
+                      </div>
 
-              {/* Progress and the report live on Test Executions now, which is
-                  where a run is opened the moment it starts. */}
+                      <label>
+                        Goal
+                        <textarea
+                          rows={3}
+                          value={draft.goal}
+                          onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
+                          placeholder={'Ara kutusuna {{terim}} yaz, Ara\'ya bas, sonuç çıktığını doğrula.'}
+                        />
+                        <span className="field-hint">
+                          Use <code>{'{{placeholders}}'}</code> to pull values from the dataset below.
+                        </span>
+                      </label>
+
+                      <StepEditor
+                        steps={draft.steps}
+                        onChange={(steps) => setDraft({ ...draft, steps })}
+                      />
+
+                      <div className="field-row">
+                        <label>
+                          Tags
+                          <input
+                            value={draft.tags}
+                            onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
+                            placeholder="smoke, checkout"
+                          />
+                        </label>
+                        <label>
+                          Dataset (CSV or JSON, optional)
+                          <textarea
+                            rows={3}
+                            value={draft.dataset}
+                            onChange={(e) => {
+                              setDraft({ ...draft, dataset: e.target.value });
+                              setDatasetError(null);
+                            }}
+                            placeholder={'terim\nistanbul\nankara'}
+                          />
+                          {datasetError && <span className="field-error">{datasetError}</span>}
+                        </label>
+                      </div>
+
+                      <div className="row-actions end">
+                        <button type="button" className="btn btn-sm" onClick={() => setShowCaseForm(false)}>
+                          Cancel
+                        </button>
+                        <button type="submit" className="btn btn-primary btn-sm">Add case</button>
+                      </div>
+                    </form>
+                  )}
+                </>
+              )}
             </div>
-
-            {/* --------------------------------------------- CI recipe ----- */}
-            <div className="card">
-              <h2 className="card-title">Run this from CI</h2>
-              <p className="muted small">
-                The same suite, headless, with a report your build server already
-                knows how to read. A non-zero exit code fails the build.
-              </p>
-              <pre className="code-block">
-{`python -m cli run --suite ${suite.id} \\
-    ${parseTags(options.tags).map((t) => `--tag ${t} `).join('')}--workers ${options.workers} \\
-    --junit results.xml --json report.json`}
-              </pre>
-            </div>
-
-            {history.length > 0 && (
-              <div className="card">
-                <h2 className="card-title">Recent suite runs</h2>
-                <ul className="history-list">
-                  {history.map((row) => (
-                    <li key={row.id} className="history-row">
-                      <span className={`badge ${row.status === 'passed' ? 'ok' : 'bad'}`}>
-                        {row.status}
-                      </span>
-                      <span className="muted small">
-                        {row.passed}/{row.total} passed
-                      </span>
-                      <span className="muted small">
-                        {new Date(row.started_at * 1000).toLocaleString()}
-                      </span>
-                      <a
-                        className="btn-link"
-                        href={api.suiteReportUrl(row.id, 'junit')}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        report
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-        )}
+          </div>
+        </section>
       </div>
     </main>
   );

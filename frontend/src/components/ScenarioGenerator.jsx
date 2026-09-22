@@ -44,6 +44,11 @@ export function ScenarioGenerator({
   // a second picker here.
   devices = [], deviceUdid = '', deviceAppId = '', deviceBuilds = [],
   loadingBuilds = false, onPickDevice = null, onPickBuild = null,
+  // The environment, when the caller owns that choice for its whole page. Same
+  // reasoning as the device above: a page that also runs scenarios asks which
+  // stack once, and without this the generator kept a second answer of its own
+  // — so one screen could show NUAT here and PROD in the run bar, both live.
+  envUrl = null, onEnvUrl = null,
   // Open the execution "Save & run" just started. Absent where the caller has
   // no way to switch tabs, in which case the toast says where to find it.
   onOpenExecution = null,
@@ -54,7 +59,13 @@ export function ScenarioGenerator({
   /* One of the environments the Web workspace lists, not free text. These hosts
      differ by a single token and a mistyped one reads a page that still looks
      plausible, so scenarios come back written against the wrong stack. */
-  const [url, setUrl] = useState(DEFAULT_ENV_URL);
+  const [ownUrl, setOwnUrl] = useState(DEFAULT_ENV_URL);
+  /* Held here only where nobody else holds it. Opened from a chat or a
+     workspace there is no page-wide environment to defer to, so the state
+     above is the answer; on Test Sets the page owns it and this follows. */
+  const pageOwnsEnv = typeof onEnvUrl === 'function';
+  const url = pageOwnsEnv ? (envUrl || '') : ownUrl;
+  const setUrl = pageOwnsEnv ? onEnvUrl : setOwnUrl;
   const [busy, setBusy] = useState(false);
   const [scenarios, setScenarios] = useState(() => (seeded ? initialScenarios : []));
   const [rejected, setRejected] = useState([]);
@@ -194,7 +205,12 @@ export function ScenarioGenerator({
     if (source === 'brief') return 'brief';
     if (onThisTab.some((item) => item.sessionId === source)) return source;
     if (onThisTab.length) return onThisTab[0].sessionId;
-    return isMobile ? 'brief' : 'url';
+    // A page pointing its runs at "each scenario's own address" has named no
+    // environment, so there is none to open and read — the brief is all there
+    // is to write from, and the select should say so rather than show the
+    // first host in the list as if it had been chosen.
+    if (!isMobile && url) return 'url';
+    return 'brief';
   })();
 
   useEffect(() => {

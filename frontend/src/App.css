@@ -6637,3 +6637,293 @@ textarea,
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ==========================================================================
+   The run bar, the folds, and the writing at the bottom
+
+   Test Sets used to open on the thing that writes new scenarios and reach the
+   scenarios themselves 330px further down, with the environment asked for in
+   three places at once. It opens on the set now: name, then where this run
+   points and the button that starts it, then the scenarios. Everything that
+   adds something new is at the bottom, folded, because it is the rarer job.
+   ========================================================================== */
+
+/* One row: where the run points, the fold that hides its settings, and the
+   button. The target control loses its panel here — a box inside a bar reads
+   as two things when it is one decision. */
+.run-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-2, 8px);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.run-bar .run-target {
+  flex: 1 1 260px;
+  gap: var(--gap-2, 8px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* The selects carry their own first option ("Environment", "Pick a device"),
+   so a heading above each one says it a second time and doubles the height of
+   a bar whose whole point is to be one row. */
+.run-bar .run-target > label {
+  min-width: 180px;
+  flex: 1 1 180px;
+  gap: 0;
+  font-size: 0;
+}
+
+.run-bar .run-options {
+  flex: 1 1 100%;
+  order: 9;
+  margin-top: 4px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.run-bar > .btn { flex: none; }
+
+.run-bar-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 0 8px;
+  height: var(--control-h-sm, 28px);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.run-bar-options:hover { color: var(--text-primary); }
+
+/* A card whose head is the control that opens it. Reference material — the CI
+   recipe, the run history — and the writing surface all sit behind one of
+   these, so a set that is being read costs a line each rather than a screen. */
+.card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-toggle:hover { color: var(--accent); }
+.card-toggle > svg:first-child { color: var(--text-tertiary); flex: none; }
+.card-toggle:hover > svg:first-child { color: var(--accent); }
+.card-toggle-mark { color: var(--accent); flex: none; }
+
+.card-toggle .pill {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* Nested one level in: the hand-written case form inside the writing section,
+   the new-set form under the list. Quieter, because it is a choice made inside
+   a choice already made. */
+.card-toggle.sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.card-toggle + .muted { margin-top: 10px; }
+
+.add-card { border-style: dashed; }
+
+/* Folded with `hidden` rather than unmounted: a review of twenty generated
+   scenarios is half an hour of somebody's reading, and collapsing the section
+   must not throw it away. */
+.add-body { padding-top: 12px; }
+.add-body .card-toggle.sub { margin-top: 14px; }
+
+.suite-new {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.suite-new .suite-create { margin-top: 10px; }
+
+.run-target-env { flex: 1 1 100%; }
+
+/* ==========================================================================
+   Test Executions — finding one, and reading it without leaving
+
+   Fifty runs arrive in the left list and the platform tabs were the only way
+   to cut it. And a red row's first question — which step went wrong, and what
+   did it say — could only be answered by leaving the page.
+   ========================================================================== */
+
+.execution-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-2, 8px);
+  padding-bottom: 12px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.execution-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  height: var(--control-h, 34px);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+
+.execution-search > svg { color: var(--text-tertiary); flex: none; }
+
+.execution-search input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.execution-search input:focus { outline: none; }
+.execution-search:focus-within { border-color: var(--accent); }
+
+.execution-status-filter { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.execution-status-filter .chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: none;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.execution-status-filter .chip:hover { color: var(--text-primary); }
+
+.execution-status-filter .chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* A summary of the rows below it, so it does not compete with them. Without
+   this an execution's verdict and a scenario's were the same badge a few
+   centimetres apart, and a red one read as the same fact either way. */
+.verdict.verdict-summary {
+  background: none;
+  border-color: transparent;
+  opacity: 0.8;
+}
+
+/* Reference exports, next to a button that ends a running job and one that
+   destroys a record. They should not look like either. */
+.execution-exports {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.execution-exports > svg { flex: none; }
+.execution-exports a { color: var(--text-tertiary); text-decoration: none; }
+.execution-exports a:hover { color: var(--accent); text-decoration: underline; }
+
+/* Room for the disclosure, and a place for what it opens: the steps go across
+   the whole row rather than in the column the arrow sits in. */
+.scenario-result {
+  grid-template-columns: 22px 34px minmax(0, 1fr) 84px 78px 68px 34px;
+}
+
+.scenario-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.scenario-open:hover { color: var(--accent); background: var(--bg-hover); }
+
+.scenario-steps {
+  grid-column: 1 / -1;
+  margin: 8px 0 2px 22px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.scenario-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-reset: scenario-step;
+}
+
+.scenario-step {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) 54px;
+  align-items: start;
+  gap: var(--gap-3, 12px);
+}
+
+.scenario-step > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.scenario-step .verdict { justify-content: center; }
+.scenario-step-verdict { justify-self: stretch; }
+.scenario-step-action { color: var(--text-primary); font-size: 12px; }
+.scenario-step-expected { color: var(--text-tertiary); font-size: 11px; }
+
+/* What the step reported. On a red step this is the sentence the tester came
+   for, so it is the one thing here that is allowed to be loud. */
+.scenario-step-message {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.scenario-step.failed .scenario-step-message { color: var(--danger, #f87171); }
+
+@media (max-width: 900px) {
+  .scenario-step { grid-template-columns: 1fr; }
+  .scenario-step-verdict { justify-self: start; }
+}
