@@ -1,0 +1,153 @@
+/* ==========================================================================
+   Insights
+   The page's own sheet, for the few things only this page has: the folds that
+   keep its standing explanations to one line, and the toolbar over the flaky
+   table. Everything else on the page is shared furniture and is left in
+   App.css, where the other pages read it from.
+
+   App.jsx pulls this page in before it imports App.css, so the shared sheet
+   lands after this one in the bundle. Nothing here restates a shared rule at
+   the same weight — a tie would silently go to App.css — so every selector is
+   either a name this page alone uses or one scoped under such a name.
+   ========================================================================== */
+
+/* A standing explanation is true every day and read once. Behind a line it
+   costs a line; above the thing it explains it costs a paragraph, every visit,
+   for the life of the page. */
+.insights-fold {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.insights-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own, which would otherwise sit beside
+   the chevron below as a second triangle. */
+.insights-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.insights-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.insights-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.insights-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+/* The half of the summary line that says what is inside, so the fold is worth
+   leaving shut: a total and a call count read fine on one line; how that total
+   splits four ways does not. */
+.insights-fold .fold-aside {
+  margin-left: auto;
+  font-weight: 400;
+}
+
+/* A block rather than a column flexbox. What goes in a fold is whatever the
+   card already had, and some of those blocks carry a `flex-basis` written for
+   a row; read down a column the browser takes it as a height, and the token
+   grid opens as a tall empty box. */
+.insights-fold-body {
+  padding: 2px 11px 11px;
+}
+
+.insights-fold-body > * + * {
+  margin-top: 10px;
+}
+
+/* Under a card title the fold is a caption rather than a control, so it drops
+   the box: a second bordered strip directly under the heading reads as another
+   thing to do, not as a note about the one below it. */
+.insights-fold.is-note {
+  border: none;
+  background: none;
+}
+
+/* Sized to its own text: a caption with no box around it should not carry a
+   click target that runs the width of the card, where there is nothing to
+   suggest one. */
+.insights-fold.is-note > summary {
+  width: fit-content;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.insights-fold.is-note .insights-fold-body {
+  padding: 6px 0 0;
+}
+
+.insights-fold.is-note p {
+  max-width: 68ch;
+}
+
+/* Search and filters sit above the rows they govern, so the answer to "is my
+   case in here" is on the way in rather than at the bottom of the list. */
+.flaky-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* The chips share the row with the search box rather than sitting under it, so
+   they take the row's height: a 28px pill beside a 34px field is exactly the
+   hand-assembled look the shared control heights exist to prevent. */
+.flaky-tools .filter-chip {
+  height: var(--control-h);
+}
+
+.insights-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  max-width: 380px;
+  height: var(--control-h);
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+}
+
+.insights-search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.insights-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.insights-search input::placeholder {
+  color: var(--text-tertiary);
+}

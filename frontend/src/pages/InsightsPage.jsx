@@ -1,16 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Coins, ShieldAlert, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, Coins, Search, ShieldAlert, TrendingUp } from 'lucide-react';
 
 import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { formatTokens } from '../lib/format';
 import { OS_TABS } from '../lib/platforms';
+import './insights.css';
+
+/* Above this share the verdict is changing often enough to be the reason a
+   case cannot be trusted rather than a run or two of noise. The rows mark it
+   and the chip collects it, so both read the line from here. */
+const FLAKY_HIGH = 0.3;
+
+/* Twenty rows run past the fold; ten do not, and a search box over a list that
+   is already in view is furniture. */
+const FLAKY_TOOLS_MIN = 10;
+
+/* The two states that start work, and both are already marked in the rows: a
+   verdict that keeps changing, and one that is red as of the last run. */
+const FLAKY_FILTERS = [
+  { id: 'all', label: 'All', match: () => true },
+  { id: 'flipping', label: 'Flipping', match: (row) => row.flakiness > FLAKY_HIGH },
+  { id: 'red', label: 'Failing now', match: (row) => row.last_status === 'failed' },
+];
 
 /**
  * A suite's history is only useful if it answers three questions: is it getting
  * better or worse, is the damage where it matters, and which cases cannot be
  * trusted. Everything here serves one of those.
+ *
+ * What the runs cost the model is the exception, and it comes last for that
+ * reason: it is real and it has a ceiling worth watching, but it is a fact
+ * about the bill rather than about the suite, and a page that opens on it
+ * answers none of the three.
  */
 export function InsightsPage() {
   const toast = useToast();
@@ -33,6 +56,8 @@ export function InsightsPage() {
   const [os, setOs] = useState('ios');
   const [osCounts, setOsCounts] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [flakySearch, setFlakySearch] = useState('');
+  const [flakyFilter, setFlakyFilter] = useState('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +91,15 @@ export function InsightsPage() {
     };
   }, [days, platform, os, toast]);
 
+  /* A different platform or phone is a different set of cases, so whatever was
+     typed against the last one is dropped with it: kept, it would hide rows
+     for a reason no longer on screen — an empty table that looks like good
+     news. */
+  const clearFlakyTools = () => {
+    setFlakySearch('');
+    setFlakyFilter('all');
+  };
+
   const totals = useMemo(() => {
     const passed = trend.reduce((sum, day) => sum + day.passed, 0);
     const failed = trend.reduce((sum, day) => sum + day.failed, 0);
@@ -86,6 +120,22 @@ export function InsightsPage() {
     () => Math.max(1, ...trend.map((day) => day.total)),
     [trend],
   );
+
+  /* Searched first, then filtered, so the count on each chip describes the
+     rows the table is about to show rather than the whole report. A chip
+     reading 12 over a table of 3 is worse than no count at all. */
+  const searchedFlaky = useMemo(() => {
+    const needle = flakySearch.trim().toLowerCase();
+    if (!needle) return flaky;
+    return flaky.filter(
+      (row) => `${row.name} ${row.suite_name || ''}`.toLowerCase().includes(needle),
+    );
+  }, [flaky, flakySearch]);
+
+  const visibleFlaky = useMemo(() => {
+    const rule = FLAKY_FILTERS.find((item) => item.id === flakyFilter) || FLAKY_FILTERS[0];
+    return searchedFlaky.filter(rule.match);
+  }, [searchedFlaky, flakyFilter]);
 
   /* Spend is the one figure here with a ceiling, so it is worth drawing rather
      than listing. The gateway sends its own labels and formatting, which are
@@ -130,10 +180,15 @@ export function InsightsPage() {
             </button>
           ))}
         </div>
-        <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
+        <PlatformTabs
+          value={platform}
+          onChange={(next) => { setPlatform(next); clearFlakyTools(); }}
+          counts={platformCounts}
+        />
         {platform === 'mobile' && (
           <PlatformTabs
-            options={OS_TABS} value={os} onChange={setOs}
+            options={OS_TABS} value={os}
+            onChange={(next) => { setOs(next); clearFlakyTools(); }}
             counts={loading ? null : osCounts} sub
           />
         )}
@@ -143,24 +198,21 @@ export function InsightsPage() {
         <p className="muted">Loading…</p>
       ) : (
         <>
-          {/* Each figure carries what it is out of. A pass rate with no
-              denominator reads the same at 3 runs as at 300, and the two mean
-              very different things. */}
+          {/* The volume rides with the rate rather than standing as a figure of
+              its own. A pass rate with no denominator reads the same at 3 runs
+              as at 300; the same total set beside it in a card of its own reads
+              as a second measurement, and the window it covers is already the
+              chosen tab above. */}
           <div className="stat-row">
-            <div className="stat-card">
-              <span className="stat-label">Runs</span>
-              <span className="stat-value">{totals.total}</span>
-              <span className="stat-note">
-                over {days} day{days === 1 ? '' : 's'}
-              </span>
-            </div>
             <div className="stat-card">
               <span className="stat-label">Pass rate</span>
               <span className={`stat-value ${totals.rate != null && totals.rate < 0.8 ? 'bad' : 'ok'}`}>
                 {totals.rate == null ? '—' : `${Math.round(totals.rate * 100)}%`}
               </span>
               <span className="stat-note">
-                {totals.total ? `${totals.passed} of ${totals.total} passed` : 'nothing run yet'}
+                {totals.total
+                  ? `of ${totals.total} run${totals.total === 1 ? '' : 's'}`
+                  : 'nothing run yet'}
               </span>
             </div>
             <div className="stat-card">
@@ -178,6 +230,198 @@ export function InsightsPage() {
               <span className="stat-note">per scenario</span>
             </div>
           </div>
+
+          {/* Two narrow charts side by side rather than a full-width row each:
+              on a desktop that read as a column of mostly empty boxes. */}
+          <div className="insights-grid">
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">
+                <TrendingUp size={16} /> Pass / fail per day
+              </h2>
+            </div>
+
+            {trend.length === 0 ? (
+              <p className="muted small">No runs in this window yet.</p>
+            ) : (
+              <div className="trend-chart" role="img" aria-label="Pass and fail counts per day">
+                {trend.map((day) => (
+                  <div key={day.day} className="trend-col" title={
+                    `${day.day}: ${day.passed} passed, ${day.failed} failed`
+                  }>
+                    <div className="trend-bars">
+                      {/* Heights are a share of the busiest day, so a quiet day
+                          reads as quiet rather than being rescaled to full. */}
+                      <div
+                        className="trend-bar failed"
+                        style={{ height: `${(day.failed / peak) * 100}%` }}
+                      />
+                      <div
+                        className="trend-bar passed"
+                        style={{ height: `${(day.passed / peak) * 100}%` }}
+                      />
+                    </div>
+                    <span className="trend-label">{day.day.slice(5)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="card-head stacked">
+              <h2 className="card-title">
+                <ShieldAlert size={16} /> Pass rate by priority
+              </h2>
+              <details className="insights-fold is-note">
+                <summary>Why the bands are kept apart</summary>
+                <div className="insights-fold-body">
+                  <p className="muted small">
+                    A pass rate on its own does not say whether the team is in trouble — the
+                    same number is routine when the failures are Low and an emergency when
+                    they are Critical.
+                  </p>
+                </div>
+              </details>
+            </div>
+
+            {breakdown.every((band) => !band.total) ? (
+              <p className="muted small">
+                Nothing graded yet. Scenarios run from a Test Set carry a priority; runs
+                started from the chat do not.
+              </p>
+            ) : (
+              <ul className="priority-bars">
+                {breakdown.filter((band) => band.total > 0).map((band) => (
+                  <li key={band.priority ?? 'ungraded'}>
+                    <span
+                      className={`priority-tag p-${(band.priority || 'low').toLowerCase()}`}
+                      title={band.priority ? undefined : 'Runs started from the chat, outside any Test Set'}
+                    >
+                      {band.priority || 'Ungraded'}
+                    </span>
+                    {/* The bar is the share and the count beside it is what the
+                        share is of; the percentage is the same fact a third
+                        time, so it waits on the hover. */}
+                    <div
+                      className="priority-bar"
+                      title={band.pass_rate !== null ? `${band.pass_rate}% passed` : undefined}
+                    >
+                      <div
+                        className="priority-bar-pass"
+                        style={{ width: `${(band.passed / band.total) * 100}%` }}
+                      />
+                      <div
+                        className="priority-bar-fail"
+                        style={{ width: `${(band.failed / band.total) * 100}%` }}
+                      />
+                    </div>
+                    <span className="priority-count">
+                      {band.passed}/{band.total}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          </div>
+
+          <section className="card">
+            <div className="card-head stacked">
+              <h2 className="card-title">
+                <AlertTriangle size={16} /> Flaky cases
+              </h2>
+              <p className="muted small">
+                Ranked by how often the verdict changes, not by how often it fails —
+                a case that always fails is broken, one that flips is untrustworthy.
+                Each case is read over its last twenty runs, whenever they happened,
+                so the window chosen above does not move these rows.
+              </p>
+            </div>
+
+            {flaky.length === 0 ? (
+              <p className="muted small">
+                Nothing to report. A case needs at least two finished runs before
+                its consistency can be judged.
+              </p>
+            ) : (
+              <>
+                {/* Kept on the full report rather than on what is left after a
+                    search, so the toolbar does not disappear out from under the
+                    hand that is using it. */}
+                {flaky.length >= FLAKY_TOOLS_MIN && (
+                  <div className="flaky-tools">
+                    <div className="insights-search">
+                      <Search size={14} />
+                      <input
+                        type="search"
+                        value={flakySearch}
+                        onChange={(event) => setFlakySearch(event.target.value)}
+                        placeholder="Search by case or suite…"
+                        aria-label="Search flaky cases"
+                      />
+                    </div>
+                    <div className="filter-row">
+                      {FLAKY_FILTERS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`filter-chip ${flakyFilter === option.id ? 'active' : ''}`}
+                          onClick={() => setFlakyFilter(option.id)}
+                        >
+                          {option.label}
+                          <span className="filter-count">
+                            {searchedFlaky.filter(option.match).length}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {visibleFlaky.length === 0 ? (
+                  <p className="muted small">
+                    None of the {flaky.length} cases here match the search and filter above.
+                  </p>
+                ) : (
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Case</th>
+                        <th>Suite</th>
+                        <th className="num">Runs</th>
+                        <th className="num">Pass rate</th>
+                        <th className="num">Flips</th>
+                        <th>Last</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleFlaky.map((row) => (
+                        <tr key={row.case_id}>
+                          <td>{row.name}</td>
+                          <td className="muted">{row.suite_name || '—'}</td>
+                          <td className="num">{row.runs}</td>
+                          <td className={`num ${row.pass_rate < 0.8 ? 'bad' : ''}`}>
+                            {Math.round(row.pass_rate * 100)}%
+                          </td>
+                          <td className="num">
+                            <span className={`flake-pip ${row.flakiness > FLAKY_HIGH ? 'high' : ''}`}>
+                              {row.flips}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge ${row.last_status === 'passed' ? 'ok' : 'bad'}`}>
+                              {row.last_status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+          </section>
 
           {/* What QAi spent at the model. The quota left on the key is not
               QAi's to read — it belongs to whoever issues the key — but what
@@ -233,13 +477,19 @@ export function InsightsPage() {
                 they ask of the model; older runs predate the counter.
               </p>
             ) : (
-              <>
-                <div className="usage-row">
-                  <div className="usage-total">
-                    <span className="stat-label">Total tokens</span>
-                    <span className="stat-value">{formatTokens(usage.total_tokens)}</span>
-                    <span className="muted small">{usage.calls} model calls</span>
-                  </div>
+              /* The total is the part anyone acts on — it is what moves the
+                 meter above. How it divides between fresh input, output and
+                 cache is accounting: true, occasionally needed to explain a
+                 bill, and never a reason to do anything differently, so it
+                 waits behind the line instead of taking four tiles. */
+              <details className="insights-fold">
+                <summary>
+                  Tokens
+                  <span className="muted small fold-aside">
+                    {`${formatTokens(usage.total_tokens)} over ${usage.calls} model call${usage.calls === 1 ? '' : 's'}`}
+                  </span>
+                </summary>
+                <div className="insights-fold-body">
                   <ul className="usage-breakdown">
                     <li><span>Input</span><strong>{formatTokens(usage.input_tokens)}</strong></li>
                     <li><span>Output</span><strong>{formatTokens(usage.output_tokens)}</strong></li>
@@ -249,155 +499,13 @@ export function InsightsPage() {
                     </li>
                     <li><span>Cache write</span><strong>{formatTokens(usage.cache_write_tokens)}</strong></li>
                   </ul>
+                  <p className="muted small">
+                    Cache reads are billed at a fraction of fresh input, so they are
+                    counted apart — a high cache-read share means a cheap run, not a
+                    costly one.
+                  </p>
                 </div>
-                <p className="muted small">
-                  Cache reads are billed at a fraction of fresh input, so they are
-                  counted apart — a high cache-read share means a cheap run, not a
-                  costly one.
-                </p>
-              </>
-            )}
-          </section>
-
-          {/* Two narrow charts side by side rather than a full-width row each:
-              on a desktop that read as a column of mostly empty boxes. */}
-          <div className="insights-grid">
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">
-                <TrendingUp size={16} /> Pass / fail per day
-              </h2>
-              <span className="muted small">
-                {totals.total ? `${totals.total} scenario${totals.total === 1 ? '' : 's'}` : ''}
-              </span>
-            </div>
-
-            {trend.length === 0 ? (
-              <p className="muted small">No runs in this window yet.</p>
-            ) : (
-              <div className="trend-chart" role="img" aria-label="Pass and fail counts per day">
-                {trend.map((day) => (
-                  <div key={day.day} className="trend-col" title={
-                    `${day.day}: ${day.passed} passed, ${day.failed} failed`
-                  }>
-                    <div className="trend-bars">
-                      {/* Heights are a share of the busiest day, so a quiet day
-                          reads as quiet rather than being rescaled to full. */}
-                      <div
-                        className="trend-bar failed"
-                        style={{ height: `${(day.failed / peak) * 100}%` }}
-                      />
-                      <div
-                        className="trend-bar passed"
-                        style={{ height: `${(day.passed / peak) * 100}%` }}
-                      />
-                    </div>
-                    <span className="trend-label">{day.day.slice(5)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="card">
-            <div className="card-head stacked">
-              <h2 className="card-title">
-                <ShieldAlert size={16} /> Pass rate by priority
-              </h2>
-              <p className="muted small">
-                A pass rate on its own does not say whether the team is in trouble — the
-                same number is routine when the failures are Low and an emergency when
-                they are Critical.
-              </p>
-            </div>
-
-            {breakdown.every((band) => !band.total) ? (
-              <p className="muted small">
-                Nothing graded yet. Scenarios run from a Test Set carry a priority; runs
-                started from the chat do not.
-              </p>
-            ) : (
-              <ul className="priority-bars">
-                {breakdown.filter((band) => band.total > 0).map((band) => (
-                  <li key={band.priority ?? 'ungraded'}>
-                    <span
-                      className={`priority-tag p-${(band.priority || 'low').toLowerCase()}`}
-                      title={band.priority ? undefined : 'Runs started from the chat, outside any Test Set'}
-                    >
-                      {band.priority || 'Ungraded'}
-                    </span>
-                    <div className="priority-bar">
-                      <div
-                        className="priority-bar-pass"
-                        style={{ width: `${(band.passed / band.total) * 100}%` }}
-                      />
-                      <div
-                        className="priority-bar-fail"
-                        style={{ width: `${(band.failed / band.total) * 100}%` }}
-                      />
-                    </div>
-                    <span className="priority-count">
-                      {band.passed}/{band.total}
-                      {band.pass_rate !== null && ` · ${band.pass_rate}%`}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-          </div>
-
-          <section className="card">
-            <div className="card-head stacked">
-              <h2 className="card-title">
-                <AlertTriangle size={16} /> Flaky cases
-              </h2>
-              <p className="muted small">
-                Ranked by how often the verdict changes, not by how often it fails —
-                a case that always fails is broken, one that flips is untrustworthy.
-              </p>
-            </div>
-
-            {flaky.length === 0 ? (
-              <p className="muted small">
-                Nothing to report. A case needs at least two finished runs before
-                its consistency can be judged.
-              </p>
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Case</th>
-                    <th>Suite</th>
-                    <th className="num">Runs</th>
-                    <th className="num">Pass rate</th>
-                    <th className="num">Flips</th>
-                    <th>Last</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {flaky.map((row) => (
-                    <tr key={row.case_id}>
-                      <td>{row.name}</td>
-                      <td className="muted">{row.suite_name || '—'}</td>
-                      <td className="num">{row.runs}</td>
-                      <td className={`num ${row.pass_rate < 0.8 ? 'bad' : ''}`}>
-                        {Math.round(row.pass_rate * 100)}%
-                      </td>
-                      <td className="num">
-                        <span className={`flake-pip ${row.flakiness > 0.3 ? 'high' : ''}`}>
-                          {row.flips}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${row.last_status === 'passed' ? 'ok' : 'bad'}`}>
-                          {row.last_status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              </details>
             )}
           </section>
 
