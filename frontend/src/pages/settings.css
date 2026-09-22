@@ -1,0 +1,142 @@
+/* ==========================================================================
+   Settings
+   The page's own sheet, for the few things only this page has: the folds that
+   keep one-time setup and the server log to a line each, and the group they
+   stand in under the cards. Everything else the page draws — the cards, the
+   provider tabs, the model chips, the field boxes, the log body — is shared
+   furniture and stays in App.css, where the other pages read it from.
+
+   App.jsx pulls this page in before it imports App.css, so the shared sheet
+   lands after this one in the bundle and wins any tie. Nothing here restates a
+   shared rule at the same weight: every selector is either a name this page
+   alone uses, or a shared name scoped under one.
+   ========================================================================== */
+
+/* ------------------------------------------------------------- the folds -- */
+
+/* Built like the folds on Test Runs and Insights, so a reader who has opened
+   one already knows this one. */
+.settings-fold {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.settings-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own, which would otherwise sit beside
+   the chevron below as a second triangle. */
+.settings-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.settings-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.settings-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+/* The half of the summary line that reports state, so a fold is worth leaving
+   shut: "connected" or "optional" is the whole of what a reader wants from a
+   service they set up once and have not thought about since. */
+.settings-fold-aside {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+/* A block rather than a column flexbox. What goes in here is whatever the card
+   already had, and `.field-row` is a grid sized for a row; read down a column
+   the browser takes a row's basis as a height and the pair opens as two tall
+   empty boxes. */
+.settings-fold-body {
+  padding: 4px 11px 12px;
+}
+
+.settings-fold-body > * + * {
+  margin-top: var(--gap-3);
+}
+
+/* The two setup folds stand on the page itself rather than inside a card, so
+   they take the card's surface and border and — open — the card's rule under
+   the heading. Shut, one should read as a card that is shut, not as a strip
+   that has lost its box. */
+.settings-fold.is-card {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-fold.is-card > summary {
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-fold.is-card[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-fold.is-card .settings-fold-body {
+  padding: 15px 16px 16px;
+}
+
+/* One group under the cards, tighter than the 20px the page puts between its
+   blocks: shut, these are two lines, and a block gap between two lines reads
+   as two sections with nothing in either. */
+.settings-optional {
+  display: grid;
+  gap: var(--gap-2);
+}
+
+/* ----------------------------------------------------------- the log fold -- */
+
+/* The summary line is the log's own title bar now, so it carries the file name
+   in the face the file is written in. */
+.settings-log > summary {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+/* App.css gives the log body its height, padding and colour for when it sits
+   in a `.terminal`; folded away it has no such box, so it draws its own. */
+.settings-log .terminal-body {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+
+/* --------------------------------------------------------- provider tabs -- */
+
+/* The tab strip is the one place that answers "will a run actually start", and
+   the answer it used to give was a tick on whichever provider was selected —
+   green for a provider with no key saved at all. Active without a key is a
+   problem, so it is said in the colour of one. */
+.provider-tab .provider-tab-state.warn {
+  color: var(--danger);
+}

@@ -1,0 +1,221 @@
+/* ==========================================================================
+   Mobile Studio — pick a device, pick a build, connect
+   The page's own sheet, for the few things only this page has: the fold that
+   keeps the rest of the target-app question to a line inside a card, the empty
+   slots a card holds open while the phone answers, and the row that says where
+   the devices actually are when this tab has none. Everything else the page
+   draws — the cards, the source tabs, the build buttons — is shared furniture
+   and stays in App.css, where it already lives.
+
+   App.jsx imports this page before it imports App.css, so the shared sheet
+   lands after this one in the bundle and wins any tie. Nothing here restates a
+   shared rule at the same weight: every selector is either a name this page
+   alone uses, or a shared name scoped under one.
+   ========================================================================== */
+
+/* ------------------------------------------------------- above the grid -- */
+
+/* The page column already sets the gap between its blocks; the shared rule's
+   own bottom margin on top of it left the toolbar floating a line and a half
+   above the list it governs. */
+.device-source.studio-tools {
+  margin-bottom: 0;
+}
+
+/* Sixty-four devices is a list to search, not to scroll, so the field takes
+   whatever width the two switches beside it leave. */
+.studio-tools .device-filter input {
+  flex: 1;
+  min-width: 0;
+}
+
+.studio-tools .studio-search-clear {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.studio-tools .studio-search-clear:hover {
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------- a card -- */
+
+/* The badges carry the platform, the version and where the device comes from,
+   which on an Android tablet booked from the cloud is three of them on a card
+   268px wide. They wrap under the icon rather than pushing the row wider than
+   the card. */
+.device-card .device-card-top {
+  gap: var(--gap-2);
+}
+
+.device-card .device-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The badges wrap; the square does not squash to make room for them. */
+.device-card .device-icon {
+  flex: none;
+}
+
+/* The card is a flex column with a gap of its own, so the shared margin under
+   the build row only opened a second gap between it and the fold below. */
+.device-card .env-picker {
+  margin-bottom: 0;
+}
+
+/* One slot per environment, at the size of the button that replaces it. The
+   row is drawn from the moment the card appears because it arrives a second
+   or two later, and a row that appears late moves the Connect button out from
+   under the hand already going for it. */
+.env-slot {
+  flex: 1;
+  height: var(--control-h-sm);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  animation: studio-slot 1.4s ease-in-out infinite;
+}
+
+@keyframes studio-slot {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ------------------------------------------------- the rest of the app -- */
+
+/* Behind a line inside each card: the list of everything on the device and a
+   box for an id typed by hand. Drawn as a caption rather than a panel — the
+   card is already a box, and a second bordered strip inside it reads as
+   another thing to do rather than as more of this one. */
+.app-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own, which would otherwise sit beside
+   the chevron below as a second triangle. */
+.app-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.app-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.app-fold > summary:hover {
+  color: var(--text-secondary);
+}
+
+/* What the fold is holding, on the line that is shut over it. Without this a
+   build picked in here disappeared the moment the fold closed, and the card
+   showed three unlit buttons over a session that would open something else. */
+.app-fold-choice {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.app-fold[open] > summary {
+  margin-bottom: 8px;
+}
+
+/* -------------------------------------------------------- empty states -- */
+
+/* A row, because these are alternatives — open Settings or scan for a phone,
+   look on the other tab or drop the search — and a column of full-width
+   buttons reads as a sequence to work through. */
+.studio-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2);
+}
+
+/* Two standing explanations under the BrowserStack setup state: read once,
+   true every day after that, and a paragraph each every visit until they were
+   put behind their own line. */
+.empty-state .studio-note {
+  width: 100%;
+  max-width: 440px;
+  text-align: left;
+}
+
+.empty-state .studio-note > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.empty-state .studio-note > summary::-webkit-details-marker {
+  display: none;
+}
+
+.empty-state .studio-note > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.empty-state .studio-note[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.empty-state .studio-note > summary:hover {
+  color: var(--text-primary);
+}
+
+.empty-state .studio-note p {
+  max-width: none;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+/* ------------------------------------------------------------ narrower -- */
+
+@media (max-width: 720px) {
+  /* Below this the two switches fill the row on their own, and holding the
+     field on the same line leaves it too narrow to read a model name in. */
+  .studio-tools .device-filter {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}

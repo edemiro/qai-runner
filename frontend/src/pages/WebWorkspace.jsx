@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Globe, Loader2, Maximize2, Minimize2,
-  PanelRightClose, PanelRightOpen, Radio, RefreshCw, RotateCcw, Square, Wrench, X,
+  PanelRightClose, PanelRightOpen, Radio, RotateCcw, Square, Wrench, X,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -15,7 +15,8 @@ import { useFullscreen } from '../hooks/useFullscreen';
 import { useScreenStream } from '../hooks/useScreenStream';
 import { useToast } from '../hooks/useToast';
 import { parseBounds, roleColor } from '../lib/elements';
-import { DEFAULT_ENV_URL, ENV_GROUPS, matchEnv } from '../lib/environments';
+import { applyEnvironment, DEFAULT_ENV_URL, ENV_GROUPS, matchEnv } from '../lib/environments';
+import './web-workspace.css';
 
 const VIEWPORTS = [
   { id: 'desktop', label: 'Desktop', w: 1440, h: 900 },
@@ -31,8 +32,47 @@ const SUGGESTIONS = [
 
 const DRAG_PX = 6;
 
-/** The address bar: open a page, navigate, or close the session. */
-function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
+/**
+ * The environment picker that sits left of an address.
+ *
+ * The environments differ by a single token, and picking the wrong one
+ * produces a run against the wrong stack that still reads as plausible.
+ * Choosing from the list swaps the host and keeps whatever path the address
+ * already carries — the same swap the runner makes when a set is pointed at an
+ * environment, so a page reached by hand and the same page reached by a run
+ * land in the same place. Typing over it still works.
+ */
+function EnvSelect({ url, onPick, disabled }) {
+  const current = matchEnv(url);
+  return (
+    <select
+      className="env-select"
+      value={current?.url || ''}
+      onChange={(event) => event.target.value && onPick(applyEnvironment(url, event.target.value))}
+      disabled={disabled}
+      aria-label="Environment"
+      title="TK web environments"
+    >
+      {!current && <option value="">Custom</option>}
+      {ENV_GROUPS.map((group) => (
+        <optgroup key={group.label} label={group.label}>
+          {group.items.map((item) => (
+            <option key={item.name} value={item.url} title={item.url}>{item.name}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * The bar of the empty screen: pick an environment, name a page, open it.
+ *
+ * Only the empty screen has this. Once a page is open the address lives in the
+ * browser chrome, next to Back and Forward, rather than in a second bar above
+ * the whole workspace saying a different thing from the chrome's.
+ */
+function OpenPageBar({ onOpen, busy }) {
   // Opens on NUAT, the environment most work starts from, so the common case
   // is one click. The box stays editable for a path or a one-off host.
   const [url, setUrl] = useState(DEFAULT_ENV_URL);
@@ -41,34 +81,16 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
   // browser, and the window is kept off-screen so headed costs nothing visible.
   const [visible, setVisible] = useState(true);
 
+  // `busy` stays true for the several seconds a browser takes to start, and a
+  // second press in that window opens a second browser.
   const submit = () => {
     if (!url.trim() || busy) return;
-    if (session) onNavigate(url.trim());
-    else onOpen(url.trim(), viewport, !visible);
+    onOpen(url.trim(), viewport, !visible);
   };
 
   return (
     <div className="address-bar">
-      {/* The environments differ by a single token, and picking the wrong one
-          produces a run against the wrong stack that still reads as plausible.
-          Choosing from the list fills the address; typing over it still works. */}
-      <select
-        className="env-select"
-        value={matchEnv(url)?.url || ''}
-        onChange={(event) => event.target.value && setUrl(event.target.value)}
-        disabled={busy}
-        aria-label="Environment"
-        title="TK web environments"
-      >
-        {!matchEnv(url) && <option value="">Custom</option>}
-        {ENV_GROUPS.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.items.map((item) => (
-              <option key={item.name} value={item.url} title={item.url}>{item.name}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      <EnvSelect url={url} onPick={setUrl} disabled={busy} />
 
       <div className="address-input">
         <Globe size={15} />
@@ -76,7 +98,7 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
           value={url}
           onChange={(event) => setUrl(event.target.value)}
           onKeyDown={(event) => event.key === 'Enter' && submit()}
-          placeholder={session ? session.device.name : 'turkishairlines.com'}
+          placeholder="turkishairlines.com"
           autoComplete="off"
           spellCheck="false"
           aria-label="Page address"
@@ -88,43 +110,34 @@ function AddressBar({ session, onOpen, onNavigate, onClose, busy }) {
         )}
       </div>
 
-      {!session && (
-        <>
-          <div className="segmented compact">
-            {VIEWPORTS.map((item) => (
-              <button
-                key={item.id}
-                className={viewport === item.id ? 'active' : ''}
-                onClick={() => setViewport(item.id)}
-                title={`${item.w} × ${item.h}`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+      <div className="segmented compact">
+        {VIEWPORTS.map((item) => (
           <button
-            className={`toggle-chip ${visible ? 'on' : ''}`}
-            onClick={() => setVisible((value) => !value)}
-            title={visible
-              ? 'The browser has a window (kept off-screen). Most sites refuse a headless one, so this is the default.'
-              : 'No browser window. Faster, but many sites — including this one — drop a headless browser at the network layer.'}
+            key={item.id}
+            className={viewport === item.id ? 'active' : ''}
+            onClick={() => setViewport(item.id)}
+            title={`${item.w} × ${item.h}`}
           >
-            {visible ? <Eye size={13} /> : <EyeOff size={13} />}
-            {visible ? 'Visible' : 'Headless'}
+            {item.label}
           </button>
-        </>
-      )}
+        ))}
+      </div>
+
+      <button
+        className={`toggle-chip ${visible ? 'on' : ''}`}
+        onClick={() => setVisible((value) => !value)}
+        title={visible
+          ? 'The browser has a window (kept off-screen). Most sites refuse a headless one, so this is the default.'
+          : 'No browser window. Faster, but many sites — including this one — drop a headless browser at the network layer.'}
+      >
+        {visible ? <Eye size={13} /> : <EyeOff size={13} />}
+        {visible ? 'Visible' : 'Headless'}
+      </button>
 
       <button className="btn btn-primary" onClick={submit} disabled={busy || !url.trim()}>
         {busy ? <Loader2 size={14} className="spin" /> : <Globe size={14} />}
-        {busy ? 'Opening…' : session ? 'Go' : 'Open'}
+        {busy ? 'Opening…' : 'Open'}
       </button>
-
-      {session && (
-        <button className="btn btn-danger" onClick={onClose}>
-          Close page
-        </button>
-      )}
     </div>
   );
 }
@@ -178,6 +191,12 @@ export function WebWorkspace({
   // Seconds spent waiting for a watched run to open its first browser. A number
   // that moves is the whole difference between "starting" and "stuck".
   const [waited, setWaited] = useState(0);
+  // What has been typed over the address, or null while nobody has touched it.
+  // The field below is derived from this and the page's real address rather
+  // than seeded from it: a field holding its own copy drifts the moment the
+  // page moves, and the old bar's — seeded once, never refreshed — spent every
+  // session claiming the address it had been opened with.
+  const [typedUrl, setTypedUrl] = useState(null);
 
   const imgRef = useRef(null);
   const pressRef = useRef(null);
@@ -198,6 +217,7 @@ export function WebWorkspace({
     sessionId, holding || wheeling ? Math.max(fps, 24) : fps, Boolean(sessionId),
   );
   const pageLost = connection === 'lost';
+  const address = typedUrl ?? session?.device?.name ?? DEFAULT_ENV_URL;
 
   const scan = useExplore(sessionId);
 
@@ -362,6 +382,7 @@ export function WebWorkspace({
       if (preset) setScreen({ width: preset.w, height: preset.h });
       setTree(null);
       setSelected(null);
+      setTypedUrl(null);
       agent.reset();
     } finally {
       setBusy(false);
@@ -372,11 +393,23 @@ export function WebWorkspace({
     setBusy(true);
     try {
       await onNavigate(url);
+      // Back to reporting where the page is, rather than holding what was typed
+      // to get it there. If the navigation failed this shows the address that
+      // is still open, which is the honest answer either way.
+      setTypedUrl(null);
       setTree(null);
       setSelected(null);
     } finally {
       setBusy(false);
     }
+  };
+
+  // The chrome's Go, and Enter in its address field. Locked while a navigation
+  // is in flight: the second press is a second page load over the first.
+  const goToAddress = () => {
+    const next = address.trim();
+    if (!next || busy) return;
+    handleNavigate(next);
   };
 
   // --- direct interaction with the page image -------------------------- //
@@ -536,6 +569,12 @@ export function WebWorkspace({
     return box ? { ...box, color: roleColor(node.role) } : null;
   }, [hovered, selected, screen]);
 
+  // Live means a frame has actually arrived, not merely that a session exists —
+  // there is a second or two between the two, and claiming the first during the
+  // second is how a pill stops being worth reading. A stream that has died goes
+  // on showing its last frame, so "live" has to give way to the truth as well.
+  const watchState = connection === 'lost' ? 'lost' : screenshot ? 'live' : 'pending';
+
   // --- empty state ------------------------------------------------------ //
 
   if (watch) {
@@ -545,15 +584,14 @@ export function WebWorkspace({
           <div className="web-title-row">
             <h1 className="page-title">Web</h1>
             {/* Connecting and connected are different things, and the wait
-                between them is long enough that saying so matters. */}
-            {/* Live means a frame has actually arrived, not merely that a
-                session exists — there is a second or two between the two, and
-                claiming the first during the second is how a pill stops being
-                worth reading. */}
-            <span className={`watch-pill ${screenshot ? 'live' : 'pending'}`}>
-              {screenshot
-                ? <><Radio size={12} /> Live</>
-                : <><Loader2 size={12} className="spin" /> Connecting</>}
+                between them is long enough that saying so matters. This is the
+                only place the stream's state is given: it used to be said again
+                over the frame, from the same two values, so the two could only
+                ever agree. */}
+            <span className={`watch-pill ${watchState}`}>
+              {watchState === 'live' && <><Radio size={12} /> Live</>}
+              {watchState === 'pending' && <><Loader2 size={12} className="spin" /> Connecting</>}
+              {watchState === 'lost' && <><AlertTriangle size={12} /> Page lost</>}
             </span>
             <span className="watch-exec" title="The execution being watched">
               {watch.name || 'Execution'}
@@ -604,10 +642,6 @@ export function WebWorkspace({
             <div className="watch-scenario">
               <span className="watch-scenario-idx">#{session.watching?.idx}</span>
               <span className="watch-scenario-name">{session.watching?.label}</span>
-              <span className={`stream-pill ${connection}`}>
-                <span className="status-dot" />
-                {connection === 'live' ? 'live' : connection}
-              </span>
             </div>
             <div className="browser-viewport watching" ref={stageRef}>
               {screenshot ? (
@@ -680,15 +714,21 @@ export function WebWorkspace({
           </div>
         </header>
 
-        <AddressBar session={null} onOpen={handleOpen} busy={busy} />
+        <OpenPageBar onOpen={handleOpen} busy={busy} />
 
         <div className="empty-state">
           <Globe size={34} />
-          <h3>Open a page to start</h3>
-          <p>
-            The page appears below at full width, the agent runs underneath it, and every step is
-            recorded with a screenshot. You can click and scroll the page yourself at any time.
-          </p>
+          <h3>No page open yet</h3>
+          {/* True of every page opened here and read once, so it waits behind a
+              line rather than taking a paragraph under the bar that opens one. */}
+          <details className="web-fold">
+            <summary>What the screen becomes once a page is open</summary>
+            <p className="muted small web-fold-body">
+              The agent runs down the left and the live page fills the right, so a run and the
+              thing it is doing stay visible together. Every step is recorded with a screenshot,
+              and you can click, hold and scroll the page yourself at any time.
+            </p>
+          </details>
         </div>
       </main>
     );
@@ -701,10 +741,15 @@ export function WebWorkspace({
       <header className="page-header compact">
         <div className="web-title-row">
           <h1 className="page-title">Web</h1>
-          <span className={`stream-pill ${connection}`}>
-            <span className="status-dot" />
-            {connection === 'live' ? 'live' : connection === 'lost' ? 'page lost' : connection}
-          </span>
+          {/* When the page is gone the banner over the frame says so, says why,
+              and carries the way back. A pill repeating it up here is the same
+              sentence twice on one screen, and the shorter of the two. */}
+          {!pageLost && (
+            <span className={`stream-pill ${connection}`}>
+              <span className="status-dot" />
+              {connection === 'live' ? 'live' : connection}
+            </span>
+          )}
           {/* States what this session is, not a switch that happened: the
               headless→headed fallback was removed from the backend, but the
               badge kept claiming the site had refused a background browser —
@@ -722,11 +767,11 @@ export function WebWorkspace({
             </span>
           )}
         </div>
+        {/* What is here is about the workspace; what is about the page is in
+            the chrome under it. Re-reading the page was in both, as Reload here
+            and as the circular arrow there, running the same function — two
+            buttons for one thing, three inches apart. */}
         <div className="web-header-actions">
-          <button className="btn btn-ghost btn-sm" onClick={refreshTree} disabled={treeLoading}>
-            <RefreshCw size={13} className={treeLoading ? 'spin' : ''} />
-            Reload
-          </button>
           <button
             className={`btn btn-ghost btn-sm ${showTools ? 'active' : ''}`}
             onClick={() => setShowTools((value) => !value)}
@@ -742,20 +787,16 @@ export function WebWorkspace({
             {showInspector ? <PanelRightClose size={13} /> : <PanelRightOpen size={13} />}
             Inspector
           </button>
+          <button className="btn btn-ghost btn-sm web-session-close" onClick={onClose}>
+            <X size={13} />
+            Close page
+          </button>
         </div>
       </header>
 
       {showTools && (
         <WebTools sessionId={session.sessionId} onClose={() => setShowTools(false)} />
       )}
-
-      <AddressBar
-        session={session}
-        onOpen={handleOpen}
-        onNavigate={handleNavigate}
-        onClose={onClose}
-        busy={busy}
-      />
 
       {/* Agent on the left, page on the right: the run and the thing it is
           doing stay visible at the same time, and the page gets the full
@@ -813,17 +854,76 @@ export function WebWorkspace({
             className={`browser-shell ${isFullscreen ? 'fullscreen' : ''}`}
             ref={shellRef}
           >
-            <div className="browser-bar">
-              <button className="browser-nav" onClick={() => send({ type: 'key', key: 'back' })} title="Back">
+            {/* One address, in the chrome, editable. The workspace used to
+                carry a second bar above the body with a field of its own, and
+                the two disagreed by design: this one reported where the page
+                was, that one held whatever had last been typed into it. */}
+            <div className="browser-bar web-chrome">
+              {/* Nothing here reaches a page that is gone, and the banner below
+                  already says what to do instead. Same reason the agent's Run
+                  is refused while the page is lost: a control that can only
+                  fail should not be offered. */}
+              <button
+                className="browser-nav"
+                onClick={() => send({ type: 'key', key: 'back' })}
+                disabled={pageLost}
+                title="Back"
+                aria-label="Back"
+              >
                 <ArrowLeft size={13} />
               </button>
-              <button className="browser-nav" onClick={() => send({ type: 'key', key: 'forward' })} title="Forward">
+              <button
+                className="browser-nav"
+                onClick={() => send({ type: 'key', key: 'forward' })}
+                disabled={pageLost}
+                title="Forward"
+                aria-label="Forward"
+              >
                 <ArrowRight size={13} />
               </button>
-              <button className="browser-nav" onClick={refreshTree} title="Re-read the page">
-                <RotateCcw size={13} />
+              <button
+                className="browser-nav"
+                onClick={refreshTree}
+                disabled={treeLoading || pageLost}
+                title="Re-read the page"
+                aria-label="Re-read the page"
+              >
+                <RotateCcw size={13} className={treeLoading ? 'spin' : ''} />
               </button>
-              <span className="browser-address">{session.device.name}</span>
+
+              <EnvSelect url={address} onPick={setTypedUrl} disabled={busy || pageLost} />
+
+              <div className="address-input">
+                <Globe size={14} />
+                <input
+                  value={address}
+                  onChange={(event) => setTypedUrl(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && goToAddress()}
+                  placeholder="turkishairlines.com"
+                  autoComplete="off"
+                  spellCheck="false"
+                  aria-label="Page address"
+                />
+                {address && (
+                  <button
+                    className="icon-btn-tiny"
+                    onClick={() => setTypedUrl('')}
+                    aria-label="Clear the address"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={goToAddress}
+                disabled={busy || pageLost || !address.trim()}
+              >
+                {busy && <Loader2 size={13} className="spin" />}
+                {busy ? 'Going…' : 'Go'}
+              </button>
+
               <span className="browser-size">
                 {screen.width} × {screen.height}
               </span>
@@ -846,12 +946,11 @@ export function WebWorkspace({
                   The page is no longer responding — {lostReason}. The view below is the last
                   frame it sent.
                 </span>
+                {/* Reopening takes seconds and looks like nothing happening, so
+                    the button locks — a second press opens a second browser. */}
                 <button className="btn btn-primary btn-sm" onClick={reopen} disabled={busy}>
                   {busy ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
                   Reopen page
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={onClose}>
-                  Close
                 </button>
               </div>
             )}

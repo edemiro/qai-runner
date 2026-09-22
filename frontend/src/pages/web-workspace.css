@@ -1,0 +1,152 @@
+/* ==========================================================================
+   Web workspace — the agent on the left, the live page on the right
+   The page's own sheet, for the few things only this screen has: the browser
+   chrome that carries the address, and the one fold on the empty screen.
+   Everything else it draws — the
+   shell, the viewport, the pills, the buttons — is shared furniture and stays
+   in App.css, where the other pages read it from.
+
+   App.jsx imports this page before it imports App.css, so the shared sheet
+   lands after this one in the bundle and wins any tie. Nothing here restates a
+   shared rule at the same weight: every selector is either a name this screen
+   alone uses, or a shared name scoped under one. The hover rules carry the
+   same :not(:disabled) the shared ones do, for the same reason — without it
+   they tie at equal weight and the shared sheet takes it.
+   ========================================================================== */
+
+/* ------------------------------------------------------- browser chrome -- */
+
+/* One row, in the chrome, where a browser keeps its address. The address used
+   to sit in a full-width bar above the body, spanning the agent column as
+   well, while the chrome under it showed the same address again as text: one
+   said where you were, the other said where you had last typed, and neither
+   agreed with the other for long. Folding them together also gives the mirror
+   back the height the second row was taking.
+
+   It wraps rather than laying out in fixed tracks: the size readout and the
+   fullscreen button come and go, and a row of tracks counted for one of those
+   states strands a control on a line of its own in the other. */
+.browser-bar.web-chrome {
+  flex-wrap: wrap;
+  gap: 6px 7px;
+  padding: 6px 9px;
+}
+
+/* index.css strips border, background and outline from every input, so the
+   field is only visible because the box around it draws them — that box is the
+   shared .address-input, kept, and only resized here to chrome height. The bar
+   behind it is the same surface the field defaults to, so the field is lifted a
+   shade above it; a border alone against an identical fill reads as a hairline
+   rather than as somewhere to type. */
+.web-chrome .address-input {
+  flex: 1 1 210px;
+  min-width: 140px;
+  height: var(--control-h-sm);
+  padding: 0 var(--control-px-sm);
+  gap: 6px;
+  background: var(--bg-raised);
+}
+
+.web-chrome .address-input input {
+  font-size: var(--control-font-sm);
+}
+
+/* Narrower than the same picker on the empty screen: there it is the first
+   decision on an empty row, here it shares a chrome with six other controls
+   and the name it shows is a reminder rather than a choice being made. */
+.web-chrome .env-select {
+  width: 124px;
+  height: var(--control-h-sm);
+}
+
+/* Everything from here is about the frame rather than about where to go, so it
+   sits at the far end — and stays at the far end of the last line when the bar
+   wraps on a narrow window. */
+.web-chrome .browser-size {
+  margin-left: auto;
+}
+
+/* ------------------------------------------------------ session actions -- */
+
+/* Closing the page throws away the session behind it — the sign-in, the
+   cookies, the cart half filled — so it reads as the one destructive thing in
+   the header rather than as a third toggle beside Tools and Inspector. Named
+   rather than reached through .btn-ghost: a rule on the shared class here
+   would repaint every ghost button in the row. */
+.web-header-actions .web-session-close {
+  color: var(--danger);
+}
+
+.web-header-actions .web-session-close:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* A watched run keeps showing its last frame after the stream dies, so the
+   pill has to stop saying Live; there is no banner over a watched frame to say
+   it instead. */
+.watch-pill.lost {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-soft);
+}
+
+/* --------------------------------------------------------- empty screen -- */
+
+/* What the screen becomes once a page is open is true of every page opened
+   here and read once. Behind a line it costs a line; above the bar that opens
+   a page it costs a paragraph, every visit, for the life of the screen.
+
+   Borderless, unlike the folds on the list pages: a bordered strip in the
+   middle of an empty state reads as another thing to do rather than as a note
+   about the one thing there is to do. */
+.web-fold {
+  max-width: 62ch;
+}
+
+.web-fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own, which would otherwise sit beside
+   the chevron below as a second triangle. */
+.web-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.web-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.web-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.web-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+/* The empty state centres its children; a sentence read left to right should
+   not be. */
+.web-fold .web-fold-body {
+  padding-top: 7px;
+  text-align: left;
+  line-height: 1.6;
+}

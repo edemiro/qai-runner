@@ -986,7 +986,11 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
             <button key={run.id} className="run-row" onClick={() => onSelectRun(run.id)}>
               <StatusBadge status={run.status} />
               <div className="run-row-main">
-                <span className="run-row-title">{run.title}</span>
+                {/* Clamped to two lines, and these names carry the route, the
+                    passenger mix and the cabin — on a laptop the third line is
+                    where the useful half of that lives, with no way to read it
+                    but the tooltip. */}
+                <span className="run-row-title" title={run.title}>{run.title}</span>
                 {/* Where it ran, and nothing else. This line used to carry the
                     platform and the model as well: the platform is the tab
                     above, and the model is the same on every row until someone
