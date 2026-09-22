@@ -711,11 +711,29 @@ def _element_info(element: Any) -> Optional[Dict[str, Any]]:
     if not bounds:
         return None
     describe = getattr(element, "describe", None)
+    role = getattr(element, "role", None)
+    # What to call this element, in the order a person would.
+    #
+    # `describe` goes own-text, accessible name, resource id, role — and a
+    # control whose words sit on a child therefore comes back as its id or as
+    # "button". That name goes into the step record, into the box drawn on the
+    # report's screenshot, and into the recording, where it is what a replayed
+    # click is checked against. Every airport pick in the suite was recorded as
+    # "button", and a recording checked against a name that says nothing is
+    # checked against nothing. So the region's own words come before the id: a
+    # row reading "İstanbul Havalimanı (IST)" is what the tester saw, and
+    # "booker-option-1" is only where it happened to sit.
+    label = (
+        " ".join(str(getattr(element, "text", "") or "").split())
+        or " ".join(str(getattr(element, "name", "") or "").split())
+        or _text_within(element)[:120]
+        or (describe() if callable(describe) else None)
+    )
     return {
-        "label": describe() if callable(describe) else None,
+        "label": label,
         "text": getattr(element, "text", None),
         "content-desc": getattr(element, "name", None),
-        "role": getattr(element, "role", None),
+        "role": role,
         "bounds": bounds,
     }
 
@@ -1248,6 +1266,43 @@ def _already_true(action: Dict[str, Any], before: Optional[List[str]],
     if not needle or not before:
         return False
     return text_match.contains(text_match.joined(before), needle)
+
+
+def _label_moved(snapshot: Optional[Snapshot],
+                 entry: Dict[str, Any]) -> Optional[str]:
+    """Does the recorded selector still point at what was recorded there?
+
+    Returns what sits there now when it has changed, or None when the recording
+    can be trusted — including when there is nothing to compare, because a
+    recording with no label, or a screen that could not be read, is not
+    evidence of anything having moved.
+
+    Only positional selectors are judged. An id or a test id is a name the page
+    gave the element and it is not going to mean something else; `:nth-of-type`
+    and `#booker-option-0` are a place in a list, and a list the page fills in
+    as its server answers puts different things in that place at different
+    moments.
+    """
+    label = " ".join(str(entry.get("label") or "").split())
+    selector = str(entry.get("selector") or "")
+    if not label or not selector or snapshot is None:
+        return None
+    if not re.search(r"nth-of-type|nth-child|-option-\d|\[\d+\]", selector):
+        return None
+    element = next(
+        (e for e in snapshot.get_all_elements()
+         if getattr(e, "selector", None) == selector
+         or getattr(e, "xpath", None) == selector),
+        None,
+    )
+    if element is None:
+        # Gone is a different thing from changed, and the driver reports it
+        # with its own message when the action runs.
+        return None
+    here = _text_within(element)
+    if not here or text_match.contains(here, label):
+        return None
+    return here[:70]
 
 
 def _first_json_object(reply: str) -> Optional[Dict[str, Any]]:
@@ -1890,16 +1945,40 @@ async def run_agent(
             reply = ""
             if replay_queue:
                 entry = replay_queue.pop(0)
-                action = {
-                    "action": entry.get("action"),
-                    "selector": entry.get("selector"),
-                    "value": entry.get("value"),
-                    "reason": "replayed from the last green run",
-                }
-                replaying = True
-                replayed_actions += 1
-                yield _event("replaying", step=step_no, action=action["action"],
-                             label=entry.get("label"))
+                # A recording says where it clicked and what that thing said.
+                # Where alone is not enough on a list that is built as the page
+                # answers: the airport suggestions are `#booker-option-0` and
+                # up, and until they arrive the row at index 0 is "Tüm uçuş
+                # noktalarını gör", which opens a list of every country there
+                # is. Seventeen recorded actions across eleven scenarios click
+                # an airport by its position. Replaying one blind is a coin
+                # toss on how fast the list came back, so the label is checked
+                # first and a recording that no longer points at what it
+                # recorded is treated as what it is — stale.
+                wrong = _label_moved(snapshot, entry)
+                if wrong is not None:
+                    replay_queue.clear()
+                    yield _event(
+                        "replay_abandoned", step=step_no,
+                        action=entry.get("action"),
+                        message=(
+                            f'The recording clicked "{entry.get("label")}" at '
+                            f'{entry.get("selector")}, and that is now '
+                            f'"{wrong}". Taking the step from here instead.'
+                        ),
+                    )
+                    action = None
+                else:
+                    action = {
+                        "action": entry.get("action"),
+                        "selector": entry.get("selector"),
+                        "value": entry.get("value"),
+                        "reason": "replayed from the last green run",
+                    }
+                    replaying = True
+                    replayed_actions += 1
+                    yield _event("replaying", step=step_no, action=action["action"],
+                                 label=entry.get("label"))
 
             # When the recording runs out having proved the step's expected
             # result, the step is closed on that proof alone. Without an

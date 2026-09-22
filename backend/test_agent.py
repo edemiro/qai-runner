@@ -1328,6 +1328,100 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class AReplayedClickChecksWhatItIsClicking(unittest.TestCase):
+    """The airport suggestions are `#booker-option-0` and up, and until they
+    arrive the row at index 0 is "Tüm uçuş noktalarını gör" — which opens a
+    list of every country there is and loses the scenario.
+
+    Seventeen recorded actions across eleven scenarios click an airport by its
+    position, so replaying one blind is a coin toss on how fast the list came
+    back. The label recorded beside the selector settles it.
+    """
+
+    PAGE = {"nodes": [
+        {"role": "button", "tag": "li", "id": "booker-option-0",
+         "text": "Tüm uçuş noktalarını gör", "label": None,
+         "selector": "#booker-option-0 > span:nth-of-type(2)",
+         "bounds": {"x1": 0, "y1": 0, "x2": 200, "y2": 30}, "parentIndex": -1},
+        {"role": "button", "tag": "button", "id": "fromPort",
+         "text": "İstanbul", "label": "Nereden", "selector": "#fromPort",
+         "bounds": {"x1": 0, "y1": 40, "x2": 200, "y2": 70}, "parentIndex": -1},
+    ]}
+
+    def setUp(self):
+        self.snapshot = WebSnapshot(self.PAGE)
+
+    def test_a_row_that_now_says_something_else_is_refused(self):
+        moved = agent._label_moved(self.snapshot, {
+            "action": "click",
+            "selector": "#booker-option-0 > span:nth-of-type(2)",
+            "label": "İstanbul Havalimanı (IST)",
+        })
+        self.assertIsNotNone(moved, "the recording must not be replayed")
+        self.assertIn("Tüm uçuş", moved)
+
+    def test_the_same_row_still_saying_the_same_thing_is_replayed(self):
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click",
+            "selector": "#booker-option-0 > span:nth-of-type(2)",
+            "label": "Tüm uçuş noktalarını gör",
+        }))
+
+    def test_turkish_case_does_not_make_a_match_look_like_a_move(self):
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click",
+            "selector": "#booker-option-0 > span:nth-of-type(2)",
+            "label": "TÜM UÇUŞ NOKTALARINI GÖR",
+        }))
+
+    def test_a_named_element_is_not_judged(self):
+        """An id is a name the page gave the element; it does not come to mean
+        something else the way a position in a list does, and judging it would
+        throw away recordings for a label that was merely reworded."""
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click", "selector": "#fromPort", "label": "Nereden alanı",
+        }))
+
+    def test_nothing_to_compare_is_not_evidence_of_a_move(self):
+        for entry in (
+            {"action": "click", "selector": "#booker-option-0 > span:nth-of-type(2)"},
+            {"action": "click", "selector": "", "label": "İstanbul"},
+        ):
+            self.assertIsNone(agent._label_moved(self.snapshot, entry))
+        self.assertIsNone(agent._label_moved(None, {
+            "action": "click",
+            "selector": "#booker-option-0 > span:nth-of-type(2)",
+            "label": "İstanbul",
+        }))
+
+    def test_a_control_whose_words_are_on_a_child_is_named_by_them(self):
+        """Every airport pick in the suite was recorded as "button", because
+        `describe` reads the node's own text and falls back to the role. The
+        recording is then checked against a name that says nothing."""
+        page = {"nodes": [
+            {"role": "button", "tag": "li", "id": "booker-option-1", "text": None,
+             "label": None, "selector": "#booker-option-1",
+             "bounds": {"x1": 0, "y1": 0, "x2": 200, "y2": 30}, "parentIndex": -1},
+            {"role": "text", "tag": "span", "text": "İstanbul Havalimanı (IST)",
+             "selector": "#booker-option-1 span",
+             "bounds": {"x1": 4, "y1": 4, "x2": 196, "y2": 26}, "parentIndex": 0},
+        ]}
+        snapshot = WebSnapshot(page)
+        row = next(e for e in snapshot.get_all_elements()
+                   if e.html_id == "booker-option-1")
+        info = agent._element_info(row)
+        self.assertEqual(info["label"], "İstanbul Havalimanı (IST)")
+        self.assertNotEqual(info["label"], info["role"])
+
+    def test_a_row_that_has_gone_is_left_to_the_driver(self):
+        """Gone is a different thing from changed, and the driver reports it
+        with its own message when the action runs."""
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click", "selector": "#booker-option-7 > span:nth-of-type(2)",
+            "label": "İstanbul",
+        }))
+
+
 class ALongStepIsNotAStuckStep(unittest.IsolatedAsyncioTestCase):
     """A step is cut off for getting nowhere, not for taking a while.
 
