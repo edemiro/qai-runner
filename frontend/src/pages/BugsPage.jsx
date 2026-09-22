@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Bug, Camera, ChevronRight, ExternalLink, Loader2, Trash2,
+  Bug, Camera, ChevronRight, ExternalLink, Loader2, Search, Trash2,
 } from 'lucide-react';
 
 import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { useToast } from '../hooks/useToast';
 import { OS_TABS } from '../lib/platforms';
+import './bugs.css';
 
 /**
  * Defects raised off failed scenarios.
@@ -120,6 +121,14 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
 
   const selected = bugs.find((b) => b.id === selectedId) || null;
 
+  /* A search box and a filter row are for narrowing something. Before the
+     first bug is raised they narrow nothing, so a first visit is the empty
+     state and the sentence saying where bugs come from, not two controls over
+     blank space. They come back the moment there is a list — or the moment a
+     filter is what emptied it, so nobody is left holding a filter they cannot
+     clear. */
+  const showTools = loading || bugs.length > 0 || Boolean(status || search);
+
   const setBugStatus = async (bug, next) => {
     try {
       await api.updateBug(bug.id, { status: next });
@@ -150,12 +159,6 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
             after the run that found it is gone.
           </p>
         </div>
-        <input
-          className="bug-search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search title, body or scenario"
-        />
         <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
         {platform === 'mobile' && (
           <PlatformTabs
@@ -165,19 +168,50 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
         )}
       </header>
 
-      <div className="segmented">
-        {[['', 'All'], ...(meta.statuses || []).map((s) => [s, STATUS_LABEL[s] || s])]
-          .map(([value, label]) => (
-            <button
-              key={value || 'all'}
-              className={status === value ? 'active' : ''}
-              onClick={() => setStatus(value)}
-            >
-              {label}
-              <span className="tab-count">{value ? (counts[value] || 0) : (counts.all || 0)}</span>
-            </button>
-          ))}
-      </div>
+      {/* Both ways of narrowing the list stand together over the list itself:
+          the text you half remember and the state you care about are the same
+          question asked twice, and neither belongs up in the title row. */}
+      {showTools && (
+        <div className="bug-tools">
+          <div className="bug-search">
+            <Search size={14} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search title, body or scenario"
+              aria-label="Search bugs"
+            />
+            {/* The chips count by status within the platform and know nothing
+                of what has been typed, so while a search is running this is
+                the only number on the row that describes the rows on screen. */}
+            {search && !loading && (
+              <span className="muted small bug-match-count">
+                {bugs.length} match{bugs.length === 1 ? '' : 'es'}
+              </span>
+            )}
+          </div>
+
+          {/* Every chip carries its count except All, whose total is the number
+              already on the platform tab a row above — the same figure by the
+              way it is counted, not merely a close one. How that total splits,
+              twelve open of the thirty-seven that tab claims, is said nowhere
+              else, so those counts stay. */}
+          <div className="segmented">
+            {[['', 'All'], ...(meta.statuses || []).map((s) => [s, STATUS_LABEL[s] || s])]
+              .map(([value, label]) => (
+                <button
+                  key={value || 'all'}
+                  className={status === value ? 'active' : ''}
+                  onClick={() => setStatus(value)}
+                >
+                  {label}
+                  {value ? <span className="tab-count">{counts[value] || 0}</span> : null}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <p className="muted">Loading…</p>

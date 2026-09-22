@@ -1,0 +1,238 @@
+/* ==========================================================================
+   Test Runs — the list, and the full report for one run
+   The page's own sheet, for the few things only this page has: the toolbars
+   that sit over its long lists, the folds that keep an explanation to a line,
+   and a denser run of stat tiles than the shared one. Everything else the page
+   draws is shared furniture and stays in App.css, where the other pages read
+   it from.
+
+   App.jsx imports this page before it imports App.css, so the shared sheet
+   lands after this one in the bundle and wins any tie. Nothing here restates a
+   shared rule at the same weight: every selector is either a name this page
+   alone uses, or a shared name scoped under one.
+   ========================================================================== */
+
+/* -------------------------------------------------------------- the list -- */
+
+/* Search and the two chip rows are three answers to "which runs", and they
+   used to be three stacked rows: on a 900px-tall laptop the first run sat
+   below the fold of a page whose whole job is the list. One wrapping row puts
+   them side by side where there is width and stacks them only where there is
+   not. */
+.runs-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+  margin-bottom: 10px;
+}
+
+/* The shared rule gives the field a bottom margin for when it heads a page on
+   its own; in the toolbar the row's own gap does that job. It takes the spare
+   width but keeps a floor, so the chips wrap to their own line rather than
+   squeezing the search down to a slot too narrow to read a query in. */
+.runs-toolbar .run-search {
+  flex: 1 1 260px;
+  min-width: 200px;
+  margin: 0;
+}
+
+.runs-toolbar .filter-row {
+  flex: 0 1 auto;
+}
+
+/* Sits under the toolbar now rather than tight beneath the search field, so
+   the shared negative top margin would pull it onto the chips. */
+.page > .run-scope {
+  margin: 2px 0 10px;
+}
+
+/* ------------------------------------------------------------ the report -- */
+
+/* Seven tiles at the shared padding is a band deep enough to push the steps —
+   the reason anyone opened the report — off the first screen. Same tiles, read
+   in a glance rather than a scan. */
+.run-detail .stat {
+  padding: 7px 12px;
+  min-width: 88px;
+  gap: 1px;
+}
+
+.run-detail .stat-value {
+  font-size: 14px;
+}
+
+.run-detail .run-stats {
+  gap: var(--gap-2);
+}
+
+/* A verdict is worth a colour; the tiles around it are not, or none of them
+   is. */
+.run-detail .stat-value.bad {
+  color: var(--danger);
+}
+
+/* The bar over a long list: which rows, and a field to name one. Sticky,
+   because the list it filters is the one long enough to scroll away from its
+   own controls — which is the reason it has controls. */
+.report-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--gap-2) var(--gap-3);
+  padding: 8px 0;
+  margin-bottom: 2px;
+  background: var(--bg-base);
+}
+
+.report-toolbar-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-1);
+}
+
+/* index.css strips border, background and outline from every input, so a
+   field is only visible inside something that draws them. This is that
+   something, at toolbar height rather than the taller one the page-heading
+   search uses. */
+.report-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 260px;
+  min-width: 170px;
+  height: var(--control-h-sm);
+  padding: 0 var(--control-px-sm);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+}
+
+.report-search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.report-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--control-font-sm);
+  color: var(--text-primary);
+}
+
+.report-search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Chrome draws its own clear affordance on a search input and it does not
+   match anything else here. */
+.report-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.report-search-clear {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.report-search-clear:hover {
+  color: var(--text-primary);
+}
+
+/* Filtering to nothing is a state the reader put the page in, so the way back
+   out belongs in the sentence that reports it. */
+.report-none {
+  padding: 18px 2px;
+}
+
+.linklike {
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linklike:hover {
+  color: var(--accent-hover);
+}
+
+/* ----------------------------------------------------------------- folds -- */
+
+/* Two things belong behind a line here: an explanation that is true of every
+   run and read once, and the export panel, which writes something new rather
+   than reporting what happened. Both cost a line shut and a screen open. */
+.run-fold {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.run-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own, which would otherwise sit beside
+   the chevron below as a second triangle. */
+.run-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.run-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.run-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+.run-fold-body {
+  padding: 2px 11px 11px;
+}
+
+/* The report's lists end wherever they end, so the export line needs its own
+   separation from the last row rather than relying on the column gap. */
+.run-export-fold {
+  margin-top: var(--gap-3);
+}
+
+/* -------------------------------------------------------------- narrower -- */
+
+@media (max-width: 720px) {
+  /* Below this the chips and the field each want the full width anyway, and
+     holding them apart only strands the search on a line of its own. */
+  .report-toolbar {
+    justify-content: flex-start;
+  }
+
+  .report-search,
+  .runs-toolbar .run-search {
+    flex-basis: 100%;
+  }
+}

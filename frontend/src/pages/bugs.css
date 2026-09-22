@@ -1,0 +1,71 @@
+/* ==========================================================================
+   Bug Report
+   The page's own sheet, for the one thing only this page has: the row that
+   carries the search and the status chips together, over the list they both
+   narrow. Everything else here — the list, the detail, the badges — is shared
+   furniture and is left in App.css, where the other pages read it from.
+
+   App.jsx pulls this page in before it imports App.css, so the shared sheet
+   lands after this one in the bundle. Nothing here restates a shared rule at
+   the same weight — a tie would silently go to App.css — so every selector is
+   either a name this page alone uses or one scoped under such a name.
+   ========================================================================== */
+
+/* The two controls that narrow the list sit on one row directly above it, so
+   "is my bug in here" is answered on the way in rather than by scrolling. They
+   are one row and not two because they are one question asked twice over: the
+   text you remember, and the state you care about. */
+.bug-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Built like the search on Test Runs, because a tester who has learned one
+   field should not have to learn a second. Its width comes from App.css. */
+.bug-tools .bug-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 260px;
+  max-width: 420px;
+  height: var(--control-h);
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+}
+
+.bug-tools .bug-search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.bug-tools .bug-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.bug-tools .bug-search input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* The chips beside it count by status within the platform and know nothing of
+   what has been typed, so while a search is running the only honest number for
+   the rows on screen is this one, said where the typing happened. */
+.bug-match-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* The chip row keeps the height of the field it shares the row with: a 27px
+   strip beside a 34px box is exactly the hand-assembled look the shared
+   control heights exist to prevent. */
+.bug-tools .segmented {
+  height: var(--control-h);
+  align-items: center;
+}
