@@ -268,6 +268,11 @@ export function SuitesPage({
   const [deviceUdid, setDeviceUdid] = useState('');
   const [deviceAppId, setDeviceAppId] = useState('');
   const [connecting, setConnecting] = useState(false);
+  /* Which scenario's run is being got ready. Opening a browser takes seconds
+     and the run button stayed live for all of them, so a second press opened a
+     second browser and started a second run against it — two runs of the same
+     scenario, racing each other on different pages. */
+  const [starting, setStarting] = useState(null);
   // Which scenario's precondition data is being filled in, and what has been
   // typed so far. Held here rather than per row so only one form is open.
   const [dataFor, setDataFor] = useState(null);
@@ -1248,7 +1253,11 @@ export function SuitesPage({
                           {onRunHere && (
                             <button
                               className="btn-icon"
-                              disabled={connecting}
+                              /* Opening a browser takes a few seconds, and the
+                                 button stayed live for all of them — every
+                                 press opened another one and started another
+                                 run against it. */
+                              disabled={connecting || Boolean(starting)}
                               onClick={async () => {
                                 /* Whatever this scenario needs to run, get it —
                                    the same way pressing Run on the whole set
@@ -1259,22 +1268,31 @@ export function SuitesPage({
                                    connect something first was asking for a step
                                    they had already taken by pressing this. */
                                 const scenario = { ...item, kind: suite.kind || 'web' };
-                                if (!isMobileSet) {
-                                  onRunHere(scenario, { envUrl });
-                                  return;
+                                setStarting(item.id);
+                                try {
+                                  if (!isMobileSet) {
+                                    await onRunHere(scenario, { envUrl });
+                                    return;
+                                  }
+                                  const target = await resolveTarget('mobile');
+                                  if (!target) return;
+                                  await onRunHere(scenario, {
+                                    sessionId: target.deviceSessionId,
+                                  });
+                                } finally {
+                                  setStarting(null);
                                 }
-                                const target = await resolveTarget('mobile');
-                                if (!target) return;
-                                onRunHere(scenario, {
-                                  sessionId: target.deviceSessionId,
-                                });
                               }}
-                              title={item.steps?.length
-                                ? 'Run here, step by step — connects what it needs'
-                                : 'Run here — connects what it needs'}
+                              title={starting === item.id
+                                ? 'Starting…'
+                                : item.steps?.length
+                                  ? 'Run here, step by step — connects what it needs'
+                                  : 'Run here — connects what it needs'}
                               aria-label={`Run ${item.name} here`}
                             >
-                              <Play size={14} />
+                              {starting === item.id
+                                ? <Loader2 size={14} className="spin" />
+                                : <Play size={14} />}
                             </button>
                           )}
                           {/* Picking and enabling are different decisions: one is

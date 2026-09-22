@@ -63,6 +63,14 @@ AVAILABLE ACTIONS
   the screen behind it instead, leaving the container looking unchanged.
 `key` takes one of: {keys}.
 `wait` takes a number of seconds (max 10).
+`type` into a field that suggests as you type: the suggestions come from a
+  server and arrive after the typing does, so the first screen you are shown
+  afterwards may still hold the list as it was BEFORE you typed. Read it before
+  you click. If the entry you were told to pick is not there yet, `wait` a
+  second and look again rather than clicking whatever is. In particular, a row
+  like "see all…" / "Tüm uçuş noktalarını gör" is not a suggestion — it opens a
+  different screen, and choosing it loses the step. When the step names what to
+  pick, click the entry that says that thing and nothing else.
 `navigate` goes to an address, the way a tester types one. A path like
   "/tr-tr/flights" is relative to the site already open. The run already starts
   on the page under test, so this is for reaching a *second* page or going back
@@ -215,6 +223,14 @@ carry out that step and prove its expected result — nothing else.
   "fail" means it did not, and the reason must say what you saw instead.
 - A step that cannot be carried out at all is a `step_done` with "fail" — not a
   guess at the next step, and not `done`.
+- When the application itself says the thing is not on offer — "no suitable
+  selection for this flight", an empty seat map, a service this fare does not
+  include — that is the application's answer, not a step you have failed to
+  carry out. If the flow provides its own way past it ("continue without
+  choosing a seat", "skip"), take it, close the step with what the application
+  said, and carry on: a checkout where a choice is optional is meant to be
+  completable without it. Only insist when the step itself asks for the choice
+  — "pick seat 14A" is not satisfied by skipping seat selection.
 - `done` ends the whole scenario and is only for a failure so severe that the
   remaining steps are meaningless.
 """
@@ -1116,6 +1132,20 @@ async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None)
                 return result
         if time.monotonic() >= deadline:
             return result
+
+
+# Typing is the one action whose result does not come from the action.
+#
+# A search field answers a keystroke by asking a server, so the list arrives
+# after the typing finishes rather than with it. Measured on the booker: the
+# airport suggestions settle 500–719ms after the last character. The old settle
+# was 0.3s for everything, so the screen the model was shown still held the
+# list as it was *before* the typing — and on this page that list is not empty,
+# it holds a single row reading "Tüm uçuş noktalarını gör". The model did the
+# only sensible thing with the screen it was given and clicked it, which opens
+# the whole country picker, and the scenario was lost.
+SETTLE_AFTER_TYPING = 1.2
+TYPING_ACTIONS = {"type", "clear", "press_key", "key"}
 
 
 # How long a run waits for its first screen.
@@ -2212,8 +2242,12 @@ async def run_agent(
 
             # A brief settle window for whatever the action just triggered
             # (a transition, a keyboard animation) before the next snapshot.
-            # Longer than this only added dead time between steps.
-            await asyncio.sleep(0.3)
+            # Longer than this only added dead time between steps — except
+            # after typing, which is the one action whose result arrives from
+            # somewhere else. See SETTLE_AFTER_TYPING.
+            await asyncio.sleep(
+                SETTLE_AFTER_TYPING if kind in TYPING_ACTIONS else 0.3
+            )
         else:
             final_status = "failed"
             final_error = f"Reached the {ceiling} step ceiling without finishing."
