@@ -525,6 +525,112 @@ class TestWebSnapshotOffline(unittest.TestCase):
         self.assertLessEqual(len(tree["text"]), 300)
 
 
+class TellingNamesakesApart(unittest.TestCase):
+    """Two controls with one name between them.
+
+    Multi-city search puts three legs on one screen and the page gives every
+    leg's port fields the same id and the same aria-label, so the model was
+    handed six fields under two names. Six runs failed that way, the page
+    answering "Lütfen seyahatinizin başlangıç ve varış noktalarını seçiniz"
+    with the later legs still empty.
+    """
+
+    def _payload(self, nodes):
+        return {
+            "nodes": nodes, "viewport": {"width": 1440, "height": 900},
+            "page": {"width": 1440, "height": 3000}, "scrollY": 0,
+            "url": "https://example.test/", "title": "Example",
+        }
+
+    def _node(self, top, left=300, width=350, height=60, **kw):
+        base = {
+            "role": "text", "tag": "div", "id": None, "text": None,
+            "label": None, "value": None, "selector": "div",
+            "bounds": {"x1": left, "y1": top,
+                       "x2": left + width, "y2": top + height},
+            "enabled": True, "checked": None, "href": None, "parentIndex": -1,
+        }
+        base.update(kw)
+        return base
+
+    def _field(self, top, **kw):
+        return self._node(top, role="combobox", tag="input",
+                          selector="#fromPort", id="fromPort",
+                          label="Nereden", **kw)
+
+    def _legs(self):
+        """Three legs, each a header, an origin field and a destination."""
+        nodes = []
+        for index, top in enumerate((100, 200, 300), start=1):
+            nodes.append(self._node(top + 20, left=180, width=70, height=20,
+                                    text=f"{index}. Uçuş"))
+            nodes.append(self._field(top))
+            nodes.append(self._node(top, left=700, width=350, height=60,
+                                    role="combobox", tag="input",
+                                    selector="#toPort", id="toPort",
+                                    label="Nereye"))
+        return nodes
+
+    def test_each_leg_is_named_by_its_own_row(self):
+        snapshot = WebSnapshot(self._payload(self._legs()))
+        origins = [e for e in snapshot.get_all_elements()
+                   if e.resource_id == "fromPort"]
+        self.assertEqual([e.describe() for e in origins],
+                         ["Nereden (1. Uçuş)", "Nereden (2. Uçuş)",
+                          "Nereden (3. Uçuş)"])
+
+    def test_the_model_is_told_which_one_it_is_looking_at(self):
+        snapshot = WebSnapshot(self._payload(self._legs()))
+        tree = json.dumps(snapshot.get_optimized_tree_for_llm(),
+                          ensure_ascii=False)
+        for leg in ("1. Uçuş", "2. Uçuş", "3. Uçuş"):
+            self.assertIn(f'"within": "{leg}"', tree)
+
+    def test_one_of_a_kind_is_left_alone(self):
+        """A screen with a single "Nereden" keeps that name.
+
+        Qualifying it anyway would rename every control every recording was
+        made against, for no gain: there is nothing to tell it apart from.
+        """
+        snapshot = WebSnapshot(self._payload([
+            self._node(120, left=180, width=70, height=20, text="1. Uçuş"),
+            self._field(100),
+        ]))
+        field = next(e for e in snapshot.get_all_elements()
+                     if e.resource_id == "fromPort")
+        self.assertEqual(field.describe(), "Nereden")
+        self.assertNotIn("within", field.to_llm_dict())
+
+    def test_a_field_and_its_own_label_are_one_control(self):
+        """The wrapper carrying the accessible name sits inside the input.
+
+        Counted as two, the row header beside them looks like it describes
+        more than one place and tells nothing apart — which is how the first
+        attempt at this left every field unqualified.
+        """
+        nodes = self._legs()
+        nodes.append(self._node(210, left=320, width=60, height=20,
+                                role="combobox", tag="span",
+                                selector="#labelNereden", label="Nereden"))
+        snapshot = WebSnapshot(self._payload(nodes))
+        second = [e.describe() for e in snapshot.get_all_elements()
+                  if e.selector in ("#fromPort", "#labelNereden")
+                  and e.bounds["y1"] in (200, 210)]
+        self.assertEqual(second, ["Nereden (2. Uçuş)", "Nereden (2. Uçuş)"])
+
+    def test_nothing_to_tell_them_apart_means_no_name_invented(self):
+        """Two identical fields with nothing written beside either.
+
+        A qualifier that does not distinguish is worse than none: it reads as
+        though the screen answered the question when it did not.
+        """
+        snapshot = WebSnapshot(self._payload([
+            self._field(100), self._field(200),
+        ]))
+        for field in snapshot.get_all_elements():
+            self.assertEqual(field.describe(), "Nereden")
+
+
 class LaunchArgsTests(unittest.TestCase):
     """Where the browser window goes when a site refuses a headless one.
 

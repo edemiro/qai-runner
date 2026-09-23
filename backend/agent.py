@@ -131,6 +131,10 @@ RULES
 - Nodes that carry an elementId are the ones you can act on. A node that is only
   a "text" entry is context — you cannot click it.
 - Prefer the smallest element that carries the label you are targeting.
+- When several nodes share a name, each carries a `within` telling it from the
+  others — the leg, the row or the panel it sits in. Read it and pick the one
+  you mean. Multi-city search really does give all three legs' fields the same
+  name, and filling the second leg without reading `within` fills the first.
 {target_rules}
 - The backend handles waiting, visibility, scrolling into view, and coordinate
   fallbacks. Do not add your own waits before an action for those reasons.

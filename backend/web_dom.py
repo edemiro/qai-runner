@@ -15,6 +15,13 @@ import text_match
 # Roles shared with mobile_dom, plus the two the web has and mobile does not.
 INTERACTIVE_ROLES = {"button", "textbox", "checkbox", "switch", "link", "tab", "combobox", "radio"}
 
+# How far from a control to read the words that tell it from its namesakes, and
+# how long such a word may be. 40px reaches the row header beside a field
+# without reaching the row above it; anything longer than a short phrase is
+# prose, which says where you are rather than which one this is.
+QUALIFIER_BAND = 40
+QUALIFIER_LENGTH = 40
+
 # Runs in the page. Returns a flat list in document order; the tree is rebuilt
 # in Python so both platforms share one flattening implementation.
 EXTRACT_JS = r"""
@@ -315,6 +322,10 @@ class WebElement:
         self.class_name = raw["tag"]
         self.element_id: Optional[str] = None
         self.children: List["WebElement"] = []
+        self.parent: Optional["WebElement"] = None
+        # Set by the snapshot when this element's name is shared with another
+        # on the same screen. See WebSnapshot._tell_namesakes_apart.
+        self.qualifier: Optional[str] = None
 
         b = raw["bounds"]
         width, height = b["x2"] - b["x1"], b["y2"] - b["y1"]
@@ -346,7 +357,15 @@ class WebElement:
         screenshot is labelled, and what a recorded click is checked against on
         the next run — and a recording checked against "button" is checked
         against nothing.
+
+        A qualifier is appended when the screen holds another control of the
+        same name, because a name that fits two things names neither.
         """
+        return self._own_name() + (f" ({self.qualifier})" if self.qualifier
+                                   else "")
+
+    def _own_name(self) -> str:
+        """The name before any qualifier — what this element calls itself."""
         for candidate in (self.text, self.name):
             if candidate:
                 return candidate
@@ -381,6 +400,11 @@ class WebElement:
             res["text"] = self.text
         if self.name:
             res["content-desc"] = self.name
+        if self.qualifier:
+            # Ours, not the page's, which is why it is its own key rather than
+            # folded into the name: the page really does call six fields
+            # "Nereden", and this says which of them this one is.
+            res["within"] = self.qualifier
         if self.href:
             res["href"] = self.href
         if self.checked is not None:
@@ -416,6 +440,86 @@ class WebElement:
         if include_children and self.children:
             res["children"] = [c.to_llm_dict(True) for c in self.children]
         return res
+
+
+def _same_places(namesakes: List["WebElement"]) -> List[List["WebElement"]]:
+    """Group same-named elements that are the same control.
+
+    A field arrives twice — once as the input and once as the wrapper that
+    carries its accessible name — and both answer to "Nereden". They are not
+    two things to tell apart; they are one, and counting them as two is what
+    made "2. Uçuş" look like it described more than one place.
+    """
+    places: List[List["WebElement"]] = []
+    for element in namesakes:
+        for place in places:
+            if any(_covers(other, element) or _covers(element, other)
+                   for other in place):
+                place.append(element)
+                break
+        else:
+            places.append([element])
+    return places
+
+
+def _covers(outer: "WebElement", inner: "WebElement") -> bool:
+    """Is the second one's middle inside the first?
+
+    Asked both ways round by the caller, because a field arrives as a wide
+    input and a narrow label inside it, and whichever of the two is met first
+    would otherwise decide that the other is somewhere else.
+    """
+    box, mark = outer.bounds, inner.bounds
+    return (box["x1"] <= mark["cx"] <= box["x2"]
+            and box["y1"] <= mark["cy"] <= box["y2"])
+
+
+def _texts_beside_all(place: List["WebElement"],
+                      labels: List["WebElement"]) -> List[str]:
+    """The words beside any of one control's nodes, nearest first."""
+    ordered: List[str] = []
+    for element in place:
+        for words in _texts_beside(element, labels):
+            if words not in ordered:
+                ordered.append(words)
+    return ordered
+
+
+def _texts_beside(element: "WebElement",
+                  labels: List["WebElement"]) -> List[str]:
+    """The words written alongside this control, nearest first.
+
+    Not its ancestors': the extractor drops layout wrappers, so a search
+    field's row header is not above it in our tree at all — measured on the
+    multi-city booker, the six port fields come back as roots with no parent
+    between them and the page. What a person uses to tell those fields apart
+    is what is written next to each one, so that is what is read here.
+    """
+    box = element.bounds
+    top = box["y1"] - QUALIFIER_BAND
+    bottom = box["y2"] + QUALIFIER_BAND
+    near: List[tuple] = []
+    for other in labels:
+        if other is element:
+            continue
+        mark = other.bounds
+        if mark["cy"] < top or mark["cy"] > bottom:
+            continue
+        words = " ".join(str(other.text or other.name or "").split())
+        if not words or len(words) > QUALIFIER_LENGTH:
+            continue
+        # Same line first, then nearest along it. A row header is written
+        # beside the field, and sorting by horizontal distance alone let the
+        # row above win: leg 2's origin came back as "(Tümü)", which is part
+        # of leg 1.
+        near.append((abs(mark["cy"] - box["cy"]),
+                     abs(mark["cx"] - box["cx"]), words))
+    near.sort(key=lambda item: (item[0], item[1]))
+    ordered: List[str] = []
+    for _, _, words in near:
+        if words not in ordered:
+            ordered.append(words)
+    return ordered
 
 
 class WebSnapshot:
@@ -455,6 +559,9 @@ class WebSnapshot:
                 roots.append(element)
             else:
                 self._flat[parent_index].children.append(element)
+                element.parent = self._flat[parent_index]
+
+        self._tell_namesakes_apart()
 
         self.root_element: Optional[WebElement] = None
         if len(roots) == 1:
@@ -470,6 +577,61 @@ class WebSnapshot:
             synthetic.children = roots
             self.elements_by_id["el_root"] = synthetic
             self.root_element = synthetic
+
+    # --- naming ---------------------------------------------------------- #
+
+    def _tell_namesakes_apart(self) -> None:
+        """Give a name that fits two controls enough to fit only one.
+
+        Multi-city search puts three legs on one screen, and the page gives
+        every leg's fields the same id and the same aria-label — so the model
+        was handed five fields called "Nereden" and six called "Nereye", and
+        filling the second leg was a guess. Six runs failed that way, the page
+        answering "Lütfen seyahatinizin başlangıç ve varış noktalarını
+        seçiniz" with the later legs still empty.
+
+        The page does tell them apart, five levels up, where the row reads
+        "2. Uçuş Sil Nereden Nereye Tarih". So walk up until an ancestor's
+        words differ from those of the element's namesakes, and take the
+        shortest leading slice of them that is still that element's alone:
+        "Nereden (2. Uçuş)".
+
+        Each one is named by the words beside it that none of its namesakes
+        has beside them: "Sil", "Nereden" and "Tarih" sit next to every leg
+        and so say nothing, while "2. Uçuş" sits next to one.
+
+        Only ambiguous names are touched. A screen with one "Nereden" keeps
+        it, so recordings made before this still match what they recorded.
+        """
+        by_name: Dict[str, List[WebElement]] = {}
+        for element in self._flat:
+            # Only what the model can act on. A caption reading "Nereden"
+            # beside every leg needs no telling apart — it is one of the
+            # things the fields are told apart *by*.
+            if element.clickable and element.is_actionable():
+                by_name.setdefault(element._own_name(), []).append(element)
+        ambiguous = [group for group in by_name.values() if len(group) > 1]
+        if not ambiguous:
+            return
+
+        labels = [element for element in self._flat
+                  if not element.clickable and (element.text or element.name)]
+        for namesakes in ambiguous:
+            places = _same_places(namesakes)
+            if len(places) < 2:
+                continue
+            beside = [_texts_beside_all(place, labels) for place in places]
+            seen: Dict[str, int] = {}
+            for row in beside:
+                for words in row:
+                    seen[words] = seen.get(words, 0) + 1
+            marks = [next((words for words in row if seen[words] == 1), None)
+                     for row in beside]
+            if not all(marks) or len(set(marks)) != len(marks):
+                continue
+            for place, mark in zip(places, marks):
+                for element in place:
+                    element.qualifier = mark
 
     # --- shared surface -------------------------------------------------- #
 
