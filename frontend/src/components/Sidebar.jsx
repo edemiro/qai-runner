@@ -3,6 +3,7 @@ import {
   Bug,
   Globe,
   History,
+  KeyRound,
   Layers,
   Moon,
   Settings as SettingsIcon,
@@ -19,6 +20,7 @@ const NAV = [
   { id: 'web', label: 'Web', icon: Globe, hint: 'Open a page and test it' },
   { id: 'mobile', label: 'Mobile', icon: Smartphone, hint: 'Connect a device and test it' },
   { id: 'suites', label: 'Test Sets', icon: Layers, hint: 'Scenarios grouped for repeatable execution' },
+  { id: 'test-data', label: 'Test Data', icon: KeyRound, hint: 'The values scenarios reach by name' },
   { id: 'executions', label: 'Test Executions', icon: ClipboardList, hint: 'Test Set runs, scenario verdicts and reports' },
   { id: 'runs', label: 'Test Runs', icon: History, hint: 'Every run, with steps and script export' },
   { id: 'insights', label: 'Insights', icon: Activity, hint: 'Trends and flaky tests' },
@@ -32,7 +34,10 @@ const byId = Object.fromEntries(NAV.map((item) => [item.id, item]));
    the one they wanted every time. The headings say what each part is for. */
 const NAV_GROUPS = [
   { title: 'PLATFORM', items: ['web', 'mobile'].map((id) => byId[id]) },
-  { title: 'TEST SUITE', items: ['suites', 'executions'].map((id) => byId[id]) },
+  // Test Data sits between the set and its executions because that is the
+  // order the work happens in: write the scenarios, give them the values they
+  // name, then run them.
+  { title: 'TEST SUITE', items: ['suites', 'test-data', 'executions'].map((id) => byId[id]) },
   // Bugs above Insights: a defect is something to act on today, trends are
   // something to read at the end of the week.
   { title: 'REPORT', items: ['runs', 'bugs', 'insights'].map((id) => byId[id]) },

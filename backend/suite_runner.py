@@ -36,17 +36,33 @@ MAX_WORKERS = 8
 PLACEHOLDER = re.compile(r"\{\{\s*([\w.-]+)\s*\}\}")
 
 
-def substitute(text: Optional[str], row: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Fill {{placeholders}} from a dataset row.
+def substitute(text: Optional[str], row: Optional[Dict[str, Any]],
+               shared: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Fill {{placeholders}} from the case's own row, then from the store.
+
+    The row wins. A dataset says what is different about this run of the case —
+    which payment method, which route — and the store says what is the same
+    everywhere: the test card, the test account. A case that names both gets
+    its own answer, so a row can override a shared value without editing it for
+    everybody.
 
     An unknown placeholder is left as written rather than blanked, so a typo
     shows up in the report as `{{emial}}` instead of silently becoming "".
     """
-    if not text or not row:
+    if not text:
         return text
-    return PLACEHOLDER.sub(
-        lambda match: str(row.get(match.group(1), match.group(0))), text
-    )
+    if not row and not shared:
+        return text
+
+    def resolve(match):
+        name = match.group(1)
+        if row and name in row:
+            return str(row[name])
+        if shared and name in shared:
+            return str(shared[name])
+        return match.group(0)
+
+    return PLACEHOLDER.sub(resolve, text)
 
 
 def with_precondition(goal: str, precondition: Optional[str]) -> str:
@@ -65,6 +81,7 @@ def with_precondition(goal: str, precondition: Optional[str]) -> str:
 
 def substitute_steps(
     steps: Optional[List[Dict[str, str]]], row: Optional[Dict[str, Any]],
+    shared: Optional[Dict[str, str]] = None,
 ) -> Optional[List[Dict[str, str]]]:
     """Fill a dataset row into a scenario's steps, as it already is into its goal.
 
@@ -74,13 +91,19 @@ def substitute_steps(
     over raw. The case editor invites exactly this: it tells the tester to use
     {{placeholders}} in the field directly above the steps.
     """
-    if not steps or not row:
+    if not steps or (not row and not shared):
         return steps or None
     filled = []
     for step in steps:
         filled.append({
-            "action": substitute(step.get("action"), row) or step.get("action"),
-            "expected": substitute(step.get("expected"), row),
+            "action": (substitute(step.get("action"), row, shared)
+                       or step.get("action")),
+            "expected": substitute(step.get("expected"), row, shared),
+            # Carried through, or a step the tester marked optional stops being
+            # optional — and a step on the way through a flow starts deciding
+            # the run — the moment the case has data in it.
+            "optional": step.get("optional"),
+            "judged": step.get("judged"),
         })
     return filled
 
@@ -342,12 +365,15 @@ async def _execute_one(
     row = execution["row"]
     label = execution["label"]
 
+    # Read once per case, so a value edited between cases takes effect on the
+    # next one rather than at the next restart.
+    shared = storage.test_data_values()
     goal = with_precondition(
-        substitute(case["goal"], row) or case["goal"],
-        substitute(case.get("precondition"), row),
+        substitute(case["goal"], row, shared) or case["goal"],
+        substitute(case.get("precondition"), row, shared),
     )
     url = apply_environment(
-        substitute(case.get("url") or options.get("base_url"), row),
+        substitute(case.get("url") or options.get("base_url"), row, shared),
         options.get("env_url"),
     )
 
@@ -423,7 +449,7 @@ async def _execute_one(
             use_vision=options.get("use_vision", True),
             # A case written out as steps is run step by step and judged the
             # same way; one without them keeps the open-ended behaviour.
-            steps=substitute_steps(case.get("steps"), row),
+            steps=substitute_steps(case.get("steps"), row, shared),
         ):
             try:
                 payload = json.loads(line)
@@ -541,9 +567,12 @@ async def _run_mobile_case(
     case = execution["case"]
     row = execution["row"]
     label = execution["label"]
+    # Read once per case, so a value edited between cases takes effect on the
+    # next one rather than at the next restart.
+    shared = storage.test_data_values()
     goal = with_precondition(
-        substitute(case["goal"], row) or case["goal"],
-        substitute(case.get("precondition"), row),
+        substitute(case["goal"], row, shared) or case["goal"],
+        substitute(case.get("precondition"), row, shared),
     )
 
     run_id: Optional[str] = None
@@ -583,7 +612,7 @@ async def _run_mobile_case(
             max_steps=options.get("max_steps"),  # scaled to the steps — see the web path
             use_vision=options.get("use_vision", True),
             session_state=case_state,
-            steps=substitute_steps(case.get("steps"), row),
+            steps=substitute_steps(case.get("steps"), row, shared),
         ):
             try:
                 payload = json.loads(line)

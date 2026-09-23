@@ -1328,6 +1328,142 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class AFlowIsJudgedAtTheEnd(unittest.IsolatedAsyncioTestCase):
+    """A flow scenario is about the flow arriving; the screens it passes
+    through are verified by their own Component scenarios. That is what the
+    layer on a scenario has always been for.
+
+    Kept apart from `optional` on purpose, and the reason is a scar: reusing
+    optional for this told the model to stop trying, so it gave up on the fare
+    step — which takes an upsell and a wait to get through — and every booking
+    flow behind it sat on the screen it had failed to leave. Eleven of twelve
+    runs went red on a change meant to change nothing but the verdict.
+    """
+
+    STEPS = [
+        {"action": "Yolda", "expected": "Ara ekran", "judged": False},
+        {"action": "Varis", "expected": "Son ekran"},
+    ]
+
+    # Scoped, because an unscoped text check for something already on the
+    # screen when the step opened is caught as proving nothing — which is a
+    # different rule working correctly, and not what these tests are about.
+    ASSERT = ('```json\n{"type":"action","action":"assert_visible",'
+              '"elementId":"el_1","reason":"kanit"}\n```')
+
+    def _close(self, verdict, reason="ok"):
+        return ('```json\n{"type":"action","action":"step_done","value":"'
+                + verdict + '","reason":"' + reason + '"}\n```')
+
+    async def _run(self, script):
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, *a, **k):
+                yield script[self.i] if self.i < len(script) else self._close
+                self.i += 1
+
+        target = FakeTarget(_manager())
+        target.kind = "web"
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                target, "akis", steps=self.STEPS,
+                session_state=agent.AgentSession(), use_vision=False,
+            ):
+                events.append(json.loads(line))
+        return events
+
+    def _verdicts(self, events):
+        return [(e["index"], e["status"]) for e in events
+                if e["event"] == "scenario_step_finished"]
+
+    async def test_a_step_on_the_way_does_not_fail_the_run(self):
+        events = await self._run([
+            self.ASSERT, self._close("fail", "ara ekran gelmedi"),
+            self.ASSERT, self._close("pass"),
+        ])
+        self.assertEqual(self._verdicts(events), [(1, "failed"), (2, "passed")])
+        finished = [e for e in events if e["event"] == "finished"]
+        self.assertEqual(finished[-1]["status"], "passed",
+                         "the flow arrived, which is what the scenario is about")
+
+    async def test_the_last_step_still_decides(self):
+        events = await self._run([
+            self.ASSERT, self._close("pass"),
+            self.ASSERT, self._close("fail", "varilamadi"),
+        ])
+        finished = [e for e in events if e["event"] == "finished"]
+        self.assertEqual(finished[-1]["status"], "failed")
+
+    async def test_it_is_still_reported_red_where_it_went_wrong(self):
+        """Not "skipped": nobody chose to leave it out, the flow had trouble
+        there and went on anyway, and that is worth seeing in the report."""
+        events = await self._run([
+            self.ASSERT, self._close("fail", "ara ekran gelmedi"),
+            self.ASSERT, self._close("pass"),
+        ])
+        first = [e for e in events if e["event"] == "scenario_step_finished"][0]
+        self.assertEqual(first["status"], "failed")
+        self.assertFalse(first["judged"])
+
+    async def test_the_model_is_not_told_to_give_up_on_it(self):
+        """The whole fault being fixed: `optional` tells the model to stop
+        trying, and a step on the way through a flow has to be told the
+        opposite or the flow never leaves the screen."""
+        asked = []
+
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, _system, turns, *a, **k):
+                asked.append(turns[-1].text if turns else "")
+                script = [self.ASSERT_, self.CLOSE, self.ASSERT_, self.CLOSE]
+                yield script[self.i] if self.i < len(script) else self.CLOSE
+                self.i += 1
+
+        Provider.ASSERT_ = self.ASSERT
+        Provider.CLOSE = self._close("pass")
+
+        target = FakeTarget(_manager())
+        target.kind = "web"
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for _ in agent.run_agent(
+                target, "akis", steps=self.STEPS,
+                session_state=agent.AgentSession(), use_vision=False,
+            ):
+                pass
+
+        first = next((t for t in asked if "Yolda" in t), "")
+        self.assertIn("NOT THE ONE BEING JUDGED", first)
+        self.assertIn("keep at it", first)
+        self.assertNotIn("rather than trying other ways", first,
+                         "that is what optional says, and it is what broke the flow")
+
+    def test_a_step_that_says_nothing_is_judged(self):
+        """Every scenario written before this flag meant exactly that."""
+        import storage as store
+        self.assertIsNone(
+            store.clean_steps([{"action": "A", "expected": "B"}])[0].get("judged"))
+        self.assertIs(
+            store.clean_steps([{"action": "A", "expected": "B", "judged": False}])[0]
+            .get("judged"), False)
+
+
 class NotReadingAScreenThatIsStillLoading(unittest.IsolatedAsyncioTestCase):
     """The tester watching a run said it: there is a loading panel in the
     middle of the screen and the run calls the step failed without waiting.

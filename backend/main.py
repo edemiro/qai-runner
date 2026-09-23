@@ -1085,6 +1085,12 @@ class ScenarioStep(BaseModel):
     # the date has to be picked and reading it back is somebody else's
     # scenario — used to take the whole run down with it.
     optional: Optional[bool] = None
+    # A step on the way through a flow. Carried out with the same effort as
+    # any other — this is not `optional`, which tells the model to stop trying
+    # — but the run's verdict rests on the last step alone, because the screen
+    # this one passes through has a Component scenario of its own. That split
+    # is what the E2E / Component layer on a scenario is for.
+    judged: Optional[bool] = None
 
 
 class AgentRunRequest(BaseModel):
@@ -2440,6 +2446,52 @@ async def get_session_page_events(session_id: str):
     if not hasattr(target, "peek_events"):
         return {"events": []}
     return {"events": target.peek_events()}
+
+
+# --------------------------------------------------------------------------- #
+# Test data — the values every scenario reaches by name
+# --------------------------------------------------------------------------- #
+
+class TestDataBody(BaseModel):
+    key: str
+    value: str
+    note: Optional[str] = None
+    secret: bool = False
+
+
+@app.get("/api/test-data")
+async def get_test_data(reveal: bool = False):
+    """The store. Secrets come back masked unless asked for one at a time."""
+    return {"entries": storage.list_test_data(reveal=reveal)}
+
+
+@app.get("/api/test-data/{key}/value")
+async def get_test_data_value(key: str):
+    """One value in full — what the eye icon asks for.
+
+    Separate from the listing on purpose: revealing is a thing someone does
+    deliberately to one entry, not a flag that dumps every card to the screen.
+    """
+    value = storage.test_data_values().get(key)
+    if value is None:
+        raise HTTPException(status_code=404, detail="No such entry.")
+    return {"key": key, "value": value}
+
+
+@app.put("/api/test-data")
+async def put_test_data(body: TestDataBody):
+    try:
+        storage.set_test_data(body.key, body.value, body.note, body.secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success", "key": body.key.strip()}
+
+
+@app.delete("/api/test-data/{key}")
+async def remove_test_data(key: str):
+    if not storage.delete_test_data(key):
+        raise HTTPException(status_code=404, detail="No such entry.")
+    return {"deleted": True}
 
 
 @app.get("/api/baselines")

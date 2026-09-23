@@ -20,6 +20,7 @@ import { RunsPage } from './pages/RunsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { StudioPage } from './pages/StudioPage';
 import { SuitesPage } from './pages/SuitesPage';
+import { TestDataPage } from './pages/TestDataPage';
 import { WebWorkspace } from './pages/WebWorkspace';
 import './App.css';
 
@@ -628,6 +629,10 @@ export default function App() {
           onConnectDevice={connectDevice}
         />
       );
+    }
+
+    if (activeTab === 'test-data') {
+      return <TestDataPage />;
     }
 
     if (activeTab === 'insights') {

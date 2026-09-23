@@ -315,6 +315,22 @@ export const api = {
   cancelSuiteRun: (suiteRunId) =>
     request(`/api/suite-runs/${suiteRunId}/cancel`, { method: 'POST' }),
 
+  // --- shared test data ----------------------------------------------------
+  // The values a scenario reaches by name — the test card, the test account —
+  // kept in one place so a card that expires is changed once instead of hunted
+  // through every Test Set.
+  testData: () => request('/api/test-data'),
+  // One entry's real value. Deliberately separate from the listing, which hands
+  // secrets back masked: revealing is something done to a single entry on
+  // purpose, never a side effect of drawing the list.
+  testDataValue: (key) => request(`/api/test-data/${encodeURIComponent(key)}/value`),
+  // Creates or replaces, keyed by the placeholder name — there is no separate
+  // create and update, because the key is the identity.
+  saveTestData: (key, value, note = null, secret = false) =>
+    request('/api/test-data', { method: 'PUT', body: { key, value, note, secret } }),
+  deleteTestData: (key) =>
+    request(`/api/test-data/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+
   // Bugs. The draft is composed from the run and handed back unsaved — a bug
   // that files itself is a bug nobody has checked.
   // Answering what a scenario asked for. Filling the last field turns the

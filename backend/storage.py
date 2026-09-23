@@ -213,6 +213,27 @@ CREATE TABLE IF NOT EXISTS bugs (
 
 CREATE INDEX IF NOT EXISTS idx_bugs_created ON bugs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bugs_run ON bugs(run_id);
+
+-- Values every scenario can reach by name, kept in one place.
+--
+-- A test card, a test account, a phone number: the same handful of facts, and
+-- before this they were typed into each scenario that needed them. When the
+-- card expires — and a test card always does — that is a search through every
+-- Test Set, and whichever one is missed fails later for a reason nobody
+-- connects to the change. A scenario writes {{kart.visa.numara}} and the value
+-- lives here; changing it is one edit.
+--
+-- `secret` marks what should not be shown at a glance or written into a
+-- report. It is not encryption and does not pretend to be: the database is as
+-- readable as it ever was, and this only keeps a card number from being shown
+-- to whoever is looking at the screen or pasted into a bug.
+CREATE TABLE IF NOT EXISTS test_data (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    note       TEXT,
+    secret     INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
+);
 """
 
 # Columns added after the first release. SQLite cannot express "add if missing"
@@ -1468,6 +1489,13 @@ def clean_steps(raw: Any) -> List[Dict[str, Any]]:
         # on. Written only when true so an ordinary step stays two fields.
         if entry.get("optional"):
             step["optional"] = True
+        # A step on the way through a flow: worked at as hard as any other and
+        # verified where it can be, but the run's verdict is the last step's.
+        # Its own screen belongs to a Component scenario. Stored as False
+        # rather than as a truthy "unjudged" so a step that says nothing about
+        # it is judged, which is what every scenario written before this meant.
+        if entry.get("judged") is False:
+            step["judged"] = False
         steps.append(step)
     return steps[:MAX_STEPS]
 
@@ -2225,3 +2253,71 @@ def trend(
         }
         for row in rows
     ]
+
+
+# --- shared test data ------------------------------------------------------ #
+
+def list_test_data(reveal: bool = False) -> List[Dict[str, Any]]:
+    """Every value scenarios can reach by name, newest edit first.
+
+    A secret comes back masked unless `reveal` is asked for, so the ordinary
+    listing — the one on screen, the one a screenshot catches — never carries a
+    card number.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT key, value, note, secret, updated_at FROM test_data "
+            "ORDER BY key ASC"
+        ).fetchall()
+    out = []
+    for row in rows:
+        secret = bool(row["secret"])
+        value = row["value"]
+        out.append({
+            "key": row["key"],
+            "value": value if (reveal or not secret) else _masked(value),
+            "secret": secret,
+            "note": row["note"],
+            "updatedAt": row["updated_at"],
+        })
+    return out
+
+
+def _masked(value: str) -> str:
+    """Enough to recognise which card it is, not enough to use it."""
+    text = str(value or "")
+    return ("•" * max(0, len(text) - 4)) + text[-4:] if len(text) > 4 else "••••"
+
+
+def set_test_data(key: str, value: str, note: Optional[str] = None,
+                  secret: bool = False) -> None:
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("A test data entry needs a name.")
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO test_data (key, value, note, secret, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value, note = excluded.note,
+                 secret = excluded.secret, updated_at = excluded.updated_at""",
+            (key, str(value), note or None, 1 if secret else 0, time.time()),
+        )
+
+
+def delete_test_data(key: str) -> bool:
+    with _connect() as conn:
+        return conn.execute(
+            "DELETE FROM test_data WHERE key = ?", (key,)).rowcount > 0
+
+
+def test_data_values() -> Dict[str, str]:
+    """The store as a plain mapping, for filling {{placeholders}}.
+
+    Unmasked by definition — this is what the run actually types in — and
+    deliberately a separate call from the one the UI lists with, so reading the
+    store for display can never hand back a secret by accident.
+    """
+    with _connect() as conn:
+        rows = conn.execute("SELECT key, value FROM test_data").fetchall()
+    return {row["key"]: row["value"] for row in rows}

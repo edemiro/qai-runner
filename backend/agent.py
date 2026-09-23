@@ -1924,6 +1924,7 @@ async def run_agent(
                 # judged: its action still matters — a date has to be picked —
                 # and whether it reads back is somebody else's scenario.
                 optional = bool(scenario_steps[step_index].get("optional"))
+                unjudged = scenario_steps[step_index].get("judged") is False
                 storage.finish_scenario_step(
                     scenario_row_id, "skipped" if optional else "failed",
                     message=stalled, actions_used=step_actions,
@@ -1934,8 +1935,9 @@ async def run_agent(
                     "scenario_step_finished", index=step_index + 1,
                     total=len(scenario_steps),
                     status="skipped" if optional else "failed", message=stalled,
+                    judged=not (optional or unjudged),
                 )
-                if not optional:
+                if not optional and not unjudged:
                     failed_steps += 1
                     if final_error is None:
                         final_error = stalled
@@ -1991,6 +1993,22 @@ async def run_agent(
                         " expected result cannot be proved, close the step with"
                         " `fail` and move on rather than trying other ways. It"
                         " will be recorded as skipped and will not fail the run."
+                    )
+                elif current.get("judged") is False:
+                    # A step in a flow, whose own screen is somebody else's
+                    # scenario. Not the same as optional, and conflating the
+                    # two broke a whole booking set: told to stop trying, the
+                    # model gave up on the fare step — which takes an upsell
+                    # and a wait to get through — and every flow behind it sat
+                    # on the screen it had failed to leave. Here the work
+                    # matters as much as ever; only the verdict moves.
+                    focus += (
+                        "\nTHIS STEP IS NOT THE ONE BEING JUDGED: it is a step on"
+                        " the way, and its own screen is verified by a separate"
+                        " Component scenario. Carry it out properly and keep at"
+                        " it until the flow moves on — the run depends on"
+                        " reaching the last step, and on nothing else. Prove"
+                        " what you can and close it either way."
                     )
                 focus += (
                     f"\n\n(Scenario: {goal})" if goal else ""
@@ -2171,11 +2189,25 @@ async def run_agent(
                         (reason + " — ") if reason else ""
                     ) + "closed as passed without verifying the expected result."
 
-                # Optional: carried out, not judged. The action still had to
-                # happen — this is the step whose check the tester said they
-                # could do without, not the step itself.
-                optional = bool(scenario_steps[step_index].get("optional"))
-                status = "passed" if passed else ("skipped" if optional else "failed")
+                # Two different reasons a step's verdict does not decide the
+                # run, kept apart because they mean opposite things to the
+                # model. Optional is the check the tester said they could do
+                # without, so it stops early. Unjudged is a step on the way
+                # through a flow, whose own screen has its own Component
+                # scenario — it is worked at exactly as hard as any other, and
+                # only the last step decides. Reported apart too: "skipped"
+                # says nobody wanted it, and a red step on the way says the
+                # flow had trouble here and went on anyway, which is worth
+                # seeing.
+                step = scenario_steps[step_index]
+                optional = bool(step.get("optional"))
+                unjudged = step.get("judged") is False
+                if passed:
+                    status = "passed"
+                elif optional:
+                    status = "skipped"
+                else:
+                    status = "failed"
                 storage.finish_scenario_step(
                     scenario_row_id, status,
                     message=reason or None, actions_used=step_actions,
@@ -2185,8 +2217,9 @@ async def run_agent(
                 yield _event(
                     "scenario_step_finished", index=step_index + 1,
                     total=len(scenario_steps), status=status, message=reason,
+                    judged=not (optional or unjudged),
                 )
-                if not passed and not optional:
+                if not passed and not optional and not unjudged:
                     failed_steps += 1
                     if final_error is None:
                         final_error = f"Step {step_index + 1} failed: {reason or 'no reason given'}"

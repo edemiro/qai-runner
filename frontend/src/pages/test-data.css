@@ -1,0 +1,459 @@
+/* ==========================================================================
+   Test Data — the store of values scenarios reach by name
+   The page's own sheet, for the things only this page has: the row that turns
+   into a form, the key chip that is copied into a scenario, and the fold that
+   keeps the syntax out of the way. The table, the card, the buttons and the
+   empty states are shared furniture and stay in App.css.
+
+   App.jsx imports this page before it imports App.css, so the shared sheet
+   lands after this one and wins any tie. Nothing here restates a shared rule at
+   the same weight: every selector is either a name this page alone uses, or a
+   shared name scoped under one of them.
+   ========================================================================== */
+
+/* The page is a scrolling column; these are blocks with their own height, not
+   things to squeeze when the viewport is short. The shared sheet already says
+   this for cards and sections. */
+.test-data-page > .td-tools,
+.test-data-page > .td-unresolved,
+.test-data-page > .td-fold {
+  flex-shrink: 0;
+}
+
+/* ----------------------------------------------------------- over the list -- */
+
+.td-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+}
+
+/* index.css strips border, background and outline from every input, so a field
+   is only visible inside something that draws them. This is that something. */
+.td-search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-2);
+  flex: 1 1 280px;
+  max-width: 420px;
+  height: var(--control-h);
+  padding: 0 var(--control-px);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+}
+
+.td-search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.td-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--control-font);
+  color: var(--text-primary);
+}
+
+.td-search-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Chrome draws its own clear affordance on a search input and it matches
+   nothing else here. */
+.td-search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* A name a scenario asks for and this store cannot answer is the failure this
+   page exists to prevent, so it is reported above the list — but only once
+   somebody has asked, which is why the page does not open on it. */
+.td-unresolved {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.td-unresolved-text {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.td-unresolved-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-1);
+}
+
+.td-missing-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: inherit;
+  font-size: 11.5px;
+}
+
+.td-missing-key:hover {
+  background: var(--warning);
+  color: var(--text-inverse);
+}
+
+/* ------------------------------------------------------------- the list -- */
+
+/* A long value must scroll inside the card rather than widen the page; the
+   minimum keeps the four columns readable while it does. */
+.td-table-wrap {
+  overflow-x: auto;
+}
+
+.td-table {
+  min-width: 620px;
+}
+
+.td-cell-key {
+  vertical-align: top;
+}
+
+/* The key is what somebody copies into a scenario, so it is shaped like the
+   thing that gets pasted — braces and all — and is itself the copy button. */
+.td-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-2);
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+}
+
+.td-key:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.td-key-text {
+  overflow-wrap: anywhere;
+}
+
+.td-key > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.td-key:hover > svg {
+  color: inherit;
+}
+
+.td-uses {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+.td-uses-link {
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.td-value-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-2);
+  max-width: 100%;
+}
+
+.td-value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.td-cell-value,
+.td-cell-note {
+  vertical-align: top;
+  max-width: 34ch;
+}
+
+.td-cell-note {
+  color: var(--text-secondary);
+}
+
+.td-dash {
+  color: var(--text-tertiary);
+}
+
+.td-cell-when {
+  vertical-align: top;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.td-cell-actions {
+  vertical-align: top;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.td-row-actions {
+  display: inline-flex;
+  gap: var(--gap-1);
+}
+
+/* Scoped under the page: the shared hover on .icon-btn-tiny carries the same
+   weight and lands later in the bundle, so a single class here would lose and
+   the delete button would light up like every other icon. */
+.test-data-page .td-danger:hover {
+  color: var(--danger);
+}
+
+/* The scenarios one value stands behind, opened from the count. Sunken, so a
+   row that belongs to the row above it does not read as another entry. */
+.td-usage-row td {
+  background: var(--bg-sunken);
+}
+
+.td-usage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--gap-5);
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.td-usage-suite {
+  color: var(--text-tertiary);
+}
+
+.td-usage-sep {
+  margin: 0 5px;
+  color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------------- the form -- */
+
+/* Editing happens in the row being edited, which is why the row is replaced
+   rather than expanded: a form under a copy of the same value would say
+   everything twice and leave the reader to work out which one is live. */
+.td-form-row td {
+  background: var(--bg-raised);
+}
+
+.td-add {
+  padding: 11px 13px;
+  border-top: 1px solid var(--border);
+}
+
+.td-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+}
+
+.td-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.td-field-key {
+  flex: 1 1 190px;
+}
+
+/* Which entry is being changed, in the place the key column would have been.
+   It reads as a label rather than a field because it is not one. */
+.td-form-key {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.td-field-value {
+  flex: 2 1 240px;
+}
+
+.td-field-note {
+  flex: 2 1 200px;
+}
+
+.td-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Same reason as the search box: without a container that draws them, these
+   are invisible text on the page. */
+.td-input {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.td-input:focus {
+  border-color: var(--accent-border);
+}
+
+.td-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.td-field-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--control-h);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.td-check {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.td-form-actions {
+  display: flex;
+  gap: var(--gap-2);
+  margin-left: auto;
+}
+
+/* Its own line under the fields, so the message sits with the form it belongs
+   to whether the fields wrapped onto one row or three. */
+.td-form-error {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.td-loading {
+  padding: 18px;
+}
+
+/* ---------------------------------------------------------------- the fold -- */
+
+/* How the braces work is read once and then known. It costs a line shut and a
+   paragraph open. */
+.td-fold {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.td-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+/* The line above hides the marker everywhere current; this hides it on the
+   Safari versions that still draw their own beside the chevron. */
+.td-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.td-fold > summary::before {
+  content: '';
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.td-fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.td-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+.td-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-2);
+  padding: 2px 13px 13px;
+  max-width: 78ch;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.td-fold-body code {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-raised);
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+/* A header cell that labels a column of controls, for anyone reading the table
+   rather than looking at it. */
+.td-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- narrower -- */
+
+@media (max-width: 720px) {
+  /* The field wants the whole row at this width; the count that follows it
+     wraps underneath rather than squeezing it. */
+  .td-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .td-form-actions {
+    margin-left: 0;
+  }
+}
