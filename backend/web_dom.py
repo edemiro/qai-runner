@@ -139,6 +139,16 @@ EXTRACT_JS = r"""
     return false;
   }
 
+  function onlyOne(selector) {
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch (e) { return false; }  // exotic value
+  }
+
+  function usableId(node) {
+    return node.id && !/^[0-9]/.test(node.id) && onlyOne('#' + CSS.escape(node.id));
+  }
+
   function cssPath(el, testId) {
     // The most stable locator a QA engineer can have is an explicit test id.
     if (testId) {
@@ -146,33 +156,33 @@ EXTRACT_JS = r"""
         const value = el.getAttribute(attr);
         if (value) {
           const selector = '[' + attr + '="' + CSS.escape(value) + '"]';
-          try {
-            if (document.querySelectorAll(selector).length === 1) return selector;
-          } catch (e) { /* exotic value */ }
+          if (onlyOne(selector)) return selector;
         }
       }
     }
-    if (el.id && !/^[0-9]/.test(el.id)) {
-      try {
-        if (document.querySelectorAll('#' + CSS.escape(el.id)).length === 1) {
-          return '#' + CSS.escape(el.id);
-        }
-      } catch (e) { /* exotic id */ }
-    }
+    if (usableId(el)) return '#' + CSS.escape(el.id);
     const parts = [];
     let node = el;
-    while (node && node.nodeType === 1 && parts.length < 6) {
-      let part = node.tagName.toLowerCase();
-      if (node.id && !/^[0-9]/.test(node.id)) {
+    while (node && node.nodeType === 1 && parts.length < 10) {
+      // An id anchors the path only from an ancestor, and only when the page
+      // gave it to one element. Anchoring on the element's own id undid the
+      // check above: multi-city search puts id="fromPort" on all three legs,
+      // and every leg came back as "#fromPort", which is leg one — so the
+      // model picked the second leg and the driver typed into the first.
+      if (node !== el && usableId(node)) {
         parts.unshift('#' + CSS.escape(node.id));
         break;
       }
+      let part = node.tagName.toLowerCase();
       const parent = node.parentElement;
       if (parent) {
         const siblings = [...parent.children].filter((s) => s.tagName === node.tagName);
         if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
       }
       parts.unshift(part);
+      // Stop as soon as the path is this element's alone; a longer one says
+      // no more and costs every caller that reads it.
+      if (parts.length > 1 && onlyOne(parts.join(' > '))) break;
       node = node.parentElement;
     }
     return parts.join(' > ');

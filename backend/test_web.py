@@ -70,6 +70,17 @@ FIXTURE = """<!doctype html>
       <button type="submit" id="search-btn" data-testid="search">Ara</button>
     </form>
 
+    <!-- Three legs sharing one id each, as the multi-city booker really does.
+         Invalid HTML, and the page ships it, so the extractor meets it. -->
+    <div id="legs">
+      <div class="leg"><span>1. Uçuş</span>
+        <input id="legPort" aria-label="Nereden"></div>
+      <div class="leg"><span>2. Uçuş</span>
+        <input id="legPort" aria-label="Nereden"></div>
+      <div class="leg"><span>3. Uçuş</span>
+        <input id="legPort" aria-label="Nereden"></div>
+    </div>
+
     <!-- Noise the extractor must drop -->
     <div class="hidden"><button id="ghost-hidden">Görünmez düğme</button></div>
     <div class="invisible"><button id="ghost-invisible">Gizli düğme</button></div>
@@ -176,6 +187,33 @@ class TestWebTarget(unittest.IsolatedAsyncioTestCase):
         snapshot = await self.target.snapshot()
         by_id = {e.resource_id: e for e in snapshot.get_all_elements()}
         self.assertEqual(by_id["cabin"].selector, "#cabin")
+
+    async def test_an_id_the_page_gave_to_three_elements_is_not_a_selector(self):
+        """Multi-city search puts id="fromPort" on all three legs.
+
+        The id was checked for uniqueness and rejected, and then the fallback
+        path started at the element itself, found the same id and handed it
+        straight back. So every leg's selector was leg one's: the model picked
+        the second leg, the driver typed into the first, and six scenarios
+        failed with "Lütfen seyahatinizin başlangıç ve varış noktalarını
+        seçiniz" and the later legs empty.
+        """
+        snapshot = await self.target.snapshot()
+        legs = [e for e in snapshot.get_all_elements()
+                if e.html_id == "legPort"]
+        self.assertEqual(len(legs), 3, "the fixture carries three of them")
+        for leg in legs:
+            self.assertNotEqual(leg.selector, "#legPort")
+        self.assertEqual(len({leg.selector for leg in legs}), 3,
+                         "one selector each, or two of them are the same leg")
+
+    async def test_each_shared_id_selector_finds_only_its_own_element(self):
+        """A distinct selector that still matches two elements is no better."""
+        snapshot = await self.target.snapshot()
+        for leg in [e for e in snapshot.get_all_elements()
+                    if e.html_id == "legPort"]:
+            found = await self.target.page.locator(leg.selector).count()
+            self.assertEqual(found, 1, f"{leg.selector} matched {found}")
 
     async def test_the_role_is_not_also_sent_as_a_capitalised_class(self):
         """The tree goes out on every call, so anything in it that says nothing
