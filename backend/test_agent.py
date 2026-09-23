@@ -1382,36 +1382,63 @@ class AReplayedClickChecksWhatItIsClicking(unittest.TestCase):
             "action": "click", "selector": "#fromPort", "label": "Nereden alanı",
         }))
 
+    def test_a_positional_click_with_no_label_is_refused(self):
+        """Not hypothetical: an older generation of these recordings carried no
+        label at all, and waving one through for want of anything to check
+        against is exactly the blind replay this exists to stop."""
+        self.assertIsNotNone(agent._label_moved(self.snapshot, {
+            "action": "click", "selector": "#booker-option-0 > span:nth-of-type(2)",
+        }))
+
+    def test_a_named_selector_with_no_label_is_still_fine(self):
+        """An id does not come to mean something else, so there is nothing a
+        label would be protecting against."""
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click", "selector": "#fromPort",
+        }))
+
     def test_nothing_to_compare_is_not_evidence_of_a_move(self):
-        for entry in (
-            {"action": "click", "selector": "#booker-option-0 > span:nth-of-type(2)"},
-            {"action": "click", "selector": "", "label": "İstanbul"},
-        ):
-            self.assertIsNone(agent._label_moved(self.snapshot, entry))
+        self.assertIsNone(agent._label_moved(self.snapshot, {
+            "action": "click", "selector": "", "label": "İstanbul",
+        }))
         self.assertIsNone(agent._label_moved(None, {
             "action": "click",
             "selector": "#booker-option-0 > span:nth-of-type(2)",
             "label": "İstanbul",
         }))
 
+    ROW_PAGE = {"nodes": [
+        {"role": "button", "tag": "li", "id": "booker-option-1", "text": None,
+         "label": None, "selector": "#booker-option-1",
+         "bounds": {"x1": 0, "y1": 0, "x2": 200, "y2": 30}, "parentIndex": -1},
+        {"role": "text", "tag": "span", "text": "İstanbul Havalimanı (IST)",
+         "selector": "#booker-option-1 span",
+         "bounds": {"x1": 4, "y1": 4, "x2": 196, "y2": 26}, "parentIndex": 0},
+        {"role": "button", "tag": "button", "id": "plain", "text": None,
+         "label": None, "selector": "#plain",
+         "bounds": {"x1": 0, "y1": 40, "x2": 30, "y2": 70}, "parentIndex": -1},
+    ]}
+
+    def _row(self, html_id):
+        snapshot = WebSnapshot(self.ROW_PAGE)
+        return next(e for e in snapshot.get_all_elements()
+                    if e.html_id == html_id)
+
     def test_a_control_whose_words_are_on_a_child_is_named_by_them(self):
-        """Every airport pick in the suite was recorded as "button", because
-        `describe` reads the node's own text and falls back to the role. The
-        recording is then checked against a name that says nothing."""
-        page = {"nodes": [
-            {"role": "button", "tag": "li", "id": "booker-option-1", "text": None,
-             "label": None, "selector": "#booker-option-1",
-             "bounds": {"x1": 0, "y1": 0, "x2": 200, "y2": 30}, "parentIndex": -1},
-            {"role": "text", "tag": "span", "text": "İstanbul Havalimanı (IST)",
-             "selector": "#booker-option-1 span",
-             "bounds": {"x1": 4, "y1": 4, "x2": 196, "y2": 26}, "parentIndex": 0},
-        ]}
-        snapshot = WebSnapshot(page)
-        row = next(e for e in snapshot.get_all_elements()
-                   if e.html_id == "booker-option-1")
-        info = agent._element_info(row)
-        self.assertEqual(info["label"], "İstanbul Havalimanı (IST)")
-        self.assertNotEqual(info["label"], info["role"])
+        """Every airport pick in the suite was recorded as "button" or as
+        "booker-option-1", because `describe` reads only the node's own text.
+        The recording is then checked against a name that says nothing — and
+        the driver builds that name itself, so fixing it anywhere but on the
+        element does not reach the clicks that matter."""
+        self.assertEqual(self._row("booker-option-1").describe(),
+                         "İstanbul Havalimanı (IST)")
+        self.assertEqual(agent._element_info(self._row("booker-option-1"))["label"],
+                         "İstanbul Havalimanı (IST)")
+
+    def test_an_element_with_no_words_anywhere_keeps_its_id(self):
+        """An icon button has nothing to read; the id is the only handle there
+        is, and it is better than the bare role."""
+        self.assertEqual(self._row("plain").describe(), "plain")
 
     def test_a_row_that_has_gone_is_left_to_the_driver(self):
         """Gone is a different thing from changed, and the driver reports it

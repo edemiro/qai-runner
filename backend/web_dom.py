@@ -308,10 +308,40 @@ class WebElement:
         return True
 
     def describe(self) -> str:
-        for candidate in (self.text, self.name, self.resource_id):
+        """What to call this element — what a person reading it would call it.
+
+        The region's own words come before the resource id, because a control's
+        words are very often not on the control: an airport suggestion is a row
+        whose text sits two spans down, and describing it by its own text alone
+        produced "booker-option-1", or "button" where there was no id either.
+        That name is what a step record shows, what the box on a report's
+        screenshot is labelled, and what a recorded click is checked against on
+        the next run — and a recording checked against "button" is checked
+        against nothing.
+        """
+        for candidate in (self.text, self.name):
             if candidate:
                 return candidate
-        return self.role
+        within = self.region_text()
+        if within:
+            return within[:120]
+        return self.resource_id or self.role
+
+    def region_text(self, depth: int = 6) -> str:
+        """Everything a person reads inside this element, as one line."""
+        parts: List[str] = []
+        stack = [(self, 0)]
+        while stack:
+            node, level = stack.pop(0)
+            if level > depth:
+                continue
+            for value in (node.text, node.name):
+                cleaned = " ".join(str(value or "").split())
+                if cleaned and cleaned not in parts:
+                    parts.append(cleaned)
+            for child in node.children:
+                stack.append((child, level + 1))
+        return " ".join(parts)
 
     def _base(self) -> Dict[str, Any]:
         res: Dict[str, Any] = {"class": self.role.capitalize(), "role": self.role}

@@ -1272,22 +1272,31 @@ def _label_moved(snapshot: Optional[Snapshot],
                  entry: Dict[str, Any]) -> Optional[str]:
     """Does the recorded selector still point at what was recorded there?
 
-    Returns what sits there now when it has changed, or None when the recording
-    can be trusted — including when there is nothing to compare, because a
-    recording with no label, or a screen that could not be read, is not
-    evidence of anything having moved.
+    Returns what sits there now when it cannot be trusted, or None when it can.
 
     Only positional selectors are judged. An id or a test id is a name the page
     gave the element and it is not going to mean something else; `:nth-of-type`
     and `#booker-option-0` are a place in a list, and a list the page fills in
     as its server answers puts different things in that place at different
     moments.
+
+    A positional click with no recorded label is refused too, rather than
+    waved through for want of anything to check. That is not hypothetical: an
+    older generation of these recordings carried no label at all, and trusting
+    them is exactly the blind replay this exists to stop.
     """
     label = " ".join(str(entry.get("label") or "").split())
     selector = str(entry.get("selector") or "")
-    if not label or not selector or snapshot is None:
+    if not selector or not re.search(
+            r"nth-of-type|nth-child|-option-\d|\[\d+\]", selector):
         return None
-    if not re.search(r"nth-of-type|nth-child|-option-\d|\[\d+\]", selector):
+    if not label:
+        # A place in a list and no note of what was there. There is nothing to
+        # check it against, and a positional click that cannot be checked is
+        # the whole hazard — the row at index 0 is "Tüm uçuş noktalarını gör"
+        # until the suggestions arrive. Re-derive it and record a real name.
+        return "nothing recorded about what was there"
+    if snapshot is None:
         return None
     element = next(
         (e for e in snapshot.get_all_elements()
@@ -1940,6 +1949,7 @@ async def run_agent(
             # reported by exactly the code below that handles a model action.
             action: Optional[Dict[str, Any]] = None
             replaying = False
+            replayed_label: Optional[str] = None
             # Only the model path produces one, but the no-action handling
             # below reads it either way.
             reply = ""
@@ -1977,8 +1987,16 @@ async def run_agent(
                     }
                     replaying = True
                     replayed_actions += 1
+                    # Carried so the step record keeps a name for it. A
+                    # replayed action is given a selector rather than an
+                    # elementId, so the driver resolves it without a snapshot
+                    # and hands back no element — and the recording promoted
+                    # from that run then had no label at all, which is worse
+                    # than a bad one: an empty label is not checked, so the
+                    # next run replays it blind.
+                    replayed_label = entry.get("label")
                     yield _event("replaying", step=step_no, action=action["action"],
-                                 label=entry.get("label"))
+                                 label=replayed_label)
 
             # When the recording runs out having proved the step's expected
             # result, the step is closed on that proof alone. Without an
@@ -2284,7 +2302,8 @@ async def run_agent(
                 run_id,
                 action=kind,
                 status=step_status,
-                target=(result.get("element") or {}).get("label") or action.get("elementId"),
+                target=((result.get("element") or {}).get("label")
+                        or replayed_label or action.get("elementId")),
                 value=action.get("value"),
                 reason=reason,
                 message=result["message"],
