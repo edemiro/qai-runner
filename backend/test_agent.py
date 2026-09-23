@@ -1328,6 +1328,86 @@ class LettingTheScreenOverruleTheText(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+class NotReadingAScreenThatIsStillLoading(unittest.IsolatedAsyncioTestCase):
+    """The tester watching a run said it: there is a loading panel in the
+    middle of the screen and the run calls the step failed without waiting.
+
+    Measured on the booker — pressing "Uçuş ara" puts `thy-loading-overlay` up
+    at z-index 9999 over the whole viewport, then a modal loader, and they are
+    still there 17.8 seconds later. Reading the page 0.3s after the click is
+    reading a page that has not happened yet, and the only thing a run can
+    report about a control it cannot reach is that the control is dead. That is
+    where "Devam et is disabled" came from.
+    """
+
+    LOADING = {"nodes": [
+        {"role": "button", "tag": "button", "id": "continue", "text": "Devam et",
+         "label": None, "selector": "#continue", "enabled": False,
+         "bounds": {"x1": 0, "y1": 0, "x2": 120, "y2": 40}, "parentIndex": -1},
+    ], "busy": "thy-loading-overlay", "viewport": {"width": 1440, "height": 900}}
+
+    READY = {"nodes": [
+        {"role": "button", "tag": "button", "id": "continue", "text": "Devam et",
+         "label": None, "selector": "#continue",
+         "bounds": {"x1": 0, "y1": 0, "x2": 120, "y2": 40}, "parentIndex": -1},
+    ], "viewport": {"width": 1440, "height": 900}}
+
+    def _target(self, screens):
+        """A page that hands back each screen in turn as it is asked."""
+        target = FakeTarget(WebSnapshot(screens[0]))
+        target.kind = "web"
+        seen = {"n": 0}
+
+        async def snapshot():
+            payload = screens[min(seen["n"], len(screens) - 1)]
+            seen["n"] += 1
+            return WebSnapshot(payload)
+
+        target.snapshot = snapshot
+        target.reads = seen
+        return target
+
+    def test_the_overlay_is_seen_for_what_it_is(self):
+        self.assertEqual(WebSnapshot(self.LOADING).busy, "thy-loading-overlay")
+        self.assertIsNone(WebSnapshot(self.READY).busy)
+
+    async def test_the_screen_is_read_after_the_panel_clears(self):
+        target = self._target([self.LOADING, self.LOADING, self.READY])
+        with patch("asyncio.sleep", new=AsyncMock()):
+            snapshot = await agent._wait_while_busy(target)
+        self.assertIsNone(snapshot.busy, "it waited for the page")
+        self.assertGreaterEqual(target.reads["n"], 3)
+
+    async def test_a_page_stuck_loading_is_handed_back_anyway(self):
+        """A page behind its own spinner for ever is a finding, not a reason
+        for the run to hang."""
+        target = self._target([self.LOADING])
+        with patch("asyncio.sleep", new=AsyncMock()), \
+             patch.object(agent, "BUSY_WAIT_SECONDS", 0.05):
+            snapshot = await agent._wait_while_busy(target)
+        self.assertEqual(snapshot.busy, "thy-loading-overlay")
+
+    async def test_a_control_that_comes_to_life_is_not_called_disabled(self):
+        """The claim is "stays disabled", so the enabled state has to be given
+        its chance to disprove it."""
+        target = self._target([self.LOADING, self.READY])
+        with patch("asyncio.sleep", new=AsyncMock()):
+            result = await agent._execute_action(
+                target, {"action": "assert_disabled", "elementId": "el_0"}, None)
+        self.assertFalse(result["ok"])
+        self.assertIn("still enabled", result["message"])
+
+    async def test_a_control_that_really_stays_disabled_still_fails_it(self):
+        off = json.loads(json.dumps(self.READY))
+        off["nodes"][0]["enabled"] = False
+        target = self._target([off])
+        with patch("asyncio.sleep", new=AsyncMock()):
+            result = await agent._execute_action(
+                target, {"action": "assert_disabled", "elementId": "el_0"}, None)
+        self.assertTrue(result["ok"])
+        self.assertIn("is disabled", result["message"])
+
+
 class AReplayedClickChecksWhatItIsClicking(unittest.TestCase):
     """The airport suggestions are `#booker-option-0` and up, and until they
     arrive the row at index 0 is "Tüm uçuş noktalarını gör" — which opens a

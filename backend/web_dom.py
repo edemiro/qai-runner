@@ -240,8 +240,36 @@ EXTRACT_JS = r"""
     });
   } while ((el = walker.nextNode()));
 
+  // Is a loading panel covering the page?
+  //
+  // Measured on the booker: pressing "Uçuş ara" puts up
+  // `thy-loading-overlay` at z-index 9999 over the whole viewport, and then a
+  // 600x443 modal loader, and they are still there 17.8 seconds later. A run
+  // that reads the screen 0.3s after the click is reading a page that has not
+  // happened yet — and every verdict it reaches is about the wait, not the
+  // product.
+  //
+  // Named, not merely large: a modal with content in it is a screen to act on,
+  // and blocking on every overlay would stall on cookie banners and dialogs.
+  const busy = (() => {
+    const selector = '[aria-busy="true"], [role="progressbar"],'
+      + '[class*="load"], [class*="Load"], [class*="LOAD"],'
+      + '[class*="spin"], [class*="Spin"], [class*="busy"], [class*="Busy"]';
+    for (const el of document.querySelectorAll(selector)) {
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden'
+          || parseFloat(style.opacity) === 0) continue;
+      const rect = el.getBoundingClientRect();
+      // Big enough to be in the way. A spinner inside a button is not.
+      if (rect.width < vw * 0.4 || rect.height < vh * 0.3) continue;
+      return (el.className && String(el.className).slice(0, 60)) || el.tagName;
+    }
+    return null;
+  })();
+
   return {
     nodes,
+    busy,
     viewport: { width: vw, height: vh },
     page: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
     scrollY: window.scrollY,
@@ -398,6 +426,9 @@ class WebSnapshot:
         self.url: str = payload.get("url", "")
         self.title: str = payload.get("title", "")
         self.scroll_y: int = int(payload.get("scrollY", 0))
+        # What is covering the page while it loads, or None. Named so a reader
+        # of a report can see which panel it was.
+        self.busy: Optional[str] = payload.get("busy") or None
 
         viewport = payload.get("viewport") or {}
         self.screen_width = int(viewport.get("width", 1440))

@@ -270,6 +270,11 @@ class MobileDOMManager:
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.snapshot_id = uuid.uuid4().hex[:12]
+        # A page's loading overlay has no equivalent in a view hierarchy: a
+        # phone that is busy simply has not sent its next frame. Declared so
+        # both screens answer the same call — the two drifting apart is how a
+        # web run once crashed on a method only the phone had.
+        self.busy: Optional[str] = None
 
         self.element_counter = 0
         self.elements_by_id: Dict[str, MobileElement] = {}

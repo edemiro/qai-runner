@@ -904,7 +904,11 @@ async def _screen_context(target: UITarget, use_vision: bool = True):
     not fetched at all: capturing it just to throw it away was a full device
     round trip for nothing on every single step.
     """
-    snapshot = await target.snapshot()
+    # The screen the model is shown is the screen it is judged on, so it is
+    # taken after any loading panel has cleared. Showing it a page mid-load
+    # asks it to act on something that is not there yet, and the only thing it
+    # can report about a control it cannot reach is that the control is dead.
+    snapshot = await _wait_while_busy(target)
     if use_vision:
         screenshot = await asyncio.to_thread(_shrink_for_llm, await _fast_screenshot(target))
     else:
@@ -1126,6 +1130,34 @@ def _look_for_text(fresh: Snapshot, needle: str, element_id: Optional[str],
     }
 
 
+# How long to let a loading panel clear before reading the screen under it.
+#
+# Measured on the booker: pressing "Uçuş ara" puts a full-viewport overlay up
+# at z-index 9999, then a modal loader, and they are still there 17.8 seconds
+# later. A run that read the screen 0.3s after the click judged a page that had
+# not happened yet — that is where "Devam et is disabled" came from, and the
+# report blamed the fare for it.
+BUSY_WAIT_SECONDS = 30.0
+
+
+async def _wait_while_busy(target: UITarget, snapshot: Optional[Snapshot] = None):
+    """Wait out a loading panel. Returns the first snapshot taken without one.
+
+    Capped, and a screen that never stops loading is handed back as it is: a
+    page stuck behind its own spinner is a finding, not a reason to hang.
+    """
+    deadline = time.monotonic() + BUSY_WAIT_SECONDS
+    while True:
+        if snapshot is None:
+            snapshot = await target.snapshot()
+        if snapshot is None or not getattr(snapshot, "busy", None):
+            return snapshot
+        if time.monotonic() >= deadline or not target.is_alive():
+            return snapshot
+        await asyncio.sleep(0.5)
+        snapshot = None
+
+
 async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None):
     """Read the screen until the check holds or the time runs out.
 
@@ -1143,7 +1175,11 @@ async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None)
               "message": "Could not read the screen to assert against"}
     while True:
         await asyncio.sleep(ASSERT_POLL_SECONDS)
-        fresh = await target.snapshot()
+        # Never judge a screen with a loading panel over it. The deadline below
+        # is not started until the page has something to say.
+        fresh = await _wait_while_busy(target)
+        if fresh is not None and getattr(fresh, "busy", None):
+            deadline = max(deadline, time.monotonic() + ASSERT_POLL_SECONDS)
         if fresh is not None:
             result = read(fresh)
             if result["ok"]:
@@ -1585,20 +1621,39 @@ async def _execute_action(
     if kind == "assert_disabled":
         if not element_id:
             return {"ok": False, "message": "assert_disabled needs an elementId", "element": None}
-        await asyncio.sleep(0.3)
-        fresh = await target.snapshot()
-        element = fresh.elements_by_id.get(element_id) if fresh else None
-        if element is None:
-            return {
-                "ok": False,
-                "message": f"{element_id} is not on the screen any more, so it cannot be checked.",
-                "element": None,
-            }
-        info = _element_info(element)
-        label = (info or {}).get("label") or element_id
-        if not getattr(element, "enabled", True):
-            return {"ok": True, "message": f'"{label}" is disabled', "element": info}
-        return {"ok": False, "message": f'"{label}" is still enabled', "element": info}
+
+        # "Disabled right now" and "stays disabled" are different claims, and
+        # this is asked for the second. A form enables its Continue button when
+        # the page behind it finishes, so a single look a third of a second
+        # after the click reported a control the tester would have watched come
+        # to life — and the run then used that as its proof it could go no
+        # further. It waits for the enabled state that would disprove it, and
+        # only says disabled when that never comes.
+        def disabled(fresh: Snapshot) -> Dict[str, Any]:
+            element = fresh.elements_by_id.get(element_id)
+            if element is None:
+                return {
+                    "ok": False,
+                    "message": (f"{element_id} is not on the screen any more, "
+                                "so it cannot be checked."),
+                    "element": None,
+                }
+            info = _element_info(element)
+            label = (info or {}).get("label") or element_id
+            if getattr(element, "enabled", True):
+                return {"ok": True, "message": f'"{label}" is still enabled',
+                        "element": info, "enabled": True}
+            return {"ok": False, "message": f'"{label}" is disabled',
+                    "element": info}
+
+        # `_keep_looking` stops on ok, so the search is for "enabled" and the
+        # verdict is turned back the right way round at the end.
+        found = await _keep_looking(target, disabled)
+        if found.get("enabled"):
+            return {"ok": False, "message": found["message"],
+                    "element": found.get("element")}
+        return {"ok": found["element"] is not None, "message": found["message"],
+                "element": found.get("element")}
 
     if kind == "assert_text":
         needle = (value or "").strip()
