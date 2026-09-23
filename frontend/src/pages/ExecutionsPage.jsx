@@ -626,12 +626,27 @@ export function ExecutionsPage({
                           ) : (
                             <ol className="scenario-step-list">
                               {runSteps[run.id].map((step) => (
-                                <li key={step.id} className={`scenario-step ${step.status}`}>
+                                <li
+                                  key={step.id}
+                                  className={`scenario-step ${step.status}`
+                                    + (step.judged === 0 ? ' on-the-way' : '')}
+                                >
                                   <span className="scenario-step-verdict">
                                     <Verdict status={step.status} />
                                   </span>
                                   <div>
                                     <span className="scenario-step-action">{step.action}</span>
+                                    {/* A flow is judged where it arrives, so a
+                                        step on the way can be red inside a run
+                                        that passed. Said here, because
+                                        otherwise it reads as the report
+                                        contradicting itself. */}
+                                    {step.judged === 0 && step.status === 'failed' && (
+                                      <span className="scenario-step-aside">
+                                        Yolda — akış buradan geçti, koşumun sonucunu
+                                        bu adım belirlemiyor
+                                      </span>
+                                    )}
                                     {step.expected && (
                                       <span className="scenario-step-expected">
                                         → {step.expected}

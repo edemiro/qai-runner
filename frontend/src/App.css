@@ -6977,3 +6977,15 @@ textarea,
 .composer-blocked > svg { color: var(--danger, #f87171); flex: none; }
 
 .action-chip:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* A step on the way through a flow that went red. The run passed — a flow is
+   judged where it arrives — so the row is drawn as the aside it is rather than
+   as the failure the colour would otherwise promise. */
+.scenario-step.on-the-way.failed .scenario-step-message { color: var(--text-secondary); }
+.scenario-step.on-the-way .verdict { opacity: 0.6; }
+
+.scenario-step-aside {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}

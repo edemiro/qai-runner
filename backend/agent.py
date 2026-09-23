@@ -1884,6 +1884,7 @@ async def run_agent(
         screen_at_step_open = None
         return storage.start_scenario_step(
             run_id, index + 1, entry["action"], entry.get("expected") or None,
+            judged=not (entry.get("judged") is False or entry.get("optional")),
         )
 
     if stepwise:

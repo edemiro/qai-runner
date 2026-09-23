@@ -271,6 +271,12 @@ MIGRATIONS = [
     # scenario to carry. See docs/scenario-standards.md.
     ("suite_cases", "priority", "TEXT"),
     ("suite_cases", "layer", "TEXT"),
+    # Whether this step's own verdict decided the run. A flow is judged where
+    # it arrives, so a step on the way can be red inside a run that passed —
+    # which reads as a contradiction unless the report can say which it was.
+    # Defaults to 1 so every step recorded before this reads as judged, which
+    # is what it was.
+    ("scenario_steps", "judged", "INTEGER NOT NULL DEFAULT 1"),
     # Positive / Negative / Boundary. A suite of happy paths proves the feature
     # works when used correctly and nothing about what happens when it is not.
     ("suite_cases", "scenario_type", "TEXT"),
@@ -821,16 +827,24 @@ def get_run(run_id: str, include_screenshots: bool = False) -> Optional[Dict[str
 
 def start_scenario_step(
     run_id: str, idx: int, action: str, expected: Optional[str] = None,
+    judged: bool = True,
 ) -> int:
     """Open a scenario step. Written before it runs so a run that dies midway
     still shows which step it was on rather than ending at the last one that
-    happened to finish."""
+    happened to finish.
+
+    `judged` is stored because without it a report shows a red step inside a
+    passed run and reads as a contradiction. It is not one — a flow is judged
+    where it arrives, and a step on the way that had trouble and was got past
+    is worth seeing without being worth failing.
+    """
     with _connect() as conn:
         cursor = conn.execute(
             """INSERT INTO scenario_steps
-                   (run_id, idx, action, expected, status, created_at)
-               VALUES (?, ?, ?, ?, 'running', ?)""",
-            (run_id, idx, action, expected or None, time.time()),
+                   (run_id, idx, action, expected, status, judged, created_at)
+               VALUES (?, ?, ?, ?, 'running', ?, ?)""",
+            (run_id, idx, action, expected or None,
+             1 if judged else 0, time.time()),
         )
         return cursor.lastrowid
 
