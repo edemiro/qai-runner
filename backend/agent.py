@@ -1254,10 +1254,13 @@ def _refusal(target: UITarget) -> Optional[str]:
     for event in events:
         if event.get("kind") == "blocked" and not event.get("thirdParty"):
             return (
-                "The site's bot protection refused this run, so the screen"
-                " could not fill in and no amount of clicking would have"
-                " changed that. " + str(event.get("text", ""))[:400]
-                + f" ({str(event.get('url', ''))[:120]})"
+                "The site's bot protection refused this SESSION, not just the"
+                " one call named below. Measured on NUAT: in every walk where"
+                " a call was refused, the ones after it were refused too and"
+                " the flow never became usable — so the run stops at the first"
+                " refusal rather than spending its budget reaching the next"
+                f" one. First refused: {str(event.get('url', ''))[:120]}. "
+                + str(event.get("text", ""))[:400]
             )
     return None
 
@@ -1995,7 +1998,15 @@ async def run_agent(
             # screen: the control simply never enables. Measured on NUAT, a run
             # spent its whole budget of actions on a "Devam et" that was never
             # going to light up, and then a bug was filed against the airline's
-            # site for it. Stop as soon as it is seen, and say which call.
+            # site for it.
+            #
+            # Stopping at the first refusal is right even when that first one
+            # is a side feature. Six refusals in a row landed on the monthly
+            # price chart, which is beside the flight list and not on the
+            # booking path — but in three model-free walks, every session that
+            # had that call refused had the fare call refused as well and the
+            # button never enabled. The refusal is of the session, not of the
+            # endpoint, and the chart is only what happens to load first.
             refused = _refusal(target)
             if refused:
                 yield _event("error", message=refused)

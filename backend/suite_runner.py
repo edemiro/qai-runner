@@ -95,16 +95,27 @@ def substitute_steps(
         return steps or None
     filled = []
     for step in steps:
-        filled.append({
-            "action": (substitute(step.get("action"), row, shared)
-                       or step.get("action")),
-            "expected": substitute(step.get("expected"), row, shared),
-            # Carried through, or a step the tester marked optional stops being
-            # optional — and a step on the way through a flow starts deciding
-            # the run — the moment the case has data in it.
-            "optional": step.get("optional"),
-            "judged": step.get("judged"),
-        })
+        # Copied, not rebuilt. Listing the fields to keep meant every field
+        # not listed was silently dropped here: `optional` went that way once,
+        # and `recorded` went the same way the moment the shared store made
+        # this run for every case rather than only for data-driven ones. A
+        # booking scenario with eleven recorded steps replayed none of them
+        # and cost 471,000 tokens and fifty-six model calls to walk a flow it
+        # already knew.
+        replaced = dict(step)
+        action = (substitute(step.get("action"), row, shared)
+                  or step.get("action"))
+        expected = substitute(step.get("expected"), row, shared)
+        replaced["action"], replaced["expected"] = action, expected
+
+        # Except where the data changed the step's own words. The recording
+        # typed what the step used to say, so replaying it would fill in the
+        # previous row's passenger or the previous card — right actions,
+        # wrong values, and green. Those steps go back to the model, which
+        # carries them out against the data this run was given.
+        if action != step.get("action") or expected != step.get("expected"):
+            replaced.pop("recorded", None)
+        filled.append(replaced)
     return filled
 
 
@@ -509,9 +520,12 @@ async def _execute_one(
         if refusals:
             status = "failed"
             error = (
-                "The site's bot protection refused this run. "
+                "The site's bot protection refused this session. The call"
+                " named is the first one refused, not the only one — a"
+                " refusal here applies to the session, so the screens after"
+                " it cannot fill in either. First refused: "
+                + f"{refusals[0].get('url', '')[:120]}. "
                 + str(refusals[0].get("text", ""))[:400]
-                + f" ({refusals[0].get('url', '')[:120]})"
             )
         elif status == "passed" and page_errors and options.get("fail_on_page_error", True):
             # A run that clicked through happily while the console threw and an

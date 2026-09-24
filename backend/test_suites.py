@@ -61,6 +61,61 @@ def test_non_string_values_are_stringified():
     assert runner.substitute("{{n}} adet", {"n": 3}) == "3 adet"
 
 
+def test_a_step_keeps_everything_the_substitution_did_not_touch():
+    """It used to keep only the fields it happened to name.
+
+    `optional` was lost that way once. Then the shared store made this run for
+    every case rather than only data-driven ones, and `recorded` went the same
+    way: a booking scenario with eleven recorded steps replayed none of them
+    and spent 471,000 tokens and fifty-six model calls walking a flow it
+    already knew step by step.
+    """
+    steps = [{
+        "action": "Uçuş ara butonuna bas",
+        "expected": "Liste açılır",
+        "optional": True,
+        "judged": False,
+        "recorded": [{"action": "click", "selector": "#buttonUcusara",
+                      "label": "Uçuş ara", "value": None}],
+    }]
+    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    assert filled[0]["recorded"] == steps[0]["recorded"]
+    assert filled[0]["optional"] is True
+    assert filled[0]["judged"] is False
+
+
+def test_a_step_the_data_rewrote_gives_up_its_recording():
+    """The recording typed what the step used to say.
+
+    Replaying it for a different row fills in the previous passenger or the
+    previous card — the right actions with the wrong values, and green.
+    """
+    steps = [{
+        "action": "Ad alanına {{yolcu.ad}} yaz",
+        "expected": "Ad {{yolcu.ad}} olur",
+        "recorded": [{"action": "type", "selector": "#name",
+                      "label": "Ad", "value": "Eski"}],
+    }]
+    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    assert "recorded" not in filled[0]
+    assert filled[0]["action"] == "Ad alanına Ergün yaz"
+
+
+def test_only_the_rewritten_step_loses_its_recording():
+    """A scenario is not sent back to the model wholesale over one field."""
+    steps = [
+        {"action": "Tek yön seç", "expected": "Seçilidir",
+         "recorded": [{"action": "click", "selector": "#one-way",
+                       "label": "Tek yön", "value": None}]},
+        {"action": "Ad {{yolcu.ad}}", "expected": "",
+         "recorded": [{"action": "type", "selector": "#name",
+                       "label": "Ad", "value": "Eski"}]},
+    ]
+    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    assert filled[0]["recorded"] == steps[0]["recorded"]
+    assert "recorded" not in filled[1]
+
+
 def test_a_case_without_a_dataset_runs_once():
     cases = [{"id": "c", "name": "One", "goal": "g", "dataset": None}]
     assert len(runner.expand_cases(cases)) == 1

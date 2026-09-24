@@ -1879,6 +1879,22 @@ class WhenTheSiteRefusesTheRunItsData(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(errors)
         self.assertIn("bot protection refused", errors[0]["message"])
 
+    async def test_the_message_says_the_session_was_refused_not_one_call(self):
+        """Six refusals in a row landed on the monthly price chart, which is
+        beside the flight list and not on the booking path — and the report
+        read as though the run had been stopped over it. It had not: in three
+        model-free walks, every session with that call refused had the fare
+        call refused too. Saying "session" is what stops a reader chasing the
+        endpoint that happened to load first."""
+        seen, _ = await self._run([{
+            **self.REFUSAL,
+            "url": "https://nuat.turkishairlines.com/api/v1/availability/price-calendar",
+        }])
+        message = [e for e in seen if e["event"] == "error"][0]["message"]
+        self.assertIn("SESSION", message)
+        self.assertIn("First refused", message)
+        self.assertIn("price-calendar", message)
+
     async def test_the_reference_code_is_carried_to_whoever_has_to_chase_it(self):
         """It is the only thing the site's own operators can look up."""
         seen, _ = await self._run([self.REFUSAL])

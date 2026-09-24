@@ -33,9 +33,21 @@ function when(seconds) {
   });
 }
 
+/* A screenshot belongs to its bug, so this panel is keyed by the bug at the
+   call site: selecting another one gets a new panel rather than the old one
+   with the previous bug's screen still in it. Guarded here as well, because a
+   caller that forgets the key would show one bug's evidence under another's
+   title — which is worse than showing none. */
 function BugShot({ bugId }) {
   const [image, setImage] = useState(null);
   const [state, setState] = useState('idle');
+  const [shownFor, setShownFor] = useState(bugId);
+
+  if (shownFor !== bugId) {
+    setShownFor(bugId);
+    setImage(null);
+    setState('idle');
+  }
 
   const load = async () => {
     if (image || state === 'loading') return;
@@ -305,7 +317,7 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
                     can be swallowed by a markdown rule. */}
                 <pre className="bug-body">{selected.detail}</pre>
 
-                {selected.hasScreenshot && <BugShot bugId={selected.id} />}
+                {selected.hasScreenshot && <BugShot key={selected.id} bugId={selected.id} />}
               </>
             )}
           </section>
