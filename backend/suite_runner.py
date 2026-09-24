@@ -497,7 +497,23 @@ async def _execute_one(
             e for e in events
             if e.get("level") == "error" and not e.get("thirdParty")
         ]
-        if status == "passed" and page_errors and options.get("fail_on_page_error", True):
+
+        # A refusal by the site's bot protection is said plainly, whatever the
+        # verdict was, because it is the one failure a tester cannot act on by
+        # reading the scenario: the run did everything right and was not
+        # allowed to. Reported ahead of the page-error line so it is not filed
+        # away as one — and ahead of a green verdict too, since a run that was
+        # refused its data did not demonstrate anything.
+        refusals = [e for e in events if e.get("kind") == "blocked"
+                    and not e.get("thirdParty")]
+        if refusals:
+            status = "failed"
+            error = (
+                "The site's bot protection refused this run. "
+                + str(refusals[0].get("text", ""))[:400]
+                + f" ({refusals[0].get('url', '')[:120]})"
+            )
+        elif status == "passed" and page_errors and options.get("fail_on_page_error", True):
             # A run that clicked through happily while the console threw and an
             # API returned 500 has not demonstrated that the feature works.
             status = "failed"

@@ -563,6 +563,109 @@ class TestWebSnapshotOffline(unittest.TestCase):
         self.assertLessEqual(len(tree["text"]), 300)
 
 
+class ARefusalWearingASuccessCode(unittest.IsolatedAsyncioTestCase):
+    """A data call answered with a web page, carrying HTTP 200.
+
+    Measured on NUAT: POST /api/v1/availability/domestic-fares returned 200
+    with Akamai's "Take a short break from your passion for travel!" page. The
+    client parsed nothing, no fare was priced, "Devam et" stayed grey, and
+    every other signal was clean — no console error, no 4xx. Eight runs were
+    spent on it and a bug was filed against the airline for it.
+    """
+
+    BLOCK = (
+        '<!DOCTYPE html><html lang="en"><head><style>a{color:red}</style>'
+        "</head><body><h1>Take a short break from your passion for travel!"
+        "</h1><p>you are not able to access our site right now.</p>"
+        "<span>Reference Code: 0.c6760740.1790229294.9689987c</span>"
+        "<script>console.log(1)</script></body></html>"
+    )
+
+    class Page:
+        url = "https://nuat.turkishairlines.com/tr-tr/"
+
+        def __init__(self):
+            self.handlers = {}
+
+        def on(self, name, handler):
+            self.handlers[name] = handler
+
+    class Response:
+        def __init__(self, body, content_type="text/html; charset=utf-8",
+                     status=200, resource_type="xhr",
+                     url="https://nuat.turkishairlines.com/api/v1/availability/domestic-fares"):
+            self.status, self.status_text, self.url = status, "OK", url
+            self.headers = {"content-type": content_type}
+            self._body = body
+            self.request = type("R", (), {"resource_type": resource_type})()
+
+        async def text(self):
+            return self._body
+
+    async def _events_for(self, response):
+        page = self.Page()
+        sink = []
+        web_driver.attach_page_listeners(page, sink)
+        page.handlers["response"](response)
+        await asyncio.sleep(0)  # let the body read run
+        return sink
+
+    async def test_a_data_call_answered_with_a_page_is_recorded(self):
+        sink = await self._events_for(self.Response(self.BLOCK))
+        blocked = [e for e in sink if e["kind"] == "blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["level"], "error")
+        self.assertFalse(blocked[0]["thirdParty"])
+
+    async def test_the_reference_code_and_the_page_s_own_words_are_kept(self):
+        """Both, because one is for the site's operators and one is for the
+        tester reading the report."""
+        sink = await self._events_for(self.Response(self.BLOCK))
+        text = sink[0]["text"]
+        self.assertIn("0.c6760740.1790229294.9689987c", text)
+        self.assertIn("Take a short break", text)
+        self.assertNotIn("console.log", text, "scripts are not words on a page")
+        self.assertNotIn("color:red", text)
+
+    async def test_a_page_navigation_returning_html_is_just_a_page(self):
+        """Every document is HTML; only a data call answered with one is odd."""
+        sink = await self._events_for(
+            self.Response(self.BLOCK, resource_type="document"))
+        self.assertFalse([e for e in sink if e["kind"] == "blocked"])
+
+    async def test_json_is_left_alone(self):
+        sink = await self._events_for(
+            self.Response('{"data":1}', content_type="application/json"))
+        self.assertFalse([e for e in sink if e["kind"] == "blocked"])
+
+    async def test_the_sites_own_telemetry_is_not_a_refusal(self):
+        """The first cut of this killed every NUAT run in fifteen seconds.
+
+        Akamai's own pixel is fetched as an xhr and answers in HTML because
+        that is what it is. Stopping a good run costs the run; missing a
+        refusal costs what today already costs.
+        """
+        pixel = ('<!DOCTYPE html><html><head><script>bazadebezolkohpepadr'
+                 '=1</script></head><body></body></html>')
+        sink = await self._events_for(self.Response(
+            pixel,
+            url="https://nuat.turkishairlines.com/akam/13/pixel_5917c3ec"))
+        self.assertFalse([e for e in sink if e["kind"] == "blocked"])
+
+    async def test_a_font_called_roboto_does_not_read_as_a_robot_check(self):
+        page = ('<!DOCTYPE html><html><head><style>@import url('
+                "'https://fonts.googleapis.com/css2?family=Roboto+Mono');"
+                "</style></head><body><p>Hoş geldiniz</p></body></html>")
+        sink = await self._events_for(self.Response(page))
+        self.assertFalse([e for e in sink if e["kind"] == "blocked"])
+
+    async def test_a_4xx_is_still_reported_the_way_it_always_was(self):
+        """The new branch must not swallow the old one."""
+        sink = await self._events_for(
+            self.Response("nope", content_type="text/plain", status=500))
+        self.assertTrue([e for e in sink if e["kind"] == "httperror"])
+
+
 class TellingNamesakesApart(unittest.TestCase):
     """Two controls with one name between them.
 

@@ -1825,6 +1825,81 @@ class NotStartingAgainstAScreenThatIsNotThere(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class WhenTheSiteRefusesTheRunItsData(unittest.IsolatedAsyncioTestCase):
+    """A data call answered with a web page, carrying a 200.
+
+    Measured on NUAT: POST /api/v1/availability/domestic-fares came back 200
+    with Akamai's "Take a short break from your passion for travel!" page, so
+    the fare was never priced and "Devam et" stayed grey. Nothing said a word
+    — no console error, no 4xx, every other call green — and eight runs spent
+    their whole budget on a button that was never going to enable. Then a bug
+    was filed against the airline's site for it, which was wrong twice over:
+    the site was fine, and the thing to fix was on this side.
+    """
+
+    STEPS = [{"action": "Devam et'e bas", "expected": "Yolcu bilgileri açılır"}]
+    REFUSAL = {
+        "kind": "blocked", "level": "error", "thirdParty": False,
+        "text": ("This data call was answered with a web page instead of"
+                 " data. Reference Code: 0.c6760740.1790229294.9689987c"),
+        "url": "https://nuat.turkishairlines.com/api/v1/availability/domestic-fares",
+    }
+
+    def _provider(self, asked):
+        class Provider:
+            id, label = "fake", "Fake"
+
+            async def stream(self, *a, **k):
+                asked.append(1)
+                yield ('```json\n{"type":"action","action":"step_done",'
+                       '"value":"pass"}\n```')
+
+        return Provider()
+
+    async def _run(self, events_on_page):
+        target = FakeTarget(_manager())
+        target.peek_events = lambda: events_on_page
+        asked, seen = [], []
+        with patch.object(agent.providers, "get", lambda *a, **k: self._provider(asked)), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for line in agent.run_agent(
+                target, "senaryo", steps=self.STEPS,
+                session_state=agent.AgentSession(),
+            ):
+                seen.append(json.loads(line))
+        return seen, asked
+
+    async def test_a_refused_run_stops_instead_of_spending_its_budget(self):
+        seen, asked = await self._run([self.REFUSAL])
+        self.assertEqual(asked, [], "the model was never asked")
+        errors = [e for e in seen if e["event"] == "error"]
+        self.assertTrue(errors)
+        self.assertIn("bot protection refused", errors[0]["message"])
+
+    async def test_the_reference_code_is_carried_to_whoever_has_to_chase_it(self):
+        """It is the only thing the site's own operators can look up."""
+        seen, _ = await self._run([self.REFUSAL])
+        message = [e for e in seen if e["event"] == "error"][0]["message"]
+        self.assertIn("0.c6760740.1790229294.9689987c", message)
+        self.assertIn("domestic-fares", message)
+
+    async def test_someone_elses_blocked_call_is_not_this_runs_problem(self):
+        """Third-party the same as every other network event here."""
+        theirs = {**self.REFUSAL, "thirdParty": True,
+                  "url": "https://ads.example.com/x"}
+        seen, asked = await self._run([theirs])
+        self.assertTrue(asked, "the model was asked")
+        self.assertFalse([e for e in seen if e["event"] == "error"])
+
+    async def test_a_page_with_nothing_wrong_runs_as_before(self):
+        seen, asked = await self._run([])
+        self.assertTrue(asked)
+        self.assertTrue([e for e in seen if e["event"] == "scenario_step_started"])
+
+
 class ACheckThatWasAlreadyTrueProvesNothing(unittest.TestCase):
     """Found on the swap control, and it had eight scenarios in the suite.
 

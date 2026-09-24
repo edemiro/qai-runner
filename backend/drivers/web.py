@@ -298,6 +298,26 @@ def _launch_args(headless: bool, offscreen: bool, browser_name: str) -> List[str
     return args
 
 
+# How a refusal page reads, across the vendors sites put in front of
+# themselves. Matched against the page's words with its scripts and styles
+# taken out — "Roboto Mono" in a stylesheet import is not a robot check.
+# Deliberately short: a marker that also appears on a working page would stop
+# runs that were fine, which is far worse than missing a refusal and leaving
+# things as they are today.
+REFUSAL_MARKERS = (
+    "reference code",
+    "access denied",
+    "request unsuccessful",
+    "not able to access",
+    "unusual traffic",
+    "attention required",
+    "pardon our interruption",
+    "verify you are human",
+    "erişim engellendi",
+    "isteğiniz engellendi",
+)
+
+
 def _append_event(sink: List[Dict[str, Any]], event: Dict[str, Any]) -> None:
     event.setdefault("at", time.time())
     sink.append(event)
@@ -406,13 +426,61 @@ def attach_page_listeners(page, sink: List[Dict[str, Any]]) -> None:
             "thirdParty": _is_third_party(page, request.url),
         })
 
-    def on_response(response) -> None:
-        if response.status < 400:
+    async def _read_refusal(response, resource_type: str) -> None:
+        """Record a data call that was answered with a refusal page."""
+        try:
+            body = await response.text()
+        except Exception:
             return
+        reference = re.search(r"Reference\s*Code:\s*([\w.:-]+)", body)
+        stripped = re.sub(r"<(script|style)\b.*?</\1>", " ", body,
+                          flags=re.S | re.I)
+        words = " ".join(re.sub(r"<[^>]+>", " ", stripped).split())
+        # HTML alone is not a refusal. A site's own telemetry answers in HTML
+        # as a matter of course — the first cut of this killed every NUAT run
+        # in fifteen seconds on /akam/13/pixel_*, which is Akamai's pixel
+        # doing its job. So the page has to read like a refusal. Missing one
+        # costs what today already costs; stopping a good run costs the run.
+        if not any(mark in words.lower() for mark in REFUSAL_MARKERS):
+            return
+        _append_event(sink, {
+            "kind": "blocked",
+            "level": "error",
+            "text": (
+                "This data call was answered with a web page instead of data,"
+                " which is how bot protection refuses a request without"
+                " saying so: the status is 200, nothing parses, and the"
+                " screen goes quietly empty."
+                + (f" Reference Code: {reference.group(1)}." if reference
+                   else "")
+                + (f" The page says: {words[:220]}" if words else "")
+            )[:2000],
+            "url": response.url[:500],
+            "status": response.status,
+            "resourceType": resource_type,
+            "thirdParty": _is_third_party(page, response.url),
+        })
+
+    def on_response(response) -> None:
         try:
             resource_type = response.request.resource_type
         except Exception:
             resource_type = "other"
+        # A data call answered with HTML is a refusal wearing a success code.
+        # Measured on NUAT: POST /api/v1/availability/domestic-fares came back
+        # 200 carrying Akamai's "Take a short break from your passion for
+        # travel!" page, so no fare was ever priced and "Devam et" stayed grey
+        # through eight runs — while the same flow worked by hand, on the same
+        # machine, in the same minute. Nothing else said a word: no console
+        # error, no 4xx, every other call green. Without this the run spends
+        # its whole budget on a button that was never going to enable, and
+        # then files a bug against the application.
+        if resource_type in ("xhr", "fetch") and response.status < 400:
+            content = (response.headers or {}).get("content-type", "")
+            if "text/html" in content.lower():
+                asyncio.ensure_future(_read_refusal(response, resource_type))
+        if response.status < 400:
+            return
         _append_event(sink, {
             "kind": "httperror",
             "level": _network_level(resource_type, response.status),

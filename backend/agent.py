@@ -1244,6 +1244,24 @@ TYPING_ACTIONS = {"type", "clear", "press_key", "key"}
 FIRST_SCREEN_SECONDS = 25.0
 
 
+def _refusal(target: UITarget) -> Optional[str]:
+    """What to say when the site refused this run its data, or None.
+
+    Peeks rather than drains, like assert_no_errors does: the run's own record
+    still needs the event when it closes.
+    """
+    events = target.peek_events() if hasattr(target, "peek_events") else []
+    for event in events:
+        if event.get("kind") == "blocked" and not event.get("thirdParty"):
+            return (
+                "The site's bot protection refused this run, so the screen"
+                " could not fill in and no amount of clicking would have"
+                " changed that. " + str(event.get("text", ""))[:400]
+                + f" ({str(event.get('url', ''))[:120]})"
+            )
+    return None
+
+
 async def _wait_for_a_screen(target: UITarget) -> tuple:
     """Wait until there is something to look at. Returns (ready, why not)."""
     deadline = time.monotonic() + FIRST_SCREEN_SECONDS
@@ -1971,6 +1989,17 @@ async def run_agent(
                     expected=scenario_steps[step_index].get("expected") or None,
                 )
                 continue
+
+            # Bot protection answering a data call with a web page is the one
+            # failure no amount of trying gets past, and it is invisible on
+            # screen: the control simply never enables. Measured on NUAT, a run
+            # spent its whole budget of actions on a "Devam et" that was never
+            # going to light up, and then a bug was filed against the airline's
+            # site for it. Stop as soon as it is seen, and say which call.
+            refused = _refusal(target)
+            if refused:
+                yield _event("error", message=refused)
+                return
 
             snapshot, screen_json, screenshot = await _screen_context(target, use_vision)
             publish_live_frame(target.session_id, screenshot)
