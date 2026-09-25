@@ -294,3 +294,79 @@ class WhatAControlHoldsAgainstWhatItIsCalled(unittest.TestCase):
         """What was on screen has to include the values, or the message sends
         the reader looking for a word that is genuinely there."""
         self.assertIn("ECONOMY", self._screen().visible_text())
+
+
+class ALocatorThatSaysWhatTheElementIs(unittest.TestCase):
+    """A recording used to write down where the element sat in the view tree.
+
+    Measured on the Android one-way set, against the same build on the same
+    device inside the same session: every element-addressed replay failed and
+    only the screen-level assertions, which name no element, came back green.
+    `/hierarchy[1]/android.widget.FrameLayout[1]/…` moves whenever anything
+    above it does — a banner, an animation frame, one extra view — so the
+    recordings were earned and lost again every single run and a phone run
+    never got cheaper than its first.
+
+    The elements carry what they are. `llTo` and `dvDepartureDate` are
+    resource ids the developers chose; "Search Flight" is written on the
+    button. Those survive what a position does not.
+    """
+
+    SCREEN = (
+        '<hierarchy>'
+        ' <android.widget.FrameLayout bounds="[0,0][400,800]">'
+        '  <android.widget.Button resource-id="com.thy.reg:id/llTo"'
+        '                         text="Nereye" bounds="[0,0][100,50]"/>'
+        '  <android.widget.Button content-desc="Search Flight"'
+        '                         bounds="[0,60][100,110]"/>'
+        '  <android.widget.TextView text="Done" bounds="[0,120][100,170]"/>'
+        '  <android.widget.TextView text="Done" bounds="[0,180][100,230]"/>'
+        '  <android.widget.TextView bounds="[0,240][100,290]"/>'
+        ' </android.widget.FrameLayout>'
+        '</hierarchy>'
+    )
+
+    def _screen(self):
+        return MobileDOMManager(self.SCREEN, "Android", 400, 800)
+
+    def _by(self, attribute, value):
+        for element in self._screen().get_all_elements():
+            if getattr(element, attribute, None) == value:
+                return element
+        self.fail(f"{attribute}={value} bulunamadi")
+
+    def test_a_resource_id_becomes_the_locator(self):
+        """The id the developers gave it, stripped of its package prefix."""
+        self.assertEqual(self._by("resource_id", "llTo").selector,
+                         '//*[@resource-id="llTo"]')
+
+    def test_a_content_description_is_next_best(self):
+        self.assertEqual(self._by("name", "Search Flight").selector,
+                         '//*[@content-desc="Search Flight"]')
+
+    def test_a_name_two_elements_share_names_neither(self):
+        """Two rows both reading "Done" — a locator matching both is worse
+        than a position, because it taps whichever comes first."""
+        for element in self._screen().get_all_elements():
+            if element.text == "Done":
+                self.assertTrue(element.selector.startswith("/hierarchy"),
+                                element.selector)
+
+    def test_an_element_with_nothing_to_say_keeps_its_position(self):
+        blank = [e for e in self._screen().get_all_elements()
+                 if e.tag.endswith("TextView") and not e.text]
+        self.assertTrue(blank)
+        self.assertTrue(blank[0].selector.startswith("/hierarchy"))
+
+    def test_a_quote_in_the_name_does_not_produce_a_broken_locator(self):
+        """XPath 1.0 has no escape, so a label holding both quotes keeps its
+        position rather than becoming a locator that cannot be parsed."""
+        both = 'He said "it&apos;s" here'
+        screen = MobileDOMManager(
+            f"<hierarchy><android.widget.Button content-desc='{both}'"
+            ' bounds="[0,0][10,10]"/></hierarchy>',
+            "Android", 400, 800)
+        for element in screen.get_all_elements():
+            if element.name:
+                self.assertTrue(element.selector.startswith("/hierarchy"),
+                                element.selector)

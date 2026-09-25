@@ -17,6 +17,42 @@ INTERACTIVE_ROLES = {"button", "textbox", "checkbox", "switch", "link", "tab"}
 # match an assertion on "1" against a control that says nothing of the sort.
 BOOLEAN_VALUES = {"0", "1", "true", "false"}
 
+# How long a piece of text may be and still be the name of a control. A whole
+# paragraph in a text view is not an identifier, and an XPath carrying one is
+# both unreadable in a report and fragile against a single retyped word.
+NAMEABLE_TEXT = 60
+
+
+def _identities(element: "MobileElement") -> List[tuple]:
+    """The attributes that say what this element is, most durable first.
+
+    A resource id is given by the developer and survives a redesign; a
+    content description survives a re-layout; the words on the control survive
+    neither but still beat its position in the tree.
+    """
+    found = []
+    if element.resource_id:
+        found.append(("resource-id", element.resource_id))
+    if element.name:
+        found.append(("content-desc", element.name))
+    if element.text and len(element.text) <= NAMEABLE_TEXT:
+        found.append(("text", element.text))
+    return [(attr, value) for attr, value in found if _quote(value)]
+
+
+def _quote(value: str) -> Optional[str]:
+    """`value` as an XPath string literal, or None when it cannot be one.
+
+    XPath 1.0 has no escape: a literal holding both kinds of quote can only be
+    written with concat(), which is not worth carrying for the handful of
+    labels that would need it — those keep their position instead.
+    """
+    if '"' not in value:
+        return f'"{value}"'
+    if "'" not in value:
+        return f"'{value}'"
+    return None
+
 
 class MobileElement:
     """
@@ -27,6 +63,11 @@ class MobileElement:
         self.platform = platform.lower()
         self.tag = raw_node.tag
         self.xpath = xpath
+        # What to write down when this element is recorded. Replaced by the
+        # manager with something that names the element where the screen
+        # offers a name — see _name_by_what_they_are. Defaults to the position
+        # so an element built outside a tree still has a locator.
+        self.selector = xpath
         self.element_id: Optional[str] = None
 
         # Original attributes
@@ -283,6 +324,7 @@ class MobileDOMManager:
 
         self._parse_tree()
         self._assign_ids()
+        self._name_by_what_they_are()
 
     def _parse_tree(self):
         try:
@@ -321,6 +363,37 @@ class MobileDOMManager:
             self.element_counter += 1
             elem.element_id = element_id
             self.elements_by_id[element_id] = elem
+
+    def _name_by_what_they_are(self) -> None:
+        """Give each element a locator that says what it is, not where it sits.
+
+        A recorded action stored the element's position in the view tree —
+        `/hierarchy[1]/android.widget.FrameLayout[1]/…` from the root — and a
+        replay found it by matching that string. Measured on the Android set,
+        against the same build on the same device in the same session: every
+        element-addressed replay failed and only the screen-level assertions,
+        which name no element at all, came back green. A banner, an animation
+        frame or one extra view is enough to move every path below it, so the
+        recordings were earned and lost every single run and a phone run never
+        got cheaper.
+
+        The elements carry what they are — `llTo`, `dvDepartureDate`,
+        "Search Flight" — so that is what gets written down, and only when it
+        picks out one element on the screen. Where nothing does, the position
+        is still better than nothing.
+        """
+        elements = self.get_all_elements()
+        counts: Dict[str, int] = {}
+        for element in elements:
+            for key in _identities(element):
+                counts[key] = counts.get(key, 0) + 1
+        for element in elements:
+            element.selector = next(
+                (f"//*[@{attr}={_quote(value)}]"
+                 for attr, value in _identities(element)
+                 if counts[(attr, value)] == 1),
+                element.xpath,
+            )
 
     def _optimize(self, serializer: str) -> Dict[str, Any]:
         if not self.root_element:

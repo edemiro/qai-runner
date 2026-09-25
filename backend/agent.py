@@ -2012,7 +2012,19 @@ async def run_agent(
                 yield _event("error", message=refused)
                 return
 
-            snapshot, screen_json, screenshot = await _screen_context(target, use_vision)
+            # A replayed action is not going to the model, so the picture taken
+            # for the model is paid for and never looked at. On a phone that is
+            # the expensive half of a read: measured on a BrowserStack Pixel 11,
+            # the page source takes 0.46s and the screenshot 2.74s. A four-step
+            # Android scenario replaying all ten of its actions spent 27 seconds
+            # on images nothing read.
+            #
+            # The page source is still taken. _label_moved checks the recording
+            # against it before anything is replayed, and that check is the
+            # reason blind replays stopped clicking the wrong airport.
+            from_recording = bool(replay_queue)
+            snapshot, screen_json, screenshot = await _screen_context(
+                target, use_vision and not from_recording)
             publish_live_frame(target.session_id, screenshot)
             if snapshot is not None:
                 yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
@@ -2354,8 +2366,17 @@ async def run_agent(
                 )
             else:
                 result = await _execute_action(target, action, snapshot)
-            after_shot = await _fast_screenshot(target)
-            publish_live_frame(target.session_id, after_shot)
+            # One frame per step rather than one per action, while a recording
+            # is playing out and going well. A replayed action that worked and
+            # has another queued behind it shows nothing the next one will not
+            # show better, and on a phone each of these is another 2.74
+            # seconds. A failure, or the last action of the step, is always
+            # photographed — those are the frames a report is read for.
+            if replaying and result["ok"] and replay_queue:
+                after_shot = None
+            else:
+                after_shot = await _fast_screenshot(target)
+                publish_live_frame(target.session_id, after_shot)
             duration_ms = int((time.monotonic() - started) * 1000)
 
             # The screen gets the last word. A check that failed on the text

@@ -1916,6 +1916,89 @@ class WhenTheSiteRefusesTheRunItsData(unittest.IsolatedAsyncioTestCase):
         self.assertTrue([e for e in seen if e["event"] == "scenario_step_started"])
 
 
+class APlayedBackStepDoesNotPayForPicturesNobodyLooksAt(
+        unittest.IsolatedAsyncioTestCase):
+    """On a phone the screenshot is the expensive half of reading the screen.
+
+    Measured on a BrowserStack Pixel 11: the page source takes 0.46 seconds
+    and the screenshot 2.74. The loop took one for the model before every
+    action and one after every action, so a four-step Android scenario that
+    replayed all ten of its actions spent about 27 seconds on images that no
+    model was ever shown, and another 27 photographing steps it had not
+    finished.
+    """
+
+    STEPS = [{
+        "action": "Tek yön seç",
+        "expected": "Tek yön seçilidir",
+        "recorded": [
+            {"action": "click", "selector": "#one-way", "label": "Tek yön",
+             "value": None},
+            {"action": "assert_visible", "selector": "#one-way",
+             "label": "Tek yön", "value": None},
+        ],
+    }]
+
+    def _provider(self, asked):
+        class Provider:
+            id, label = "fake", "Fake"
+
+            async def stream(self, *a, **k):
+                asked.append(1)
+                yield ('```json\n{"type":"action","action":"step_done",'
+                       '"value":"pass"}\n```')
+
+        return Provider()
+
+    async def _run(self, steps):
+        target = FakeTarget(_manager())
+        shots = []
+
+        async def photograph(_target):
+            shots.append(1)
+            return "ZmFrZQ=="
+
+        with patch.object(agent.providers, "get",
+                          lambda *a, **k: self._provider([])), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"), \
+             patch.object(agent, "_fast_screenshot", photograph), \
+             patch.object(agent, "_execute_action", AsyncMock(
+                 return_value={"ok": True, "message": "ok", "element": None})):
+            async for _ in agent.run_agent(
+                target, "senaryo", steps=steps,
+                session_state=agent.AgentSession(),
+            ):
+                pass
+        return len(shots)
+
+    def _longer(self, clicks):
+        """The same step, recorded with more actions in it."""
+        recorded = [{"action": "click", "selector": f"#b{n}",
+                     "label": "Tek yön", "value": None}
+                    for n in range(clicks)]
+        recorded.append({"action": "assert_visible", "selector": "#one-way",
+                         "label": "Tek yön", "value": None})
+        return [{**self.STEPS[0], "recorded": recorded}]
+
+    async def test_a_longer_recording_does_not_cost_more_pictures(self):
+        """The cost is per step, not per action.
+
+        This is the whole saving: it used to take one for the model and one
+        after the act on every single action, so a recording twice as long
+        cost twice as many device round trips for frames nobody reads.
+        """
+        short = await self._run(self._longer(1))
+        long = await self._run(self._longer(6))
+        self.assertEqual(
+            short, long,
+            f"1 tıklama {short} kare, 6 tıklama {long} kare — aksiyonla artıyor")
+
+    async def test_the_step_is_still_photographed_at_its_end(self):
+        """A report is read for the frame at the end of the step."""
+        self.assertGreater(await self._run(self.STEPS), 0)
+
+
 class ACheckThatWasAlreadyTrueProvesNothing(unittest.TestCase):
     """Found on the swap control, and it had eight scenarios in the suite.
 

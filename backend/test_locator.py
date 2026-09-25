@@ -157,3 +157,55 @@ class TestSemanticSimilarity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AReplayFindsWhatItNamed(unittest.IsolatedAsyncioTestCase):
+    """A recording carries a locator; the screen it replays onto has moved.
+
+    Recordings used to carry the element's position in the view tree. On the
+    Android one-way set every element-addressed replay failed — same build,
+    same device, same session — because a banner or an animation frame moves
+    every path beneath it. They carry what the element is now, and both shapes
+    have to keep working: there are recordings on disk from before this.
+    """
+
+    def setUp(self):
+        locator.snapshots = locator.SnapshotStore()
+
+    async def _find(self, xml, selector):
+        current = _manager(xml)
+        with patch.object(locator, "capture_snapshot",
+                          new=AsyncMock(return_value=current)):
+            return await locator.resolve(
+                "s1", {}, xpath=selector, timeout=1.0, poll_interval=0.05)
+
+    async def test_a_named_element_is_found_where_its_position_moved(self):
+        """The case that failed on the phone: same element, deeper in the tree."""
+        resolved = await self._find(SHIFTED_BUTTON,
+                                    '//*[@resource-id="confirm_btn"]')
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.element.text, "Confirm")
+
+    async def test_the_words_on_a_control_will_do(self):
+        resolved = await self._find(SHIFTED_BUTTON, '//*[@text="Confirm"]')
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.element.resource_id, "confirm_btn")
+
+    async def test_a_recording_made_before_this_still_replays(self):
+        """Positional locators are still understood, or every recording on
+        disk would have to be earned again."""
+        resolved = await self._find(
+            SINGLE_BUTTON, "/hierarchy[1]/android.widget.Button[1]")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.element.text, "Confirm")
+
+    async def test_a_name_two_elements_now_share_is_refused(self):
+        """It was this element's alone when recorded and is not any more —
+        a second row appeared. Tapping whichever comes first is the blind
+        replay the label check exists to stop."""
+        self.assertIsNone(
+            await self._find(TWO_IDENTICAL_ROWS, '//*[@text="Delete"]'))
+
+    async def test_a_name_nothing_answers_to_is_not_forced_onto_something(self):
+        self.assertIsNone(
+            await self._find(SINGLE_BUTTON, '//*[@resource-id="gone"]'))

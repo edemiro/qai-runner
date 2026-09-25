@@ -7,6 +7,7 @@ inspector refresh can no longer renumber the tree underneath a pending action.
 """
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -171,6 +172,50 @@ async def _auto_scroll(session_id: str, cy: int, screen_width: int, screen_heigh
     return res is not None and res.status_code == 200
 
 
+_NAMED = re.compile(r'^//\*\[@([\w-]+)=(?:"([^"]*)"|\'([^\']*)\')\]$')
+
+
+def _answers_to(element: MobileElement, selector: str) -> bool:
+    """Does this element answer to the locator a recording wrote down?
+
+    Two shapes arrive here. A position in the view tree is what recordings
+    carried before, and still arrives from every one made then. An attribute
+    that names the element is what they carry now, because the position moves
+    whenever anything above it does — measured on the Android set, every
+    element-addressed replay failed against the same build on the same device
+    in the same session, and only the assertions that name no element held.
+
+    Both are understood, so the recordings already on disk keep working.
+    """
+    if element.xpath == selector:
+        return True
+    named = _NAMED.match(selector or "")
+    if not named:
+        return False
+    attribute = named.group(1)
+    wanted = named.group(2) if named.group(2) is not None else named.group(3)
+    if attribute == "resource-id":
+        return element.resource_id == wanted
+    if attribute == "content-desc":
+        return element.name == wanted
+    if attribute == "text":
+        return element.text == wanted
+    return False
+
+
+def _only_match(elements: List[MobileElement], selector: str) -> Optional[MobileElement]:
+    """The one element that answers to this locator, or nothing.
+
+    Nothing when several do: a name that was this element's alone when it was
+    recorded can be shared by the time it is replayed — two rows of the same
+    list, a screen shown twice — and tapping whichever came first is the blind
+    replay this exists to prevent. The caller falls back to matching the
+    recorded element itself, which weighs more than one attribute.
+    """
+    found = [e for e in elements if _answers_to(e, selector)]
+    return found[0] if len(found) == 1 else None
+
+
 async def resolve(
     session_id: str,
     platform_cache: Dict[str, str],
@@ -193,7 +238,7 @@ async def resolve(
         if element_id and element_id in source_manager.elements_by_id:
             cached = source_manager.elements_by_id[element_id]
         elif xpath:
-            cached = next((e for e in source_manager.get_all_elements() if e.xpath == xpath), None)
+            cached = _only_match(source_manager.get_all_elements(), xpath)
 
     target_xpath = xpath or (cached.xpath if cached else None)
     deadline = time.monotonic() + timeout
@@ -221,9 +266,9 @@ async def resolve(
                     pending_ambiguity = None
                     match = best_elem
 
-        # Structural fallback: exact xpath.
+        # Structural fallback: the locator the caller named, matched exactly.
         if match is None and target_xpath:
-            match = next((e for e in manager.get_all_elements() if e.xpath == target_xpath), None)
+            match = _only_match(manager.get_all_elements(), target_xpath)
 
         if match is not None:
             width, height = manager.screen_width, manager.screen_height

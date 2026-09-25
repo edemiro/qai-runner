@@ -108,7 +108,11 @@ class MobileTarget:
             "text": element.text,
             "content-desc": element.name,
             "role": element.role,
-            "xpath": element.xpath,
+            # The locator that goes into the recording: what the element is
+            # where the screen says so, its position otherwise. Recording the
+            # position meant every replayed tap on a phone failed — the path
+            # from the root moves when anything above it does.
+            "xpath": getattr(element, "selector", None) or element.xpath,
             "bounds": element.bounds,
             "label": element.describe(),
         }
