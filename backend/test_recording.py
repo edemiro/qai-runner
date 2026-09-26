@@ -517,3 +517,68 @@ def test_an_older_run_with_no_step_record_still_needs_to_be_green(db, case):
     did(green, 1, "click")
     did(green, 2, "click")
     assert db.promote_recording(green, case) == 2
+
+
+# --------------------------------------------------------------------------- #
+# A stale recording is not a struggle
+# --------------------------------------------------------------------------- #
+
+def _replayed(run_id, scenario_idx, action, status="passed"):
+    """An action the runner took from the stored recording."""
+    return storage.add_step(
+        run_id, action=action, status=status,
+        target=action, element={"xpath": f"#{action}", "label": action},
+        reason="replayed from the last green run", scenario_idx=scenario_idx,
+    )
+
+
+def test_a_step_that_passed_around_a_stale_recording_keeps_what_worked(db, case):
+    """Measured on the Android set, and it cost every run.
+
+    A step's first recorded action aimed at an onboarding "Skip" that stopped
+    appearing once the app was restarted between scenarios. The replay failed,
+    the model carried the step out its own way, the step passed — and the
+    route that worked was thrown away as a struggle. So every run paid ten
+    seconds of timeout to be told the same thing again.
+    """
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    _replayed(run_id, 1, "click", status="failed")
+    did(run_id, 1, "tap_home")
+    did(run_id, 1, "assert_text")
+
+    assert db.promote_recording(run_id, case) == 1
+    kept = db.get_case(case)["steps"][0].get("recorded")
+    assert kept, "the route that worked is written down"
+    assert [a["action"] for a in kept] == ["tap_home", "assert_text"], kept
+
+
+def test_a_model_struggling_is_still_not_recorded(db, case):
+    """The rule this sits beside, and the reason it exists: an action the
+    model tried and got wrong, then recovered from, must not be replayed
+    without whatever prompted the recovery."""
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "click", status="failed")
+    did(run_id, 1, "click")
+    did(run_id, 1, "assert_text")
+
+    assert db.promote_recording(run_id, case) == 0
+    assert not db.get_case(case)["steps"][0].get("recorded")
+
+
+def test_a_stale_recording_on_a_step_that_failed_is_still_dropped(db, case):
+    """Nothing proved it this time, so there is nothing to replace it with —
+    and keeping the recording would repeat the failure faster."""
+    run_id = a_run(case, status="failed")
+    _stepwise(run_id, {1: "failed"})
+    _replayed(run_id, 1, "click", status="failed")
+
+    db.get_case(case)  # the step starts with a recording
+    storage.update_case(case, steps=[{
+        "action": "step 1", "expected": "",
+        "recorded": [{"action": "click", "selector": "#old", "label": "old",
+                      "value": None}],
+    }])
+    db.promote_recording(run_id, case)
+    assert not db.get_case(case)["steps"][0].get("recorded")

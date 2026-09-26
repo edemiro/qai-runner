@@ -1889,12 +1889,22 @@ def promote_recording(run_id: str, case_id: str) -> int:
         for row in rows:
             idx = row["scenario_idx"]
             if row["status"] != "passed":
-                # One failure in the middle means the agent recovered by doing
-                # something else, and replaying the recovery without what
-                # prompted it reproduces the mistake, not the fix.
-                spoiled.add(idx)
                 if "replayed" in (row["reason"] or "").lower():
+                    # The stored recording is what failed, not the run. That is
+                    # not a struggle to be careful about — it is a recording
+                    # that has gone out of date, and the actions that did work
+                    # this time are the way through. Measured on the Android
+                    # set: the first action of a step aimed at an onboarding
+                    # "Skip" that no longer appears, so the step passed on the
+                    # model's own route every run, threw that route away, and
+                    # paid ten seconds of timeout to be told the same thing
+                    # again on the next one.
                     disproved.add(idx)
+                else:
+                    # A model working a step out, failing, and recovering by
+                    # doing something else. Replaying the recovery without
+                    # what prompted it reproduces the mistake, not the fix.
+                    spoiled.add(idx)
                 continue
             by_step.setdefault(idx, []).append({
                 "action": row["action"], "selector": row["selector"],
@@ -1910,6 +1920,10 @@ def promote_recording(run_id: str, case_id: str) -> int:
             )
             recorded = clean_recorded(by_step.get(position) or [])
             if proved and recorded:
+                # Overwrites a stale recording as well as filling an empty
+                # step: a step whose stored actions were what failed keeps the
+                # route that actually worked this time instead of the one that
+                # has stopped working.
                 step["recorded"] = recorded
                 kept += 1
                 continue
