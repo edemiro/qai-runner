@@ -2154,7 +2154,14 @@ def get_suite_run(suite_run_id: str) -> Optional[Dict[str, Any]]:
                       -- that passed with two steps healed is different news
                       -- from one that simply passed.
                       (SELECT COUNT(*) FROM scenario_steps ss
-                        WHERE ss.run_id = r.id AND ss.healed = 1) AS healed_steps
+                        WHERE ss.run_id = r.id AND ss.healed = 1) AS healed_steps,
+                      -- How much of this run it already knew how to do. The
+                      -- recorder writes why it took each action, and a
+                      -- replayed one says so, so the share is readable
+                      -- without storing a second number for it.
+                      (SELECT COUNT(*) FROM steps s
+                        WHERE s.run_id = r.id
+                          AND s.reason LIKE '%replayed%') AS replayed_actions
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id
                WHERE r.suite_run_id = ?
@@ -2185,6 +2192,18 @@ def get_suite_run(suite_run_id: str) -> Optional[Dict[str, Any]]:
     result["blocked"] = sum(1 for r in result["runs"] if r.get("blocked"))
     result["failed"] = sum(1 for r in result["runs"]
                            if r["status"] == "failed" and not r.get("blocked"))
+
+    # What the set cost, and how much of it was already known. The product's
+    # argument is that a recorded scenario runs fast and cheap, and the
+    # numbers behind that were collected from the first day and shown
+    # nowhere — an argument nobody can see is an argument nobody is making.
+    result["input_tokens"] = sum(r.get("input_tokens") or 0 for r in result["runs"])
+    result["output_tokens"] = sum(r.get("output_tokens") or 0 for r in result["runs"])
+    result["llm_calls"] = sum(r.get("llm_calls") or 0 for r in result["runs"])
+    result["replayed_actions"] = sum(r.get("replayed_actions") or 0
+                                     for r in result["runs"])
+    result["total_actions"] = sum(r.get("step_count") or 0 for r in result["runs"])
+    result["healed_steps"] = sum(r.get("healed_steps") or 0 for r in result["runs"])
     started, finished = result.get("started_at"), result.get("finished_at")
     result["duration_ms"] = int((finished - started) * 1000) if started and finished else None
     return result

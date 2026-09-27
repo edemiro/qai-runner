@@ -7,6 +7,7 @@ import {
 import { EmptyState } from '../components/EmptyState';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
 import { OS_TABS, matchesOs } from '../lib/platforms';
+import { formatTokens } from '../lib/format';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
 
@@ -475,6 +476,29 @@ export function ExecutionsPage({
                       )}
                       {' '}of {execution.runs.length}
                     </span>
+                    {/* What it cost, and how much of it the set already knew
+                        how to do. Both were collected from the first day and
+                        shown nowhere — and being fast and cheap is the whole
+                        claim, so the numbers behind it belong on the run that
+                        makes it rather than in the database. */}
+                    {execution.llm_calls > 0 && (
+                      <span className="execution-cost">
+                        {formatTokens((execution.input_tokens || 0)
+                          + (execution.output_tokens || 0))} tokens
+                        {' · '}{execution.llm_calls} model call
+                        {execution.llm_calls === 1 ? '' : 's'}
+                        {execution.total_actions > 0 && (
+                          <> · <strong>
+                            {Math.round((execution.replayed_actions || 0)
+                              / execution.total_actions * 100)}%
+                          </strong> of {execution.total_actions} actions replayed</>
+                        )}
+                        {execution.healed_steps > 0 && (
+                          <> · <strong>{execution.healed_steps}</strong> step
+                            {execution.healed_steps === 1 ? '' : 's'} healed</>
+                        )}
+                      </span>
+                    )}
                   </div>
                   )}
                 </div>
@@ -599,6 +623,13 @@ export function ExecutionsPage({
                             news this product exists to deliver. */}
                         {run.healed_steps ? ` · ${run.healed_steps} healed` : ''}
                         {' · '}{duration(run.duration_ms)}
+                        {/* The scenario's own price. On the row rather than
+                            behind a click, because the scenario is the thing
+                            a tester decides to keep or rewrite. */}
+                        {run.llm_calls
+                          ? ` · ${formatTokens((run.input_tokens || 0)
+                            + (run.output_tokens || 0))} tokens`
+                          : ''}
                         {run.dataset_row ? ` · ${JSON.stringify(run.dataset_row)}` : ''}
                       </span>
                       {run.error && <span className="scenario-error">{run.error}</span>}

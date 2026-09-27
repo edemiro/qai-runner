@@ -544,3 +544,29 @@ def test_closing_a_run_twice_does_not_lose_the_refusal(db):
     db.finish_run(run_id, "failed")
 
     assert db.get_run(run_id)["blocked"] == 1
+
+
+def test_an_execution_reports_what_it_cost_and_what_it_already_knew(db):
+    """Being fast and cheap is the product's whole claim, and the numbers
+    behind it were collected from the first day and shown nowhere. An
+    argument nobody can see is an argument nobody is making."""
+    suite_id = db.create_suite("Set")
+    execution = db.create_suite_run(suite_id, "Run")
+    for tokens, calls in ((20000, 5), (12000, 3)):
+        run_id = db.create_run("g")
+        db.link_run_to_suite(run_id, execution, None, title="s")
+        db.record_run_usage(run_id, {
+            "input_tokens": tokens, "output_tokens": tokens // 10,
+            "calls": calls,
+        })
+        db.add_step(run_id, action="click", status="passed",
+                    reason="replayed from the last green run")
+        db.add_step(run_id, action="click", status="passed", reason="worked out")
+        db.finish_run(run_id, "passed")
+
+    summary = db.get_suite_run(execution)
+    assert summary["input_tokens"] == 32000
+    assert summary["output_tokens"] == 3200
+    assert summary["llm_calls"] == 8
+    assert summary["replayed_actions"] == 2
+    assert summary["total_actions"] == 4, "half of it was already known"

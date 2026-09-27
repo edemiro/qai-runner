@@ -7184,3 +7184,18 @@ textarea,
   font-weight: 600;
   color: var(--warning-ink, var(--warning));
 }
+
+/* What the set cost and how much of it was already known. A quiet line under
+   the score: it is the product's argument, but it is not the verdict. */
+.execution-cost {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.execution-cost strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
