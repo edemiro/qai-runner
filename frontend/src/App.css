@@ -178,7 +178,7 @@
 
 .browser-size {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
@@ -224,12 +224,16 @@
   z-index: 2;
 }
 
+/* Fixed white ink, not --text-tertiary. Both of these sit on a screen that is
+   #05060a / #0a0d12 in either theme — a device screen and a browser viewport
+   are black whatever the app around them is doing — so on the light theme the
+   dark tertiary grey fell to 3.8:1 against it. */
 .browser-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 9px;
-  color: var(--text-tertiary);
+  color: rgba(255, 255, 255, 0.6);
   font-size: 12.5px;
   padding: 40px;
 }
@@ -414,11 +418,11 @@
 }
 
 .status-line.ok {
-  color: var(--success);
+  color: var(--success-ink);
 }
 
 .status-line.warn {
-  color: var(--warning);
+  color: var(--warning-ink);
 }
 
 .status-dot {
@@ -559,6 +563,11 @@
    Buttons & controls
    ========================================================================== */
 
+/* The neutral button is the default, not an opt-in. Nine buttons in the app
+   are written `className="btn btn-sm"` with no variant — Select all and Add
+   scenarios on Test Sets among them — and with a transparent border and no
+   fill they rendered as bare words beside a filled Run suite. A control that
+   does not look like a control is the single loudest "internal tool" tell. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -568,8 +577,16 @@
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 550;
-  border: 1px solid transparent;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
 .btn-sm {
@@ -587,13 +604,20 @@
   height: 34px;
 }
 
+/* Explicit transparent border, now that the default `.btn` draws one: a grey
+   hairline around a filled accent button reads as a disabled outline. */
 .btn-primary {
-  background: var(--accent);
+  background: var(--accent-strong);
+  border-color: transparent;
   color: #fff;
 }
 
+/* Darkens on hover rather than reaching for --accent-hover, which on the dark
+   theme is a lighter blue: the label here is white, so a lighter fill is the
+   wrong direction. --accent-hover stays what it is for text and links. */
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent-strong) 86%, #000);
+  border-color: transparent;
 }
 
 .btn-ghost {
@@ -611,11 +635,12 @@
 .btn-danger {
   background: var(--danger-soft);
   border-color: transparent;
-  color: var(--danger);
+  color: var(--danger-ink);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: var(--danger);
+  background: var(--danger-strong);
+  border-color: transparent;
   color: #fff;
 }
 
@@ -625,23 +650,34 @@
   flex-wrap: wrap;
 }
 
+/* 24px box around a 13px glyph. Measured at 18x18 on the Test Data row and in
+   Settings — under any reasonable pointer target, and with no hover surface
+   there was nothing to tell you it was a button until you hit it. */
 .icon-btn-tiny {
   display: grid;
   place-items: center;
+  width: 24px;
+  height: 24px;
   color: var(--text-tertiary);
-  padding: 2px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: var(--radius-sm);
 }
 
 .icon-btn-tiny:hover {
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
+/* A recessed track with the chosen segment lifted out of it. The track used to
+   be --bg-surface and the chosen segment --bg-overlay, which on the light theme
+   are both #ffffff: measured on Web, the selected "Desktop" had the identical
+   background to the track around it, so which mode was on came down to a text
+   weight and a 1px shadow. Sunken under raised separates in both themes. */
 .segmented {
   display: inline-flex;
   padding: 3px;
   gap: 2px;
-  background: var(--bg-surface);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -654,8 +690,10 @@
   color: var(--text-secondary);
 }
 
+.segmented button:hover:not(.active):not(:disabled) { color: var(--text-primary); }
+
 .segmented button.active {
-  background: var(--bg-overlay);
+  background: var(--bg-raised);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
@@ -686,17 +724,17 @@
 
 .banner.warning {
   background: var(--warning-soft);
-  color: var(--warning);
+  color: var(--warning-ink);
 }
 
 .banner.danger {
   background: var(--danger-soft);
-  color: var(--danger);
+  color: var(--danger-ink);
 }
 
 .banner.success {
   background: var(--success-soft);
-  color: var(--success);
+  color: var(--success-ink);
 }
 
 .empty-state {
@@ -814,7 +852,7 @@
 }
 
 .device-card.connected {
-  border-color: var(--success);
+  border-color: var(--success-ink);
   box-shadow: 0 0 0 1px var(--success-soft);
 }
 
@@ -841,7 +879,7 @@
 }
 
 .platform-badge {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 650;
   padding: 2.5px 8px;
   border-radius: 999px;
@@ -853,19 +891,19 @@
 }
 
 .platform-badge.android {
-  color: var(--success);
+  color: var(--success-ink);
   background: var(--success-soft);
   border-color: transparent;
 }
 
 .platform-badge.ios {
-  color: var(--info);
+  color: var(--info-ink);
   background: var(--info-soft);
   border-color: transparent;
 }
 
 .platform-badge.sim {
-  color: var(--purple);
+  color: var(--purple-ink);
   background: var(--purple-soft);
   border-color: transparent;
 }
@@ -1042,7 +1080,7 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .goal-tag {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -1156,7 +1194,7 @@ optgroup { color: var(--text-tertiary); }
   padding: 2px 6px;
   border-radius: 999px;
   background: var(--purple-soft);
-  color: var(--purple);
+  color: var(--purple-ink);
 }
 
 .step-caret {
@@ -1232,12 +1270,12 @@ optgroup { color: var(--text-tertiary); }
 
 .verdict.passed {
   background: var(--success-soft);
-  color: var(--success);
+  color: var(--success-ink);
 }
 
 .verdict.failed {
   background: var(--danger-soft);
-  color: var(--danger);
+  color: var(--danger-ink);
 }
 
 .verdict.cancelled {
@@ -1477,7 +1515,7 @@ optgroup { color: var(--text-tertiary); }
 
 .role-chip {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 500;
   padding: 1.5px 7px;
   border-radius: 4px;
@@ -1640,7 +1678,7 @@ optgroup { color: var(--text-tertiary); }
   gap: 5px;
   padding: 3px 9px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-family: var(--font-mono);
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -1648,19 +1686,19 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .stream-pill.live {
-  color: var(--success);
+  color: var(--success-ink);
   border-color: transparent;
   background: var(--success-soft);
 }
 
 .stream-pill.polling {
-  color: var(--warning);
+  color: var(--warning-ink);
   border-color: transparent;
   background: var(--warning-soft);
 }
 
 .stream-pill.lost {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
   border-color: transparent;
 }
@@ -1683,7 +1721,7 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .stream-pill.error {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
   border-color: transparent;
 }
@@ -1775,14 +1813,14 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .badge.web {
-  color: var(--info);
+  color: var(--info-ink);
   background: var(--info-soft);
   border-color: transparent;
 }
 
 .banner.info {
   background: var(--info-soft);
-  color: var(--info);
+  color: var(--info-ink);
 }
 
 .web-launcher {
@@ -1848,7 +1886,7 @@ optgroup { color: var(--text-tertiary); }
   flex-direction: column;
   align-items: center;
   gap: 9px;
-  color: var(--text-tertiary);
+  color: rgba(255, 255, 255, 0.6);
   text-align: center;
   padding: 20px;
 }
@@ -2037,7 +2075,7 @@ optgroup { color: var(--text-tertiary); }
   margin-left: 7px;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -2112,7 +2150,7 @@ optgroup { color: var(--text-tertiary); }
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
 }
 
@@ -2219,7 +2257,7 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .filter-count {
-  font-size: 10.5px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
@@ -2309,12 +2347,12 @@ optgroup { color: var(--text-tertiary); }
 
 .run-status.passed {
   background: var(--success-soft);
-  color: var(--success);
+  color: var(--success-ink);
 }
 
 .run-status.failed {
   background: var(--danger-soft);
-  color: var(--danger);
+  color: var(--danger-ink);
 }
 
 .run-status.running {
@@ -2772,14 +2810,14 @@ optgroup { color: var(--text-tertiary); }
 
 .badge.ok {
   background: var(--success-soft);
-  color: var(--success);
-  border: 1px solid var(--success);
+  color: var(--success-ink);
+  border: 1px solid var(--success-border);
 }
 
 .badge.bad {
   background: var(--danger-soft);
-  color: var(--danger);
-  border: 1px solid var(--danger);
+  color: var(--danger-ink);
+  border: 1px solid var(--danger-border);
 }
 
 .btn-link {
@@ -2794,7 +2832,7 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .btn-icon.danger:hover {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
 }
 
@@ -2839,17 +2877,24 @@ optgroup { color: var(--text-tertiary); }
   gap: 5px;
 }
 
+/* The verdict of a case's last run, in a table of cases — the same metric as
+   the badges it sits beside in every other list, rather than a fourth size. */
 .data-table .badge {
-  padding: 2px 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .banner.warn {
   background: var(--warning-soft);
-  border-color: var(--warning);
-  color: var(--warning);
+  border-color: var(--warning-ink);
+  color: var(--warning-ink);
 }
 
 .field-error {
@@ -3003,7 +3048,7 @@ optgroup { color: var(--text-tertiary); }
   align-items: center;
   gap: 6px;
   padding: 4px 10px 2px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3018,7 +3063,7 @@ optgroup { color: var(--text-tertiary); }
 
 /* On the selected set's header, the module it belongs to, above the name. */
 .suite-module-label {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3134,13 +3179,28 @@ optgroup { color: var(--text-tertiary); }
 }
 
 /* Head: the pickers and number, the title, then the chips and the actions.
-   The title takes every pixel the other three do not. */
+   The title takes every pixel the other three do not.
+
+   Two rows, not one. Measured on a 636px card the four chips took 302px and
+   the buttons 106px, leaving the title 113px — a standard-format sentence in a
+   column ten characters wide, six lines tall, on every scenario in the set.
+   That is the "too crowded" everyone means. Dropping the chips to a second row
+   at the gutter the goal and precondition already use gives the title ~500px
+   and reads down the card as title, facts, sentence. */
 .case-card-head {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'pick idx title actions'
+    '.    .   meta  meta';
   align-items: start;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 7px;
 }
+
+.case-card-head > .case-name { grid-area: title; }
+.case-card-head > .case-meta { grid-area: meta; }
+.case-card-head > .case-actions { grid-area: actions; }
 
 .case-card-head > input[type='checkbox'] {
   margin-top: 3px;
@@ -3291,12 +3351,12 @@ optgroup { color: var(--text-tertiary); }
 
 .suite-summary.passed {
   background: var(--success-soft);
-  border-color: var(--success);
+  border-color: var(--success-ink);
 }
 
 .suite-summary.failed {
   background: var(--danger-soft);
-  border-color: var(--danger);
+  border-color: var(--danger-ink);
 }
 
 .history-list {
@@ -3369,8 +3429,12 @@ optgroup { color: var(--text-tertiary); }
 
 /* A grid already spaces its children with `gap`; the sibling margin above is
    for cards stacked down a page, and inside a grid it silently pushed the
-   second column 18px lower than the first. */
-.settings-grid .card + .card {
+   second column 18px lower than the first.
+
+   The same bug was live on Insights: measured at 1280, "Pass / fail per day"
+   sat at y=334 and "Pass rate by priority" beside it at y=352. */
+.settings-grid .card + .card,
+.insights-grid .card + .card {
   margin-top: 0;
 }
 
@@ -3428,7 +3492,7 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .trend-label {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -3481,7 +3545,7 @@ optgroup { color: var(--text-tertiary); }
 
 .flake-pip.high {
   background: var(--warning-soft);
-  color: var(--warning);
+  color: var(--warning-ink);
   font-weight: 600;
 }
 
@@ -3492,7 +3556,7 @@ optgroup { color: var(--text-tertiary); }
   padding: 0 5px;
   border-radius: 999px;
   background: var(--bg-active);
-  font-size: 10.5px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3530,7 +3594,7 @@ optgroup { color: var(--text-tertiary); }
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   color: var(--danger);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -3598,8 +3662,8 @@ optgroup { color: var(--text-tertiary); }
   align-items: center;
   gap: 3px;
   background: var(--warning-soft);
-  color: var(--warning);
-  border-color: var(--warning);
+  color: var(--warning-ink);
+  border-color: var(--warning-ink);
 }
 
 /* --- web tools drawer ----------------------------------------------------- */
@@ -3680,12 +3744,12 @@ optgroup { color: var(--text-tertiary); }
 
 .visual-result.ok {
   background: var(--success-soft);
-  border-color: var(--success);
+  border-color: var(--success-ink);
 }
 
 .visual-result.bad {
   background: var(--danger-soft);
-  border-color: var(--danger);
+  border-color: var(--danger-ink);
 }
 
 .visual-diff {
@@ -3872,12 +3936,12 @@ optgroup { color: var(--text-tertiary); }
 
 .scan-summary.ok {
   background: var(--success-soft);
-  border-color: var(--success);
+  border-color: var(--success-ink);
 }
 
 .scan-summary.bad {
   background: var(--danger-soft);
-  border-color: var(--danger);
+  border-color: var(--danger-ink);
 }
 
 .scan-summary span {
@@ -3905,20 +3969,20 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .tally-chip.ok {
-  border-color: var(--success);
-  color: var(--success);
+  border-color: var(--success-ink);
+  color: var(--success-ink);
   background: var(--success-soft);
 }
 
 .tally-chip.bad {
-  border-color: var(--danger);
-  color: var(--danger);
+  border-color: var(--danger-ink);
+  color: var(--danger-ink);
   background: var(--danger-soft);
 }
 
 .tally-chip.warn {
-  border-color: var(--warning);
-  color: var(--warning);
+  border-color: var(--warning-ink);
+  color: var(--warning-ink);
   background: var(--warning-soft);
 }
 
@@ -3958,12 +4022,12 @@ optgroup { color: var(--text-tertiary); }
 }
 
 .scan-row.bad {
-  border-color: var(--danger);
+  border-color: var(--danger-ink);
   background: var(--danger-soft);
 }
 
 .scan-row.warn {
-  border-color: var(--warning);
+  border-color: var(--warning-ink);
   background: var(--warning-soft);
 }
 
@@ -3981,7 +4045,7 @@ optgroup { color: var(--text-tertiary); }
   background: var(--bg-base);
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -4078,7 +4142,7 @@ a.scan-row-url {
   border-radius: 999px;
   background: var(--bg-active);
   color: var(--text-tertiary);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 550;
 }
 
@@ -4188,8 +4252,8 @@ a.scan-row-url {
   margin-top: 12px;
   padding: 12px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(79, 127, 208, 0.35);
-  background: rgba(79, 127, 208, 0.08);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .questions-lead {
@@ -4231,7 +4295,7 @@ a.scan-row-url {
   opacity: 0.5;
 }
 
-.generated-list li.picked { opacity: 1; border-color: rgba(79, 127, 208, 0.5); }
+.generated-list li.picked { opacity: 1; border-color: var(--accent-border); }
 
 .pick-box {
   flex: none;
@@ -4380,12 +4444,15 @@ a.scan-row-url {
 .generator-execname { min-width: 190px; }
 
 .btn-accent {
-  background: #2f9e6f;
-  border: 1px solid #2f9e6f;
+  background: var(--success-strong);
+  border: 1px solid var(--success-strong);
   color: #fff;
 }
 
-.btn-accent:hover:not(:disabled) { background: #34b07c; border-color: #34b07c; }
+.btn-accent:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--success-strong) 88%, #fff);
+  border-color: color-mix(in srgb, var(--success-strong) 88%, #fff);
+}
 .btn-accent:disabled { opacity: 0.5; }
 
 .case-idx {
@@ -4396,24 +4463,57 @@ a.scan-row-url {
   font-variant-numeric: tabular-nums;
 }
 
-.layer-tag {
+/* ==========================================================================
+   Status badges — one metric, so a row of them reads as a row
+   --------------------------------------------------------------------------
+   A scenario row carries four of these side by side and each had grown its own
+   spec: measured on Test Sets they came out at 10px/10.5px/11px, weights 400
+   through 650, four different paddings and three heights (21, 22, 23px), with
+   `.priority-tag` a 4px rectangle beside `.type-tag`'s pill. Four badges that
+   nearly match is what makes a toolbar look assembled by hand. One metric here;
+   each badge keeps only its colours.
+   ========================================================================== */
+
+.layer-tag,
+.priority-tag,
+.type-tag,
+.recorded-tag,
+.verdict,
+.score,
+.bug-status,
+.bug-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  font-size: 10.5px;
-  color: var(--text-tertiary);
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   white-space: nowrap;
+  /* "1/1" under "15/21" only lines up if the digits are one width. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Size comes from the shared metric; this says only what a layer is: a
+   classification, not a verdict, so it stays in grey rather than taking a hue.
+   --border-strong, not --border: beside four filled chips, a hairline at the
+   card's own border value disappeared and the layer read as loose text. */
+.layer-tag {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
 }
 
 /* Priority is the first thing read when triaging a failed run, so the four
    bands are colour-separated rather than left as plain text. */
-.priority-tag,
 .priority-select {
   flex: none;
   padding: 2px 7px;
   border-radius: 4px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
   border: 1px solid transparent;
@@ -4431,10 +4531,10 @@ a.scan-row-url {
   border-color: var(--border);
 }
 
-.p-critical { background: rgba(214, 69, 69, 0.16); color: #e06a6a; border-color: rgba(214, 69, 69, 0.35); }
-.p-high     { background: rgba(214, 138, 60, 0.16); color: #d9954a; border-color: rgba(214, 138, 60, 0.35); }
-.p-medium   { background: rgba(79, 127, 208, 0.16); color: #6f9ee0; border-color: rgba(79, 127, 208, 0.35); }
-.p-low      { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; border-color: rgba(130, 130, 140, 0.32); }
+.p-critical { background: var(--danger-soft);  color: var(--danger-ink);  border-color: var(--danger-border); }
+.p-high     { background: var(--warning-soft); color: var(--warning-ink); border-color: var(--warning-border); }
+.p-medium   { background: var(--accent-soft);  color: var(--accent);      border-color: var(--accent-border); }
+.p-low      { background: var(--neutral-soft); color: var(--neutral-ink); border-color: var(--neutral-border); }
 
 /* --- test executions ------------------------------------------------------ */
 
@@ -4449,13 +4549,19 @@ a.scan-row-url {
 
 /* Each execution is its own card, not a flush row: the list is what a tester
    scans after a run, and "which of these two is the one I just started" was
-   being answered by a timestamp alone. */
+   being answered by a timestamp alone.
+
+   Two rows rather than four things on one. In a 250px column the name shared
+   the line with a verdict, a score and a chevron and so got about 90px: it
+   wrapped to two and three lines, and the cards came out 61, 79 and 97px tall
+   down the same list. The name gets the row to itself; the time and the two
+   badges — all short, all fixed — take the line under it. */
 .execution-item {
-  display: flex;
-  /* Top, not centre: the Test Set name wraps and the chevron stays level with
-     its first line. */
-  align-items: flex-start;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
   width: 100%;
   padding: 11px 12px;
   border: 1px solid var(--border-subtle);
@@ -4466,6 +4572,18 @@ a.scan-row-url {
   text-align: left;
 }
 
+/* Dissolved into the grid above, so the name can span the full width while the
+   timestamp stays down on the badge line where it belongs. */
+.execution-item > .execution-item-main {
+  display: contents;
+}
+
+.execution-item > .execution-item-main > .execution-name { grid-column: 1 / -1; }
+.execution-item > .execution-item-main > .execution-when { grid-column: 1; }
+.execution-item > .verdict { grid-column: 2; }
+.execution-item > .score { grid-column: 3; }
+.execution-item > svg { grid-column: 4; color: var(--text-tertiary); }
+
 .execution-item:hover { background: var(--bg-raised); border-color: var(--border); }
 .execution-item.active {
   background: var(--bg-raised);
@@ -4475,33 +4593,24 @@ a.scan-row-url {
 
 .execution-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .execution-name { font-size: 12.5px; font-weight: 600; line-height: 1.4; }
-.execution-when { font-size: 10.5px; color: var(--text-tertiary); }
+.execution-when { font-size: 11px; color: var(--text-tertiary); }
 
-.score {
-  flex: none;
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.score.all-pass { background: rgba(70, 170, 110, 0.16); color: #5cbb86; }
-.score.has-fail { background: rgba(214, 69, 69, 0.16); color: #e06a6a; }
+.score.all-pass { background: var(--success-soft); color: var(--success-ink); }
+.score.has-fail { background: var(--danger-soft); color: var(--danger-ink); }
 
 .execution-error {
   margin: 0 0 10px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(214, 69, 69, 0.1);
-  color: #e06a6a;
+  background: var(--danger-soft);
+  color: var(--danger-ink);
   font-size: 12px;
 }
 
 /* Same banner, stated rather than alarmed — it matches the Stopped chip. */
 .execution-error.is-note {
-  background: rgba(205, 155, 70, 0.12);
-  color: #d2a259;
+  background: var(--warning-soft);
+  color: var(--warning-ink);
 }
 
 .scenario-results { list-style: none; margin: 4px 0 0; padding: 0; }
@@ -4526,26 +4635,17 @@ a.scan-row-url {
 }
 
 .scenario-meta { font-size: 11px; color: var(--text-tertiary); }
-.scenario-error { font-size: 11px; color: #e06a6a; }
+.scenario-error { font-size: 11px; color: var(--danger-ink); }
 
-.verdict {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
+/* Room between the glyph and the word; everything else is the badge metric. */
+.verdict { gap: 4px; }
 
-.verdict-pass    { background: rgba(70, 170, 110, 0.16); color: #5cbb86; }
-.verdict-fail    { background: rgba(214, 69, 69, 0.16); color: #e06a6a; }
-.verdict-running { background: rgba(79, 127, 208, 0.16); color: #6f9ee0; }
-.verdict-other   { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+.verdict-pass    { background: var(--success-soft); color: var(--success-ink); }
+.verdict-fail    { background: var(--danger-soft);  color: var(--danger-ink); }
+.verdict-running { background: var(--accent-soft);  color: var(--accent); }
+.verdict-other   { background: var(--neutral-soft); color: var(--neutral-ink); }
 /* Amber, not red: a run someone stopped is not a broken build. */
-.verdict-cancelled { background: rgba(205, 155, 70, 0.16); color: #d2a259; }
+.verdict-cancelled { background: var(--warning-soft); color: var(--warning-ink); }
 
 /* --- pass rate by priority ------------------------------------------------ */
 
@@ -4564,8 +4664,8 @@ a.scan-row-url {
   background: var(--bg-raised);
 }
 
-.priority-bar-pass { background: #46aa6e; }
-.priority-bar-fail { background: #d64545; }
+.priority-bar-pass { background: var(--success); }
+.priority-bar-fail { background: var(--danger); }
 
 .priority-count {
   flex: none;
@@ -4631,23 +4731,23 @@ a.scan-row-url {
   background: var(--bg-raised);
 }
 
-.execution-bar-pass { background: #46aa6e; }
-.execution-bar-fail { background: #d64545; }
+.execution-bar-pass { background: var(--success); }
+.execution-bar-fail { background: var(--danger); }
 
 .execution-score-text { flex: none; font-size: 12px; color: var(--text-tertiary); }
-.execution-score-text strong { color: #5cbb86; font-weight: 600; }
-.execution-score-text strong.fail { color: #e06a6a; }
+.execution-score-text strong { color: var(--success-ink); font-weight: 600; }
+.execution-score-text strong.fail { color: var(--danger-ink); }
 
-/* Chips get a bounded lane on the right and wrap within it, so a scenario with
-   several tags never shoves the action buttons onto a second line. */
+/* On their own row now, so they run left from the title's edge and wrap there
+   instead of being squeezed into a lane on the right. */
 .case-card .case-meta {
-  flex: none;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
-  margin-top: 2px;
+  margin-top: 0;
+  min-width: 0;
 }
 
 .scenario-result .scenario-title { overflow-wrap: anywhere; }
@@ -4683,9 +4783,9 @@ a.scan-row-url {
 .mode-chip:hover:not(:disabled) { color: var(--text-secondary); border-color: var(--text-tertiary); }
 
 .mode-chip.active {
-  background: rgba(79, 127, 208, 0.14);
-  border-color: rgba(79, 127, 208, 0.55);
-  color: #7ba7e8;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .mode-chip:disabled { opacity: 0.45; cursor: default; }
@@ -4714,6 +4814,10 @@ a.scan-row-url {
   gap: 8px;
   flex: 1 1 100%;
   min-width: 0;
+  /* Capped. Equal columns across the whole panel made "Model: auto" a 310px
+     control, so the row read as two half-width fields rather than as two small
+     settings under the box you type in. */
+  max-width: 420px;
 }
 
 /* Every control on this row is the same height as every other. It used to be
@@ -4901,9 +5005,12 @@ textarea,
 
 .nav-group { display: flex; flex-direction: column; gap: 2px; }
 
+/* 11px is the app's floor. Thirty rules had drifted to 10px and 10.5px —
+   timestamps, counts, chart labels, the nav headings — which is where a tool
+   starts to read as cramped rather than dense. */
 .nav-group-title {
   padding: 0 10px 5px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.09em;
   /* Not text-transform: in Turkish that turns "Geçmiş" into "GEÇMIŞ" — the
@@ -5005,6 +5112,10 @@ textarea,
   border-radius: 999px;
 }
 
+/* The status badges share one metric too. It is declared up with the first
+   badge colours rather than here, because the `border` shorthand has to land
+   before `.p-high` and friends set `border-color` or it resets them. */
+
 .filter-chip,
 .toggle-chip,
 .mode-chip {
@@ -5050,13 +5161,18 @@ textarea,
    These rows carry four small facts after the title (layer, priority, verdict,
    a way in). Laid out with flex they each took their content width, so the
    badges stepped in and out down the page. Fixed columns line them up.
+
+   The three badge widths are each the widest label that column can hold, at the
+   shared badge metric: "Component" 81, "Medium" 62, "Stopped" 80 (with its
+   glyph), measured rather than guessed. 84/78/68 was neither — too wide for
+   priority, one pixel short for the verdict.
    ========================================================================== */
 
 .scenario-result {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 84px 78px 68px 34px;
+  grid-template-columns: 34px minmax(0, 1fr) 82px 64px 82px 34px;
   align-items: center;
-  gap: var(--gap-3);
+  gap: var(--gap-2);
   padding: 11px 6px;
 }
 
@@ -5093,10 +5209,11 @@ textarea,
 .scenario-result:hover { background: var(--bg-hover); border-radius: var(--radius-sm); }
 .scenario-result:hover .scenario-details { opacity: 1; }
 
-/* The chips keep a fixed width so Critical/High/Medium and the layer line up
-   down the column instead of jittering with the length of each word. */
-.case-card .layer-tag { min-width: 78px; text-align: center; }
-.case-card .priority-tag { min-width: 66px; text-align: center; }
+/* Priority leads the chip row and keeps a fixed width, so the chip after it
+   starts at the same x on every card. The layer chip loses its 78px floor:
+   that was there to line up a column that no longer exists, and it was
+   rendering "E2E" in a box twice the width of the word. */
+.case-card .priority-tag { min-width: 62px; }
 
 /* ==========================================================================
    Picking scenarios for an execution
@@ -5231,22 +5348,13 @@ textarea,
 /* What the next run already knows how to do. Green when the whole scenario
    replays — that run asks the model nothing at all — and plain when only some
    of it does, because half a recording is a saving, not a state to celebrate. */
-.recorded-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
+/* Room between the glyph and the word; everything else is the badge metric. */
+.recorded-tag { gap: 4px; }
 
 .recorded-tag.full {
   background: var(--success-soft);
-  color: var(--success);
-  border-color: rgba(63, 184, 127, 0.32);
+  color: var(--success-ink);
+  border-color: var(--success-border);
 }
 
 .recorded-tag.partial {
@@ -5406,7 +5514,7 @@ textarea,
 
 .platform-tabs.sub .platform-tab-count {
   min-width: 18px;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 16px;
 }
 
@@ -5425,22 +5533,22 @@ textarea,
   gap: 4px;
   padding: 2px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
   border: 1px solid transparent;
 }
 
 .platform-tag.is-web {
-  background: rgba(86, 182, 214, 0.14);
-  color: var(--info);
-  border-color: rgba(86, 182, 214, 0.32);
+  background: var(--info-soft);
+  color: var(--info-ink);
+  border-color: var(--info-border);
 }
 
 .platform-tag.is-mobile {
-  background: rgba(168, 119, 232, 0.14);
-  color: var(--purple);
-  border-color: rgba(168, 119, 232, 0.32);
+  background: var(--purple-soft);
+  color: var(--purple-ink);
+  border-color: var(--purple-border);
 }
 
 /* Centred in whatever it is given rather than pinned to the top-left as a
@@ -5457,6 +5565,26 @@ textarea,
 }
 
 .empty-panel.compact { padding: 28px 14px; gap: 7px; }
+
+/* Waiting is a state too, and it was the one screen state with no treatment:
+   Insights, Test Executions and Bug Report each opened on the word "Loading…"
+   in tertiary grey at the top-left of an otherwise blank page, which reads as
+   a page that failed rather than one that is working. Same geometry as the
+   empty panel it is standing in for, so the page does not jump when the data
+   lands. */
+.loading-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-2);
+  padding: 46px 24px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.loading-panel.compact { padding: 28px 14px; font-size: 12px; }
+
+.loading-panel > svg { flex: none; color: var(--accent); }
 
 .empty-panel-mark {
   display: inline-flex;
@@ -5673,7 +5801,7 @@ textarea,
   border-radius: 999px;
   border: 1px dashed var(--border-strong);
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.02em;
   vertical-align: 1px;
 }
@@ -5712,7 +5840,7 @@ textarea,
 
 .recorded-verb {
   flex: none;
-  color: var(--success);
+  color: var(--success-ink);
   font-weight: 600;
   font-family: var(--font-mono, monospace);
 }
@@ -5722,19 +5850,23 @@ textarea,
   overflow-wrap: anywhere;
   color: var(--text-tertiary);
   font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .recorded-value { color: var(--text-secondary); }
 
 /* The steps are a zone of their own inside the card: inset, on its own ground,
-   with the count as its heading. Open by default — this is the scenario. */
+   with the count as its heading. Open by default — this is the scenario.
+
+   On the sunken token rather than a translucent black. Five inset panels used
+   rgba(0,0,0,.14–.16), which is a dark-theme value: over a white card it comes
+   out #d9d9d9 and the quietest region on the page becomes the heaviest. */
 .case-steps-block {
   margin-left: var(--case-gutter);
   padding: 8px 11px 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.16);
+  background: var(--bg-base);
 }
 
 .case-steps-toggle {
@@ -5742,7 +5874,7 @@ textarea,
   align-items: center;
   gap: 5px;
   padding: 0;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -6139,7 +6271,7 @@ textarea,
 }
 
 .usage-breakdown span {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -6147,7 +6279,7 @@ textarea,
 }
 
 .usage-breakdown strong { font-size: 15px; font-weight: 650; color: var(--text-primary); }
-.usage-breakdown strong.ok { color: #5cbb86; }
+.usage-breakdown strong.ok { color: var(--success-ink); }
 
 /* Spend against the monthly limit, read from the gateway. Sits above the token
    breakdown: it is the number with a ceiling, so it reads first. */
@@ -6166,7 +6298,7 @@ textarea,
 .budget-row li { display: flex; flex-direction: column; gap: 1px; }
 
 .budget-row span {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -6208,7 +6340,7 @@ textarea,
   gap: 5px;
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -6293,7 +6425,7 @@ textarea,
   padding: 11px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.14);
+  background: var(--bg-base);
 }
 
 .run-target > label {
@@ -6383,7 +6515,7 @@ textarea,
 }
 
 /* Near the ceiling it stops being information and starts being a warning. */
-.spend-bar-fill.hot { background: #d2a259; }
+.spend-bar-fill.hot { background: var(--warning); }
 
 /* A window with two busy days should not draw two hairlines across a wide
    card: columns keep a readable width and the chart starts from the left. */
@@ -6428,8 +6560,9 @@ textarea,
 }
 
 /* What kind of check a scenario is. Colour-coded because the mix is the point:
-   a set that is all green is a set that only ever tried the happy path. */
-.type-tag,
+   a set that is all green is a set that only ever tried the happy path.
+   The tag takes the shared badge metric; the select keeps its own, because it
+   is a control and has to stay the size a control is. */
 .type-select {
   display: inline-flex;
   align-items: center;
@@ -6440,9 +6573,9 @@ textarea,
   border: 1px solid transparent;
 }
 
-.type-tag.t-positive, .type-select.t-positive { background: rgba(70, 170, 110, 0.15); color: #6cc08d; border-color: rgba(70, 170, 110, 0.3); }
-.type-tag.t-negative, .type-select.t-negative { background: rgba(214, 100, 69, 0.15); color: #e0895f; border-color: rgba(214, 100, 69, 0.3); }
-.type-tag.t-boundary, .type-select.t-boundary { background: rgba(120, 130, 220, 0.15); color: #8f9ae4; border-color: rgba(120, 130, 220, 0.3); }
+.type-tag.t-positive, .type-select.t-positive { background: var(--success-soft); color: var(--success-ink); border-color: var(--success-border); }
+.type-tag.t-negative, .type-select.t-negative { background: var(--warning-soft); color: var(--warning-ink); border-color: var(--warning-border); }
+.type-tag.t-boundary, .type-select.t-boundary { background: var(--purple-soft); color: var(--purple-ink); border-color: var(--purple-border); }
 
 .type-select { cursor: pointer; min-width: 92px; }
 .type-select:focus { outline: none; border-color: var(--accent); }
@@ -6495,33 +6628,26 @@ textarea,
 
 .bug-item-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 
-/* Where it stands. Open is the one that needs someone. */
+/* Where it stands. Open is the one that needs someone. Shouted, so that in a
+   list where every other badge is sentence case this one is found first. */
 .bug-status {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.bug-status.s-open      { background: rgba(214, 69, 69, 0.16); color: #e06a6a; }
-.bug-status.s-triaged   { background: rgba(205, 155, 70, 0.16); color: #d2a259; }
-.bug-status.s-fixed     { background: rgba(70, 170, 110, 0.16); color: #6cc08d; }
-.bug-status.s-closed    { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+.bug-status.s-open      { background: var(--danger-soft);  color: var(--danger-ink); }
+.bug-status.s-triaged   { background: var(--warning-soft); color: var(--warning-ink); }
+.bug-status.s-fixed     { background: var(--success-soft); color: var(--success-ink); }
+.bug-status.s-closed    { background: var(--neutral-soft); color: var(--neutral-ink); }
 .bug-status\.s-not-a-bug,
-.bug-status.s-not-a-bug { background: rgba(130, 130, 140, 0.16); color: #9a9aa4; }
+.bug-status.s-not-a-bug { background: var(--neutral-soft); color: var(--neutral-ink); }
 
 /* The cause, as a code that groups. Dimmed when it describes the run rather
    than the product — a reader triaging a list needs to know which half of it
    they are looking at. */
 .bug-code {
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
+  border-color: var(--border-subtle);
   background: var(--bg-base);
-  font-size: 10.5px;
-  font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-secondary);
 }
@@ -6546,7 +6672,7 @@ textarea,
   padding: 13px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.16);
+  background: var(--bg-base);
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
   line-height: 1.6;
@@ -6561,7 +6687,7 @@ textarea,
 .bug-draft label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-tertiary); }
 .bug-draft textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.6; }
 .bug-draft-meta { display: flex; align-items: center; gap: 8px; }
-.bug-warn { color: #d2a259; }
+.bug-warn { color: var(--warning-ink); }
 
 /* What has to be true before step 1. Above the goal, because that is the order
    it matters in — a scenario that assumes its setup fails on the setup, and
@@ -6582,7 +6708,7 @@ textarea,
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-base);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -6593,8 +6719,8 @@ textarea,
    saying so — a set whose count quietly dropped is worse than one that
    explains itself. */
 .case-card.awaiting {
-  border-color: rgba(205, 155, 70, 0.4);
-  background: rgba(205, 155, 70, 0.04);
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
   opacity: 1;
 }
 
@@ -6602,8 +6728,8 @@ textarea,
   margin-left: var(--case-gutter);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(205, 155, 70, 0.3);
-  background: rgba(205, 155, 70, 0.07);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-soft);
 }
 
 .case-awaiting-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
@@ -6611,9 +6737,9 @@ textarea,
 .awaiting-chip {
   padding: 2px 9px;
   border-radius: 999px;
-  background: rgba(205, 155, 70, 0.18);
-  color: #d2a259;
-  font-size: 10.5px;
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -6663,7 +6789,7 @@ textarea,
   margin-bottom: 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.14);
+  background: var(--bg-base);
 }
 
 .run-bar .run-target {
@@ -6739,8 +6865,8 @@ textarea,
 
 .card-toggle .pill {
   margin-left: auto;
-  font-size: 10px;
-  color: var(--text-tertiary);
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 /* Nested one level in: the hand-written case form inside the writing section,
@@ -6770,7 +6896,11 @@ textarea,
 
 .suite-new .suite-create { margin-top: 10px; }
 
-.run-target-env { flex: 1 1 100%; }
+/* Capped. At 1280 the basis of 100% made a four-character environment name
+   ("NUAT") the widest control on the page — 427px of select next to a 96px Run
+   suite button, which reads as the environment being the decision and the run
+   being the afterthought. */
+.run-target-env { flex: 1 1 100%; max-width: 280px; }
 
 /* ==========================================================================
    Test Executions — finding one, and reading it without leaving
@@ -6882,9 +7012,14 @@ textarea,
 /* Room for the disclosure, and a place for what it opens: the steps go across
    the whole row rather than in the column the arrow sits in. The last column
    holds both trailing buttons, so a failed scenario — the only kind with a Bug
-   button — does not have one child more than there are columns. */
+   button — does not have one child more than there are columns.
+
+   The three badge columns were 84/78/68 with a 12px gap between each: 266px of
+   a 636px row spent on three words, which left the title 236px and four lines
+   tall. Measured widths and an 8px gap put 20px of that back into the title. */
 .scenario-result {
-  grid-template-columns: 22px 34px minmax(0, 1fr) 84px 78px 68px auto;
+  grid-template-columns: 24px 34px minmax(0, 1fr) 82px 64px 82px auto;
+  column-gap: var(--gap-2);
 }
 
 .scenario-actions {
@@ -6900,8 +7035,8 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 0;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -6917,7 +7052,7 @@ textarea,
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(0, 0, 0, 0.14);
+  background: var(--bg-base);
 }
 
 .scenario-step-list {
@@ -6985,7 +7120,7 @@ textarea,
 .scenario-step.on-the-way .verdict { opacity: 0.6; }
 
 .scenario-step-aside {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
   font-style: italic;
 }

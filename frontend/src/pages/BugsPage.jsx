@@ -226,7 +226,10 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
       )}
 
       {loading ? (
-        <p className="muted">Loading…</p>
+        <p className="loading-panel">
+          <Loader2 size={16} className="spin" aria-hidden="true" />
+          Loading…
+        </p>
       ) : bugs.length === 0 ? (
         <div className="empty-state card">
           <Bug size={30} />

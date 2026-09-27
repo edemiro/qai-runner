@@ -80,14 +80,14 @@
 .web-header-actions .web-session-close:hover:not(:disabled) {
   background: var(--danger-soft);
   border-color: var(--danger-soft);
-  color: var(--danger);
+  color: var(--danger-ink);
 }
 
 /* A watched run keeps showing its last frame after the stream dies, so the
    pill has to stop saying Live; there is no banner over a watched frame to say
    it instead. */
 .watch-pill.lost {
-  color: var(--danger);
+  color: var(--danger-ink);
   background: var(--danger-soft);
   border-color: var(--danger-soft);
 }

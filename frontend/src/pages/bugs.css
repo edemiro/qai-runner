@@ -15,10 +15,14 @@
    "is my bug in here" is answered on the way in rather than by scrolling. They
    are one row and not two because they are one question asked twice over: the
    text you remember, and the state you care about. */
+/* Grouped left, not spread. `space-between` on a row that spans both columns
+   parked the status chips at x=722–1250, directly over the detail pane, while
+   the list they filter ends at x=698 — so the chips read as belonging to the
+   bug being read rather than to the list being narrowed. */
 .bug-tools {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
 }

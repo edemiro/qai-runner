@@ -77,7 +77,7 @@
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
-  color: var(--warning);
+  color: var(--warning-ink);
   font-size: 13px;
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Coins, Search, ShieldAlert, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, Coins, Loader2, Search, ShieldAlert, TrendingUp } from 'lucide-react';
 
 import { api } from '../api';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
@@ -195,7 +195,10 @@ export function InsightsPage() {
       </header>
 
       {loading ? (
-        <p className="muted">Loading…</p>
+        <p className="loading-panel">
+          <Loader2 size={16} className="spin" aria-hidden="true" />
+          Loading…
+        </p>
       ) : (
         <>
           {/* The volume rides with the rate rather than standing as a figure of

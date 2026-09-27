@@ -360,7 +360,10 @@ export function ExecutionsPage({
             </div>
           )}
           {loading ? (
-            <p className="muted small">Loading…</p>
+            <p className="loading-panel compact">
+              <Loader2 size={15} className="spin" aria-hidden="true" />
+              Loading…
+            </p>
           ) : executions.length === 0 ? (
             <EmptyState icon={ClipboardList} title="No executions yet" compact>
               Open a Test Set and run it — every run lands here with its verdicts

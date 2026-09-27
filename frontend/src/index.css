@@ -26,7 +26,11 @@
 
   --text-primary: #e8eaed;
   --text-secondary: #9aa4b2;
-  --text-tertiary: #6b7688;
+  /* Lifted from #6b7688, which measured 4.2:1 on --bg-base — under the 4.5
+     body-text floor for the timestamps, step counts and table headings that
+     make up most of this tier. Checked against --bg-raised, the lightest
+     ground it sits on, not only against the page. */
+  --text-tertiary: #7c8698;
   --text-inverse: #0b0d10;
 
   --accent: #5b8def;
@@ -36,14 +40,45 @@
 
   --success: #3fb87f;
   --success-soft: rgba(63, 184, 127, 0.13);
+  --success-border: rgba(63, 184, 127, 0.34);
   --warning: #e0a33e;
   --warning-soft: rgba(224, 163, 62, 0.13);
+  --warning-border: rgba(224, 163, 62, 0.34);
   --danger: #e8615f;
   --danger-soft: rgba(232, 97, 95, 0.13);
+  --danger-border: rgba(232, 97, 95, 0.34);
   --info: #56b6d6;
   --info-soft: rgba(86, 182, 214, 0.13);
+  --info-border: rgba(86, 182, 214, 0.34);
   --purple: #a877e8;
   --purple-soft: rgba(168, 119, 232, 0.13);
+  --purple-border: rgba(168, 119, 232, 0.34);
+
+  /* The fifth status: "none of the above" — a Low priority, a cancelled run, a
+     closed bug. It was being written as a literal grey in eight places, none of
+     which agreed on the grey. */
+  --neutral: #9aa4b2;
+  --neutral-soft: rgba(154, 164, 178, 0.13);
+  --neutral-border: rgba(154, 164, 178, 0.3);
+
+  /* The ink a status badge writes in, which is not the same as the colour the
+     status is. A hue bright enough to read on a dark chip measured 1.9–2.6:1 on
+     the light theme's tinted chip; these are the per-theme values that clear
+     4.5:1 on the matching --*-soft fill. On dark the hue itself already does. */
+  --success-ink: var(--success);
+  --warning-ink: var(--warning);
+  --danger-ink: var(--danger);
+  --info-ink: var(--info);
+  --purple-ink: var(--purple);
+  --neutral-ink: var(--neutral);
+
+  /* The mirror of --*-ink: the fill a solid button uses when the label on it is
+     white. The hues that read well as ink on a dark page are too light behind
+     white text — white on --accent measured 3.25:1, on --success 2.5:1 — which
+     is every primary and every Run button in the dark theme. */
+  --accent-strong: #3b6fd4;
+  --danger-strong: #c8413f;
+  --success-strong: #227a52;
 
   /* Element-role colours, shared by the tree and the overlay */
   --role-button: #5b8def;
@@ -101,24 +136,56 @@
 
   --text-primary: #16191f;
   --text-secondary: #5b6472;
-  --text-tertiary: #8b94a3;
+  /* Darkened from #8b94a3, which measured 3.06:1 on white — every page
+     subtitle, table heading and timestamp in the app is this tier. Deep enough
+     to clear 4.5 on --bg-sunken too, not only on white. */
+  --text-tertiary: #626b7f;
   --text-inverse: #ffffff;
 
-  --accent: #2f6fe0;
-  --accent-hover: #2560cc;
-  --accent-soft: rgba(47, 111, 224, 0.09);
-  --accent-border: rgba(47, 111, 224, 0.32);
+  /* One step deeper than #2f6fe0, which measured 3.8–4.2:1 wherever the accent
+     is the ink on its own tint — the chosen nav item, the avatar, the platform
+     tab counts, an active filter chip. On white it goes 4.7 → 6.2, and white on
+     a filled accent button improves with it. */
+  --accent: #1f5bc4;
+  --accent-hover: #17499f;
+  --accent-soft: rgba(31, 91, 196, 0.1);
+  --accent-border: rgba(31, 91, 196, 0.34);
 
   --success: #1f9d63;
   --success-soft: rgba(31, 157, 99, 0.1);
+  --success-border: rgba(31, 157, 99, 0.3);
   --warning: #b3781a;
   --warning-soft: rgba(179, 120, 26, 0.1);
+  --warning-border: rgba(179, 120, 26, 0.3);
   --danger: #d1403e;
   --danger-soft: rgba(209, 64, 62, 0.1);
+  --danger-border: rgba(209, 64, 62, 0.3);
   --info: #2b8fae;
   --info-soft: rgba(43, 143, 174, 0.1);
+  --info-border: rgba(43, 143, 174, 0.3);
   --purple: #8250d4;
   --purple-soft: rgba(130, 80, 212, 0.1);
+  --purple-border: rgba(130, 80, 212, 0.3);
+
+  --neutral: #55606f;
+  --neutral-soft: rgba(85, 96, 111, 0.1);
+  --neutral-border: rgba(85, 96, 111, 0.26);
+
+  /* Darker than the hue, because here the chip fill is near-white: a badge's
+     10.5px word has to clear 4.5:1 against it, which --success at #1f9d63 does
+     not (3.1:1). Measured against the matching --*-soft over --bg-surface. */
+  --success-ink: #0f7a4a;
+  --warning-ink: #8a5a06;
+  --danger-ink: #b3201f;
+  --info-ink: #1a6f88;
+  --purple-ink: #6b3bb5;
+  --neutral-ink: #55606f;
+
+  /* Accent and danger are already deep enough to carry white; only the green
+     is not (white on --success measures 3.5:1). */
+  --accent-strong: var(--accent);
+  --danger-strong: var(--danger);
+  --success-strong: #17804f;
 
   --role-button: #2f6fe0;
   --role-textbox: #1f9d63;
