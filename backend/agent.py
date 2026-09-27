@@ -17,6 +17,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 import authoring
 import storage
 import text_match
+from mobile_dom import is_wheel
 import visual
 from config import MAX_AGENT_STEPS
 from drivers import ActionResult, Snapshot, UITarget
@@ -1392,6 +1393,12 @@ def _label_moved(snapshot: Optional[Snapshot],
     if element is None:
         # Gone is a different thing from changed, and the driver reports it
         # with its own message when the action runs.
+        return None
+    if is_wheel(element):
+        # A wheel's words are the value it is on, and it is on a different
+        # one on every run — the recorded "2014" against today's "2026" is the
+        # same wheel, not a moved one. Measured on Android: three wheel steps
+        # healed on every run, a model call and half a minute each.
         return None
     here = _text_within(element)
     if not here or text_match.contains(here, label):

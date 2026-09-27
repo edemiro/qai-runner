@@ -304,6 +304,23 @@ def test_an_ios_wheel_is_recorded_by_its_position_not_its_value():
     assert selectors[("XCUIElementTypeButton", "Done")] == '//*[@content-desc="doneButton"]'
 
 
+def test_a_wheel_on_another_value_has_not_moved():
+    """The recorded "1998" against today's "2014" is the same wheel, not a
+    moved one; three wheel steps were healed on every run for this."""
+    import agent
+    from mobile_dom import MobileDOMManager
+    manager = MobileDOMManager(IOS_PICKER, "iOS", 1080, 2400)
+    year = next(e for e in manager.get_all_elements()
+                if e.class_name == "XCUIElementTypePickerWheel" and e.text == "1998")
+    assert agent._label_moved(manager, {"selector": year.selector, "label": "2014",
+                                        "action": "type"}) is None
+    # A row in a list that now reads something else has moved, as before.
+    done = next(e for e in manager.get_all_elements() if e.text == "Done")
+    moved = agent._label_moved(manager, {"selector": done.xpath, "label": "Cancel",
+                                         "action": "click"})
+    assert moved is not None
+
+
 def test_an_android_wheel_is_recorded_by_its_position_not_its_value():
     selectors = _selectors(ANDROID_PICKER, "Android")
     year = selectors[("android.widget.EditText", "2014")]
