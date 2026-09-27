@@ -16,6 +16,8 @@ from .base import ActionResult, Snapshot
 # date of birth some tens.
 WHEEL_NOTCH = 0.15
 WHEEL_TURNS = 60
+# How long a wheel is given to settle before it is read a second time.
+WHEEL_SETTLE = 0.4
 
 # The order a month wheel keeps, in the two languages the app is used in.
 _MONTHS = (
@@ -26,8 +28,11 @@ _MONTHS = (
 
 
 def _notch(text: str):
-    """What a wheel value means: a number, a month, or just its words."""
-    folded = " ".join(str(text or "").split()).casefold()
+    """What a wheel value means: a number, a month, or just its words.
+
+    Punctuation around it is not part of it: the iOS day wheel reads "5.",
+    and "5." taken as a word has no direction to "1."."""
+    folded = " ".join(str(text or "").split()).casefold().strip(".,;:")
     if folded.isdigit():
         return ("number", int(folded))
     for index, names in enumerate(_MONTHS):
@@ -276,16 +281,26 @@ class MobileTarget:
             )
             if not ok:
                 return False, f'Could not turn "{label}"'
-            res = await appium.get(
-                f"/session/{self.session_id}/element/{handle}/attribute/value")
-            if res is None or res.status_code != 200:
-                return False, f'Could not read "{label}" after turning it'
-            latest = " ".join(str(res.json().get("value") or "").split())
+            latest = await self._wheel_value(handle)
             if latest == current:
-                # The wheel did not move: its end, or "{wanted}" is not on it.
+                # Read too soon: the wheel was still settling and answered
+                # with the value it was leaving. Asked once more before
+                # concluding it did not move — its end, or a notch that is
+                # not on it.
+                await asyncio.sleep(WHEEL_SETTLE)
+                latest = await self._wheel_value(handle)
+            if latest is None:
+                return False, f'Could not read "{label}" after turning it'
+            if latest == current:
                 return False, f'"{label}" stops at "{current}"; "{wanted}" is not on it'
             current = latest
         return False, f'"{label}" reads "{current}" after {WHEEL_TURNS} turns, not "{wanted}"'
+
+    async def _wheel_value(self, handle: str) -> Optional[str]:
+        res = await appium.get(f"/session/{self.session_id}/element/{handle}/attribute/value")
+        if res is None or res.status_code != 200:
+            return None
+        return " ".join(str(res.json().get("value") or "").split())
 
     async def _find_wheel(self, element) -> Optional[str]:
         """The wheel's handle, by which wheel it is rather than where it sits.

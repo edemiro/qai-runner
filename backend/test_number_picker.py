@@ -136,9 +136,11 @@ class IosWheel:
         return "year wheel"
 
 
-def _turning(monkeypatch, notches, start):
-    """A wheel that really turns: `notches` in order, `start` where it is."""
-    state = {"at": notches.index(start), "orders": []}
+def _turning(monkeypatch, notches, start, stale=False):
+    """A wheel that really turns: `notches` in order, `start` where it is.
+    `stale` makes the first read after every turn answer with the value the
+    wheel is leaving, as a wheel still settling does."""
+    state = {"at": notches.index(start), "orders": [], "shown": notches.index(start)}
 
     found_by = []
 
@@ -158,6 +160,7 @@ def _turning(monkeypatch, notches, start):
         assert args["element"] == "wheel-1"
         state["orders"].append(args["order"])
         step = 1 if args["order"] == "next" else -1
+        state["shown"] = state["at"] if stale else None
         state["at"] = min(max(state["at"] + step, 0), len(notches) - 1)
         return True, None
 
@@ -165,6 +168,10 @@ def _turning(monkeypatch, notches, start):
         status_code = 200
 
         def json(self):
+            # The value the wheel is leaving, once, when it is still settling.
+            if state["shown"] is not None:
+                shown, state["shown"] = state["shown"], None
+                return {"value": notches[shown]}
             return {"value": notches[state["at"]]}
 
     async def get(path, timeout=None, base_url=None):
@@ -213,6 +220,31 @@ def test_a_day_wheel_already_there_is_left_alone(monkeypatch):
 
     assert ok
     assert state["orders"] == []
+
+
+def test_a_day_wheel_with_a_full_stop_is_still_counted(monkeypatch):
+    """The iOS day wheel reads "5."; as a word it had no direction to "1."."""
+    days = [f"{d}." for d in range(1, 32)]
+    state = _turning(monkeypatch, days, "5.")
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, message = asyncio.run(target._interact("type", IosWheel("5."), "1"))
+
+    assert ok, message
+    assert state["orders"] == ["previous"] * 4
+
+
+def test_a_wheel_still_settling_is_read_again(monkeypatch):
+    """The first read after a turn answered with the value the wheel was
+    leaving, and the turn was taken for the wheel's end."""
+    monkeypatch.setattr("drivers.mobile.WHEEL_SETTLE", 0.0)
+    state = _turning(monkeypatch, [str(y) for y in range(1990, 2011)], "1998", stale=True)
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, message = asyncio.run(target._interact("type", IosWheel("1998"), "2000"))
+
+    assert ok, message
+    assert state["orders"] == ["next", "next"]
 
 
 def test_a_value_the_wheel_does_not_have_is_reported(monkeypatch):
