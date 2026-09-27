@@ -1192,6 +1192,21 @@ async def _keep_looking(target: UITarget, read, seconds: Optional[float] = None)
             return result
 
 
+async def _keep_trying(attempt, seconds: Optional[float] = None) -> Dict[str, Any]:
+    """Ask the driver until it says yes or the time runs out.
+
+    `_keep_looking` for a check the driver answers itself rather than one
+    read off a snapshot. Costs nothing when the first answer is yes, which
+    is most of the time.
+    """
+    deadline = time.monotonic() + (ASSERT_WAIT_SECONDS if seconds is None else seconds)
+    while True:
+        result = await attempt()
+        if result.get("ok") or time.monotonic() >= deadline:
+            return result
+        await asyncio.sleep(ASSERT_POLL_SECONDS)
+
+
 # What ends a scenario step that will not close itself.
 #
 # Being stuck, not being long. Measured on the booking scenario: the step that
@@ -1289,6 +1304,15 @@ async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
                        selector: Optional[str]) -> Dict[str, Any]:
     return await _keep_looking(
         target, lambda fresh: _look_for_text(fresh, needle, element_id, selector),
+    )
+
+
+def _question(action: Dict[str, Any]) -> tuple:
+    """What a check asks, so the same question is known when asked again."""
+    return (
+        (action.get("action") or "").lower(),
+        action.get("elementId") or action.get("xpath") or action.get("selector") or "",
+        " ".join(str(action.get("value") or "").split()).casefold(),
     )
 
 
@@ -1686,6 +1710,16 @@ async def _execute_action(
             return {"ok": False, "message": "assert_text needs a value", "element": None}
         return await _assert_text(target, needle, element_id, selector)
 
+    if kind == "assert_visible":
+        # Kept looking for like every other check. On the web the driver
+        # answers at once, so a recording's `click`, then `assert_visible` on
+        # the page the click opens, only held with a `wait` between them —
+        # and the recordings filled up with `wait 3`, `wait 5` in front of
+        # checks that should have waited by themselves.
+        async def look() -> Dict[str, Any]:
+            return as_dict(await target.act(kind, element_id, selector, value, snapshot_id))
+        return await _keep_trying(look)
+
     return as_dict(await target.act(kind, element_id, selector, value, snapshot_id))
 
 
@@ -1867,6 +1901,9 @@ async def run_agent(
     # green, replaces the recording.
     replay_queue: List[Dict[str, Any]] = []
     replayed_actions = 0
+    # The checks answered on the screen as it is now. Emptied by anything that
+    # could change the screen, so a check in here has its answer already.
+    answered_here: set = set()
 
     async def hold(index: Optional[int], reason: str):
         """Wait when the run is being stepped, so the tester drives it.
@@ -1910,6 +1947,7 @@ async def run_agent(
         step_closed = False
         replay_queue = [dict(item) for item in (entry.get("recorded") or [])]
         replayed_actions = 0
+        answered_here.clear()
         # Reset per step: the question is whether *this* step had to be found
         # again, not whether anything in the run did.
         healed_here = False
@@ -2382,8 +2420,28 @@ async def run_agent(
                 result = await _run_authoring_action(
                     kind, action, target, snapshot, screenshot, goal,
                 )
+            elif (kind in ASSERTION_ACTIONS and not replaying
+                  and _question(action) in answered_here):
+                # Asked and answered on this very screen. Nothing has changed
+                # since — no tap, no wait — so the answer is the same and the
+                # round trip proves nothing. Measured on the cookie step: the
+                # same two absences checked three times over, six actions and
+                # six model calls for one fact, all of it recorded.
+                result = {
+                    "ok": True, "element": None, "proves_nothing": True,
+                    "message": (
+                        "Already checked on this screen, and nothing has changed"
+                        " since — asking again proves nothing new. Act on the"
+                        " screen, or close the step."
+                    ),
+                }
             else:
                 result = await _execute_action(target, action, snapshot)
+            if kind in ASSERTION_ACTIONS:
+                if result.get("ok"):
+                    answered_here.add(_question(action))
+            else:
+                answered_here.clear()
             # One frame per step rather than one per action, while a recording
             # is playing out and going well. A replayed action that worked and
             # has another queued behind it shows nothing the next one will not
@@ -2424,7 +2482,7 @@ async def run_agent(
             # still passes — it is a true statement about the screen — but the
             # record says so, and the model is told, because the alternative is
             # a green step that could never have gone red.
-            if (result["ok"] and stepwise
+            if (result["ok"] and stepwise and not result.get("proves_nothing")
                     and _already_true(action, screen_at_step_open,
                                       first_step=step_index == 0)):
                 result = dict(result, message=(
@@ -2473,7 +2531,9 @@ async def run_agent(
             # An action that worked says the step is getting somewhere, whatever
             # number it is. Only a run of actions that achieve nothing means the
             # model is grinding, and that is what the step is cut off for.
-            futile = 0 if result["ok"] else futile + 1
+            # A check that proved nothing — already true, or already asked —
+            # is not progress either, whatever colour it came back.
+            futile = 0 if result["ok"] and not result.get("proves_nothing") else futile + 1
             step_status = "passed" if result["ok"] else "failed"
             step_row_id = storage.add_step(
                 run_id,

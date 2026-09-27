@@ -786,6 +786,34 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertIn("replayed", (ran[0][2] or "").lower())
 
+    ABSENT = ('```json\n{"type":"action","action":"assert_absent",'
+              '"value":"Çerez","reason":"r"}\n```')
+    CLICK = ('```json\n{"type":"action","action":"click",'
+             '"elementId":"el_1","reason":"r"}\n```')
+
+    async def test_a_check_asked_twice_on_one_screen_is_answered_once(self):
+        """The cookie step: the same absence checked three times over, six
+        actions and six model calls for one fact. The screen answers once;
+        the repeats are told so and never reach the device."""
+        events, _, ran = await self._run(
+            [{"action": "Close the banner", "expected": "It is gone"}],
+            script=[self.ABSENT, self.ABSENT, self.ABSENT, self.CLOSE],
+        )
+        self.assertEqual([k for k, _, _ in ran if k == "assert_absent"], ["assert_absent"])
+        self.assertEqual(self._verdicts(events), [(1, "passed")])
+        told = [e for e in events if e.get("event") == "step_finished"
+                and "Already checked" in (e.get("message") or "")]
+        self.assertEqual(len(told), 2)
+
+    async def test_a_check_after_something_happened_is_asked_again(self):
+        """A tap may have changed the answer, so the question is new."""
+        _, _, ran = await self._run(
+            [{"action": "Close the banner", "expected": "It is gone"}],
+            script=[self.ABSENT, self.CLICK, self.ABSENT, self.CLOSE],
+        )
+        self.assertEqual([k for k, _, _ in ran],
+                         ["assert_absent", "click", "assert_absent"])
+
     async def test_a_recording_that_misses_hands_the_step_back(self):
         """The page moved. Everything still queued was recorded against a state
         it is no longer in, so the model takes over from where the replay got

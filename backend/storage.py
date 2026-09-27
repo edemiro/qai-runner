@@ -1603,20 +1603,33 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
     replay would skip a step and then assert against a screen that never
     reached the state the assertion describes.
 
-    A check repeated straight after itself is dropped too. Asking the screen
-    the same question twice in a row has the same answer as asking it once, so
+    A check repeated while nothing has changed is dropped too. Asking the
+    screen the same question twice has the same answer as asking it once, so
     every repeat is a device round trip that proves nothing — and on a phone
     that is about three seconds each. Found across the sets: seventy-three
     steps carrying a hundred and fifty-four of them, one step asserting the
-    same word eight times over.
+    same word eight times over; and, once those were gone, nineteen more
+    that alternated — "Çerez" gone, "Çerezleri kabul et" gone, "Çerez"
+    gone again — which the rule about neighbours did not see.
 
-    Only checks, and only consecutive ones. Two identical taps can be a
-    passenger count going up twice, and a check after something has happened
-    in between is proving it survived.
+    Only checks, and only until something happens. Two identical taps can be
+    a passenger count going up twice, and a check after something has
+    happened in between is proving it survived.
+
+    A wait before a check is dropped: a check reads the screen until it
+    holds or its own time runs out, so the wait in front of it is time spent
+    twice. Waits before an action are kept, one of them — the longest —
+    because a tap on a page still arriving is the one thing the check's
+    patience does not cover. Found across the sets: fifty-three waits, a
+    third of them stacked, `wait 3` then `wait 5` then the assertion that
+    would have waited anyway.
     """
     if not isinstance(raw, list):
         return []
     actions = []
+    # The checks made since the screen last changed. A check in here has
+    # already been answered on this very screen.
+    answered = set()
     for entry in raw:
         if not isinstance(entry, dict):
             continue
@@ -1636,15 +1649,41 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
             "action": kind, "selector": selector, "value": value,
             "label": (str(entry.get("label") or "").strip())[:120] or None,
         }
-        if (kind in REPEATABLE_CHECKS and actions
-                and actions[-1]["action"] == kind
-                and actions[-1]["selector"] == selector
-                and actions[-1]["value"] == value):
-            continue
+        if kind in REPEATABLE_CHECKS:
+            question = (kind, selector, value)
+            if question in answered:
+                continue
+            answered.add(question)
+        elif kind != "wait":
+            answered = set()
         actions.append(step)
-        if len(actions) > MAX_RECORDED_ACTIONS:
-            return []
-    return actions
+
+    kept = []
+    for index, step in enumerate(actions):
+        if step["action"] != "wait":
+            kept.append(step)
+            continue
+        if kept and kept[-1]["action"] == "wait":
+            # One wait, the longer, where there were several in a row.
+            kept[-1] = _longer_wait(kept[-1], step)
+            continue
+        following = next((a for a in actions[index + 1:] if a["action"] != "wait"), None)
+        if following is not None and following["action"] in REPEATABLE_CHECKS:
+            continue
+        kept.append(step)
+
+    if len(kept) > MAX_RECORDED_ACTIONS:
+        return []
+    return kept
+
+
+def _longer_wait(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    def seconds(step):
+        try:
+            return float(step.get("value") or 1)
+        except (TypeError, ValueError):
+            return 1.0
+    return a if seconds(a) >= seconds(b) else b
 
 
 # Acting on the page rather than on something in it, so a recording of one is

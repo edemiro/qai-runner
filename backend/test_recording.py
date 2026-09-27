@@ -110,6 +110,59 @@ def test_an_action_a_recording_cannot_carry_voids_it():
         ]) == [], unreplayable
 
 
+def test_a_check_asked_again_on_an_unchanged_screen_is_dropped():
+    """The cookie step was recorded as "Çerez" gone, "Çerezleri kabul et"
+    gone, "Çerez" gone, "Çerezleri kabul et" gone, three times over. The
+    screen answered each question once; the rest was round trips."""
+    kept = storage.clean_recorded([
+        {"action": "assert_absent", "value": "Çerez"},
+        {"action": "assert_absent", "value": "Çerezleri kabul et"},
+        {"action": "assert_absent", "value": "Çerez"},
+        {"action": "assert_absent", "value": "Çerezleri kabul et"},
+        {"action": "assert_absent", "value": "Çerez"},
+    ])
+    assert [(a["action"], a["value"]) for a in kept] == [
+        ("assert_absent", "Çerez"), ("assert_absent", "Çerezleri kabul et"),
+    ]
+
+
+def test_a_check_after_something_happened_is_a_new_question():
+    kept = storage.clean_recorded([
+        {"action": "assert_text", "value": "1"},
+        {"action": "click", "selector": "#plus"},
+        {"action": "assert_text", "value": "1"},
+    ])
+    assert [a["action"] for a in kept] == ["assert_text", "click", "assert_text"]
+
+
+def test_a_wait_before_a_check_is_the_check_waiting_twice():
+    """`click`, `wait 3`, `wait 5`, `assert_visible` — the search button as
+    recorded. The assertion reads the screen until it holds, so the eight
+    seconds in front of it were spent for nothing on every replay."""
+    kept = storage.clean_recorded([
+        {"action": "click", "selector": "#buttonUcusara"},
+        {"action": "wait", "value": "3"},
+        {"action": "wait", "value": "5"},
+        {"action": "assert_visible", "selector": "#flightItem_0"},
+    ])
+    assert [a["action"] for a in kept] == ["click", "assert_visible"]
+
+
+def test_waits_before_an_action_become_the_longest_one():
+    """A tap on a page still arriving is the one thing a check's patience
+    does not cover, so a wait in front of an action stays — one of them."""
+    kept = storage.clean_recorded([
+        {"action": "click", "selector": "#go"},
+        {"action": "wait", "value": "2"},
+        {"action": "wait", "value": "5"},
+        {"action": "click", "selector": "#next"},
+        {"action": "wait", "value": "1"},
+    ])
+    assert [(a["action"], a.get("value")) for a in kept] == [
+        ("click", None), ("wait", "5"), ("click", None), ("wait", "1"),
+    ]
+
+
 def test_a_step_that_took_too_many_actions_is_not_kept():
     """A long recording is a recording of a struggle, and replaying a struggle
     reproduces it."""

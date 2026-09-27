@@ -377,11 +377,18 @@ def extract_element_id(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-async def find_element_by_xpath(session_id: str, xpath: str) -> Optional[str]:
-    res = await post(f"/session/{session_id}/element", {"using": "xpath", "value": xpath}, timeout=10.0)
+async def find_element(session_id: str, using: str, value: str,
+                       timeout: float = 10.0) -> Optional[str]:
+    """One element's handle by any locator strategy the driver speaks, or None."""
+    res = await post(f"/session/{session_id}/element", {"using": using, "value": value},
+                     timeout=timeout)
     if res is not None and res.status_code == 200:
         return extract_element_id(res.json().get("value", {}))
     return None
+
+
+async def find_element_by_xpath(session_id: str, xpath: str) -> Optional[str]:
+    return await find_element(session_id, "xpath", xpath)
 
 
 async def get_active_element(session_id: str) -> Optional[str]:

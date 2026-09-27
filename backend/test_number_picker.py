@@ -129,8 +129,18 @@ def _turning(monkeypatch, notches, start):
     """A wheel that really turns: `notches` in order, `start` where it is."""
     state = {"at": notches.index(start), "orders": []}
 
-    async def found(session_id, xpath):
+    found_by = []
+
+    async def found(session_id, using, value, timeout=None):
+        # By which wheel it is, not where it sits: an XPath over a screen
+        # with a picker open timed out and the wheel was "not found".
+        found_by.append((using, value))
+        assert using == "-ios class chain"
+        assert value == "**/XCUIElementTypePickerWheel[3]"
         return "wheel-1"
+
+    async def never_xpath(session_id, xpath):
+        raise AssertionError("the wheel must not be looked up by its position")
 
     async def execute(session_id, script, args=None):
         assert script == "mobile: selectPickerWheelValue"
@@ -153,7 +163,8 @@ def _turning(monkeypatch, notches, start):
     async def never(*args, **kwargs):
         raise AssertionError("a wheel is not typed into through the element endpoint")
 
-    monkeypatch.setattr(appium, "find_element_by_xpath", found)
+    monkeypatch.setattr(appium, "find_element", found)
+    monkeypatch.setattr(appium, "find_element_by_xpath", never_xpath)
     monkeypatch.setattr(appium, "execute", execute)
     monkeypatch.setattr(appium, "get", get)
     monkeypatch.setattr(appium, "post", never)

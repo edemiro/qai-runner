@@ -1,6 +1,7 @@
 """Appium-backed target. Wraps the existing device code behind UITarget."""
 
 import asyncio
+import re
 from typing import Any, Dict, Optional
 
 import appium_client as appium
@@ -253,7 +254,7 @@ class MobileTarget:
         again until it says so — a day, a month or a year knows which way
         that is; anything else is tried forwards.
         """
-        handle = await appium.find_element_by_xpath(self.session_id, element.xpath)
+        handle = await self._find_wheel(element)
         if not handle:
             return False, f'Could not find "{label}"'
         wanted = " ".join(str(value or "").split())
@@ -278,6 +279,25 @@ class MobileTarget:
                 return False, f'"{label}" stops at "{current}"; "{wanted}" is not on it'
             current = latest
         return False, f'"{label}" reads "{current}" after {WHEEL_TURNS} turns, not "{wanted}"'
+
+    async def _find_wheel(self, element) -> Optional[str]:
+        """The wheel's handle, by which wheel it is rather than where it sits.
+
+        An XPath over an iOS screen with a picker open took longer than the
+        ten seconds allowed and the wheel was "not found" — and on the run
+        before, the same lookup timing out sent the typing to the coordinate
+        fallback, which taps a wheel and types into nothing. A class chain is
+        answered natively: the k-th picker wheel on the screen, where k is
+        the wheel's own index at the end of its path.
+        """
+        match = re.search(r"XCUIElementTypePickerWheel\[(\d+)\]$", element.xpath or "")
+        if match:
+            handle = await appium.find_element(
+                self.session_id, "-ios class chain",
+                f"**/XCUIElementTypePickerWheel[{match.group(1)}]", timeout=20.0)
+            if handle:
+                return handle
+        return await appium.find_element(self.session_id, "xpath", element.xpath, timeout=20.0)
 
     # --- lifecycle ------------------------------------------------------- #
 
