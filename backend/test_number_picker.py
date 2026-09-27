@@ -44,24 +44,35 @@ def _thumb(monkeypatch):
         done.append(("key", platform, name))
         return True
 
-    async def never(session_id, xpath):
-        raise AssertionError("a wheel must not be typed into through the element endpoint")
+    async def found(session_id, xpath):
+        return "el-1"
+
+    async def post(path, body=None, **kwargs):
+        # The only element call a wheel gets is the clear: typing appends,
+        # and "2014" then "2000" made "20142000", which the picker threw out.
+        assert path.endswith("/element/el-1/clear"), path
+        done.append(("clear",))
+
+        class Res:
+            status_code = 200
+        return Res()
 
     monkeypatch.setattr(MobileGestureController, "perform_tap", tap)
     monkeypatch.setattr(MobileGestureController, "perform_type_text", typed)
     monkeypatch.setattr(MobileGestureController, "perform_key_event", key)
-    monkeypatch.setattr(appium, "find_element_by_xpath", never)
+    monkeypatch.setattr(appium, "find_element_by_xpath", found)
+    monkeypatch.setattr(appium, "post", post)
     return done
 
 
-def test_a_wheel_is_tapped_typed_into_and_left(monkeypatch):
+def test_a_wheel_is_cleared_tapped_typed_into_and_left(monkeypatch):
     done = _thumb(monkeypatch)
     target = MobileTarget("s1", {"platform": "Android"}, {})
 
     ok, message = asyncio.run(target._interact("type", YearWheel(), "2000"))
 
     assert ok, message
-    assert done == [("tap", 50, 20), ("type", "2000"), ("key", "android", "tab")]
+    assert done == [("clear",), ("tap", 50, 20), ("type", "2000"), ("key", "android", "tab")]
 
 
 def test_tab_is_a_key_the_phone_knows():
@@ -93,7 +104,7 @@ def test_a_field_that_is_not_a_wheel_still_goes_through_the_element(monkeypatch)
 
     assert ok
     assert posted == ["clear", "value"]
-    assert done == []
+    assert done == [], "no tap, no key: the ordinary path went through the element"
 
 
 def test_a_wheel_with_no_bounds_says_so(monkeypatch):

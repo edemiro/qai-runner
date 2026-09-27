@@ -233,6 +233,13 @@ class MobileTarget:
         bounds = element.bounds
         if not bounds:
             return False, f'"{label}" has no bounds to tap'
+        # Emptied first, because typing appends: "2014" and then "2000" made
+        # "20142000", which the picker threw out and stayed on 2014 — three
+        # wheels sent, none of them taken. The one sequence that did take on
+        # the first run had a clear in front of it.
+        handle = await appium.find_element_by_xpath(self.session_id, element.xpath)
+        if handle:
+            await appium.post(f"/session/{self.session_id}/element/{handle}/clear")
         cx, cy = bounds["cx"], bounds["cy"]
         if not await MobileGestureController.perform_tap(self.session_id, cx, cy):
             return False, f'Could not focus "{label}"'
