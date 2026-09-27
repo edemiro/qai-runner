@@ -91,6 +91,15 @@ EXTRACT_JS = r"""
   // Only asked within the viewport, because elementFromPoint cannot answer
   // for anything outside it — the lookahead below the fold keeps the cheap
   // answer.
+  // Is this element painted at a size a finger could hit? The input behind a
+  // custom checkbox fails this while its label passes.
+  function drawn(el) {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 2 && r.height >= 2 && !hiddenByAncestor(el);
+  }
+
   function reallyOnScreen(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return false;
@@ -221,8 +230,20 @@ EXTRACT_JS = r"""
     // aria-hidden, so those stay final above.
     if (clippedByAncestor(el) && !reallyOnScreen(el)) continue;
 
-    const role = roleOf(el, style);
+    let role = roleOf(el, style);
     if (role === null) continue;
+    let checked = el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio') ? el.checked : null;
+    // A custom checkbox: the input is hidden and the label is what is drawn
+    // and clicked. Measured on the payment modal: the "I accept the terms"
+    // box is exactly this, and the model was handed its words as prose and
+    // no box to tick — eighteen actions of scrolling and tabbing, and the
+    // booking never paid. The label stands in for the box: its role, its
+    // checked state, and a click on it is a click on the box.
+    if (el.tagName === 'LABEL' && el.control &&
+        (el.control.type === 'checkbox' || el.control.type === 'radio') && !drawn(el.control)) {
+      role = el.control.type;
+      checked = el.control.checked;
+    }
 
     const text = ownText(el);
     const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
@@ -270,7 +291,7 @@ EXTRACT_JS = r"""
         x2: Math.round(rect.right), y2: Math.round(rect.bottom),
       },
       enabled: !el.disabled,
-      checked: el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio') ? el.checked : null,
+      checked,
       href: el.tagName === 'A' ? (el.getAttribute('href') || null) : null,
       parentIndex,
     });

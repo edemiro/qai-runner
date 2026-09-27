@@ -67,6 +67,12 @@ FIXTURE = """<!doctype html>
       <div class="pad">
         <input type="checkbox" id="direct"><label for="direct">Sadece aktarmasız</label>
       </div>
+      <!-- A custom checkbox as the payment modal draws one: the input is
+           hidden, the label is the box. -->
+      <div class="pad">
+        <input type="checkbox" id="terms" style="position:absolute;opacity:0;width:1px;height:1px">
+        <label for="terms" id="terms-label">Kurallar ve koşulları kabul ediyorum</label>
+      </div>
       <button type="submit" id="search-btn" data-testid="search">Ara</button>
     </form>
 
@@ -275,6 +281,36 @@ class TestWebTarget(unittest.IsolatedAsyncioTestCase):
         result = await self.target.act("type", origin.element_id, None, "Ankara", snapshot.snapshot_id)
         self.assertTrue(result.ok, result.message)
         self.assertEqual(await self.target.page.input_value("#from"), "Ankara")
+
+    async def test_typing_into_a_select_chooses_and_the_choices_are_listed(self):
+        """A select cannot be filled and its options are not elements, so the
+        model is told what it offers and typing one of them chooses it."""
+        snapshot = await self.target.snapshot()
+        cabin = next(e for e in snapshot.get_all_elements() if e.html_id == "cabin")
+        self.assertEqual(cabin.options, ["Economy", "Business"])
+        self.assertEqual(cabin.text, "Economy")
+        result = await self.target.act("type", cabin.element_id, None, "business", snapshot.snapshot_id)
+        self.assertTrue(result.ok, result.message)
+        self.assertIn('Chose "Business"', result.message)
+        self.assertEqual(await self.target.page.input_value("#cabin"), "Business")
+
+    async def test_a_custom_checkbox_is_its_label(self):
+        """The input is hidden and the label is what is drawn and clicked —
+        the payment modal's "I accept the terms" box. The label stands in
+        for the box: role, checked state, and a click on it ticks it."""
+        snapshot = await self.target.snapshot()
+        box = next(e for e in snapshot.get_all_elements() if e.html_id == "terms-label")
+        self.assertEqual(box.role, "checkbox")
+        self.assertIs(box.checked, False)
+        result = await self.target.act("click", box.element_id, None, None, snapshot.snapshot_id)
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(await self.target.page.is_checked("#terms"))
+        again = await self.target.snapshot()
+        box = next(e for e in again.get_all_elements() if e.html_id == "terms-label")
+        self.assertIs(box.checked, True)
+        # The ordinary checkbox beside it is still the input itself.
+        plain = next(e for e in again.get_all_elements() if e.html_id == "direct")
+        self.assertEqual((plain.tag, plain.role), ("input", "checkbox"))
 
     async def test_clear_empties_an_input(self):
         await self.target.page.fill("#from", "Ankara")
