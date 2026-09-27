@@ -15,7 +15,12 @@ import './test-data.css';
  * scenario that needed them, so a card expiring meant reading every Test Set
  * and whichever one was missed failed later for a reason nobody connected to
  * the change. They live here now, and a scenario names one instead of carrying
- * it: `{{kart.visa.numara}}` in a step is filled in as the run starts.
+ * it: `{{kart.success.numara}}` in a step is filled in as the run starts.
+ *
+ * A key is a path, and the page is laid out along it: `yolcu.adt.ad` sits
+ * under Passengers, under Adult. The store grows by prefix — a child is
+ * `yolcu.chd.*`, a card that should be declined is `kart.declined.*` — so a
+ * new kind of thing needs no new page, only a name in the same shape.
  *
  * Secrets are listed masked and never fetched in bulk: the real value is asked
  * for one entry at a time, when someone presses for it.
@@ -37,6 +42,46 @@ const COLUMNS = 5;
 // Below this the whole store is read at a glance and a search box would be a
 // control that narrows nothing.
 const SEARCH_FROM = 8;
+
+/* What a path segment is called on screen. Anything not listed is shown as
+   written, capitalised — the store is not limited to what this page knows
+   the name of. */
+const LABELS = {
+  yolcu: 'Passengers',
+  kart: 'Cards',
+  tarih: 'Dates',
+  hesap: 'Accounts',
+  adt: 'Adult (ADT)',
+  chd: 'Child (CHD)',
+  inf: 'Infant (INF)',
+  success: 'Successful payment',
+  declined: 'Declined payment',
+  fail: 'Declined payment',
+};
+
+/* The groups a tester reaches for first, in the order they think of them;
+   everything else follows alphabetically, and keys with no prefix come last. */
+const GROUP_ORDER = ['yolcu', 'kart', 'tarih'];
+const SUB_ORDER = ['adt', 'chd', 'inf'];
+
+function label(segment) {
+  return LABELS[segment] || segment.charAt(0).toUpperCase() + segment.slice(1);
+}
+
+/* `yolcu.adt.ad` → Passengers › Adult › ad. Two segments make a group and a
+   field, three or more make a group, a kind and a field; a bare name has no
+   group at all. */
+function split(key) {
+  const parts = key.split('.');
+  if (parts.length >= 3) return { group: parts[0], sub: parts[1], field: parts.slice(2).join('.') };
+  if (parts.length === 2) return { group: parts[0], sub: '', field: parts[1] };
+  return { group: '', sub: '', field: key };
+}
+
+function rank(list, id) {
+  const at = list.indexOf(id);
+  return at === -1 ? list.length : at;
+}
 
 function when(seconds) {
   if (!seconds) return '—';
@@ -69,7 +114,9 @@ export function TestDataPage() {
 
   /* The one open form, whether it is adding or editing. Only one can be open
      at a time, so one piece of state describes both and the row being edited
-     is replaced by the form rather than sitting above a copy of itself. */
+     is replaced by the form rather than sitting above a copy of itself. A new
+     entry's form opens inside the group it was asked for from — `at` is that
+     group's prefix, or 'page' for the button under all of them. */
   const [form, setForm] = useState(null);
   const [formError, setFormError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -114,6 +161,35 @@ export function TestDataPage() {
       || (entry.note || '').toLowerCase().includes(needle)
       || String(entry.value || '').toLowerCase().includes(needle));
   }, [entries, query, editingKey]);
+
+  /* The list, folded along the keys: a group per first segment, a heading per
+     second where there is a third. Built from what the search left, so a
+     group with nothing matching in it is not drawn empty. */
+  const groups = useMemo(() => {
+    const byGroup = new Map();
+    for (const entry of shown) {
+      const { group, sub, field } = split(entry.key);
+      if (!byGroup.has(group)) byGroup.set(group, new Map());
+      const subs = byGroup.get(group);
+      if (!subs.has(sub)) subs.set(sub, []);
+      subs.get(sub).push({ ...entry, field });
+    }
+    return [...byGroup.entries()]
+      .sort(([a], [b]) => {
+        if (a === '') return 1;
+        if (b === '') return -1;
+        return rank(GROUP_ORDER, a) - rank(GROUP_ORDER, b) || a.localeCompare(b);
+      })
+      .map(([id, subs]) => ({
+        id,
+        subs: [...subs.entries()].sort(([a], [b]) => {
+          if (a === '') return -1;
+          if (b === '') return 1;
+          return rank(SUB_ORDER, a) - rank(SUB_ORDER, b) || a.localeCompare(b);
+        }),
+        count: [...subs.values()].reduce((sum, rows) => sum + rows.length, 0),
+      }));
+  }, [shown]);
 
   /* Names the Test Sets ask for that this store cannot answer. Derived from
      the scan rather than stored with it, so adding the missing entry strikes
@@ -197,10 +273,12 @@ export function TestDataPage() {
     }
   }, [toast]);
 
-  const startAdd = (key = '') => {
+  /* `key` is what the name field starts with — the group's prefix when the
+     button was in a group, so the new entry lands where it was asked for. */
+  const startAdd = (key = '', at = 'page') => {
     setFormError(null);
     setOpenUsage(null);
-    setForm({ mode: 'new', key, value: '', note: '', secret: false, wasSecret: false });
+    setForm({ mode: 'new', at, key, value: '', note: '', secret: false, wasSecret: false });
   };
 
   const startEdit = (entry) => {
@@ -240,6 +318,14 @@ export function TestDataPage() {
       setFormError('A name can hold letters, digits, dots, dashes and '
         + 'underscores — no spaces or braces. The runner looks for exactly '
         + `that between the braces, so {{${key}}} would never be filled in.`);
+      return;
+    }
+    /* A prefix with nothing after it is the button's own text left as it
+       was, not a name — `yolcu.adt.` would file under Passengers › Adult and
+       answer to nothing. */
+    if (key.endsWith('.') || key.startsWith('.') || key.includes('..')) {
+      setFormError('Finish the name: the part after the last dot is what the '
+        + 'entry is called — yolcu.adt.ad, not yolcu.adt.');
       return;
     }
     if (form.mode === 'new' && entries.some((entry) => entry.key === key)) {
@@ -322,7 +408,7 @@ export function TestDataPage() {
             className="td-input mono"
             value={form.key}
             onChange={(event) => setForm({ ...form, key: event.target.value })}
-            placeholder="kart.visa.numara"
+            placeholder="kart.success.numara"
             autoFocus
           />
         </label>
@@ -375,7 +461,186 @@ export function TestDataPage() {
     </div>
   );
 
-  const adding = form?.mode === 'new';
+  const addingAt = form?.mode === 'new' ? form.at : null;
+
+  const formRow = (key) => (
+    <tr key={key} className="td-form-row">
+      <td colSpan={COLUMNS}>{formBody()}</td>
+    </tr>
+  );
+
+  /* One entry. The key chip is the whole `{{…}}` a scenario writes — that is
+     what copying it gives — but the eye lands on the last segment, because
+     the rest is already written above the row as the group it sits in. */
+  const entryRows = (entry) => {
+    if (form?.mode === 'edit' && form.key === entry.key) return formRow(entry.key);
+    const uses = usage?.found?.[entry.key] || [];
+    const isRevealed = entry.key in revealed;
+    const prefix = entry.key.slice(0, entry.key.length - entry.field.length);
+    return (
+      <Fragment key={entry.key}>
+        <tr>
+          <td className="td-cell-key">
+            <button
+              className="td-key"
+              onClick={() => copyKey(entry.key)}
+              title={`Copy {{${entry.key}}}`}
+            >
+              <span className="td-key-text">
+                <span className="td-key-prefix">{`{{${prefix}`}</span>
+                <span className="td-key-field">{entry.field}</span>
+                <span className="td-key-prefix">{'}}'}</span>
+              </span>
+              <Copy size={12} />
+            </button>
+            {usage && (
+              uses.length === 0 ? (
+                <span className="td-uses muted small">No scenario names it</span>
+              ) : (
+                <button
+                  className="td-uses td-uses-link"
+                  onClick={() => setOpenUsage(
+                    (current) => (current === entry.key ? null : entry.key),
+                  )}
+                >
+                  {uses.length} scenario{uses.length === 1 ? '' : 's'}
+                </button>
+              )
+            )}
+          </td>
+          <td className="td-cell-value">
+            <span className="td-value-wrap">
+              <span className="td-value">
+                {isRevealed ? revealed[entry.key] : entry.value}
+              </span>
+              {entry.secret && (
+                <button
+                  className="icon-btn-tiny"
+                  onClick={() => toggleReveal(entry)}
+                  disabled={revealing === entry.key}
+                  title={isRevealed ? 'Hide it again' : 'Show the real value'}
+                  aria-label={isRevealed ? 'Hide the value' : 'Show the real value'}
+                >
+                  {revealing === entry.key
+                    ? <Loader2 size={13} className="spin" />
+                    : isRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+              )}
+            </span>
+          </td>
+          <td className="td-cell-note">
+            {entry.note || <span className="td-dash">—</span>}
+          </td>
+          <td className="td-cell-when">{when(entry.updatedAt)}</td>
+          <td className="td-cell-actions">
+            <span className="td-row-actions">
+              <button
+                className="icon-btn-tiny"
+                onClick={() => startEdit(entry)}
+                title={`Edit ${entry.key}`}
+                aria-label={`Edit ${entry.key}`}
+              >
+                <Pencil size={14} />
+              </button>
+              <button
+                className="icon-btn-tiny td-danger"
+                onClick={() => remove(entry)}
+                title={`Delete ${entry.key}`}
+                aria-label={`Delete ${entry.key}`}
+              >
+                <Trash2 size={14} />
+              </button>
+            </span>
+          </td>
+        </tr>
+        {openUsage === entry.key && uses.length > 0 && (
+          <tr className="td-usage-row">
+            <td colSpan={COLUMNS}>
+              <ul className="td-usage-list">
+                {uses.map((use, index) => (
+                  <li key={`${use.suite}-${use.scenario}-${index}`}>
+                    <span className="td-usage-suite">{use.suite}</span>
+                    <span className="td-usage-sep">›</span>
+                    {use.scenario}
+                  </li>
+                ))}
+              </ul>
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  };
+
+  /* A group is a card: its name, the prefix every key in it shares, and a
+     button that starts a new entry already under that prefix. Kinds inside
+     it — Adult, Child, Infant — are headings in the same table, each with
+     its own button for the same reason. */
+  const groupCard = (group) => {
+    const prefix = group.id ? `${group.id}.` : '';
+    return (
+      <section key={group.id || '(other)'} className="card td-group">
+        <header className="td-group-head">
+          <h2 className="td-group-title">{group.id ? label(group.id) : 'Other'}</h2>
+          {group.id && <span className="td-group-prefix mono">{`${group.id}.*`}</span>}
+          <span className="td-group-count">
+            {group.count} {group.count === 1 ? 'entry' : 'entries'}
+          </span>
+          <button
+            className="btn btn-ghost btn-sm td-group-add"
+            onClick={() => startAdd(prefix, group.id)}
+            title={`Add an entry under ${prefix || 'no prefix'}`}
+          >
+            <Plus size={14} />
+            Add
+          </button>
+        </header>
+        <div className="td-table-wrap">
+          <table className="data-table td-table">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Value</th>
+                <th>Note</th>
+                <th>Changed</th>
+                <th><span className="td-sr">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.subs.map(([sub, rows]) => {
+                const subPrefix = `${prefix}${sub}.`;
+                return (
+                  <Fragment key={sub || '(none)'}>
+                    {sub && (
+                      <tr className="td-subhead">
+                        <td colSpan={COLUMNS}>
+                          <div className="td-subhead-inner">
+                            <span className="td-subhead-title">{label(sub)}</span>
+                            <span className="td-group-prefix mono">{`${subPrefix}*`}</span>
+                            <button
+                              className="btn btn-ghost btn-sm td-group-add"
+                              onClick={() => startAdd(subPrefix, subPrefix)}
+                              title={`Add an entry under ${subPrefix}`}
+                            >
+                              <Plus size={13} />
+                              Add
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {rows.map(entryRows)}
+                    {sub && addingAt === subPrefix && formRow(`new:${subPrefix}`)}
+                  </Fragment>
+                );
+              })}
+              {addingAt === group.id && formRow(`new:${group.id}`)}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  };
 
   return (
     <main className="page test-data-page">
@@ -383,8 +648,9 @@ export function TestDataPage() {
         <div>
           <h1 className="page-title">Test Data</h1>
           <p className="page-subtitle">
-            The values scenarios reach by name. Change one here and every
-            scenario that names it changes with it.
+            The values scenarios reach by name, grouped the way the names are
+            written. Change one here and every scenario that names it changes
+            with it.
           </p>
         </div>
         {/* Reading every Test Set costs a request each, so the button holds
@@ -446,11 +712,13 @@ export function TestDataPage() {
         </div>
       )}
 
-      <section className="card">
-        {loading ? (
+      {loading ? (
+        <section className="card">
           <p className="muted td-loading">Loading…</p>
-        ) : shown.length === 0 ? (
-          query ? (
+        </section>
+      ) : shown.length === 0 ? (
+        <section className="card">
+          {query ? (
             <EmptyState
               icon={Search}
               title="Nothing matches that"
@@ -465,149 +733,54 @@ export function TestDataPage() {
             </EmptyState>
           ) : (
             <EmptyState icon={KeyRound} title="No shared values yet">
-              A scenario writes <code>{'{{kart.visa.numara}}'}</code> in a step and the
-              run fills it from here, so a card that expires is changed once
-              instead of hunted through every Test Set.
+              A scenario writes <code>{'{{kart.success.numara}}'}</code> in a step and
+              the run fills it from here, so a card that expires is changed once
+              instead of hunted through every Test Set. Name things as paths —
+              <code>yolcu.adt.ad</code>, <code>kart.success.cvv</code> — and they
+              file themselves.
             </EmptyState>
-          )
-        ) : (
-          <div className="td-table-wrap">
-            <table className="data-table td-table">
-              <thead>
-                <tr>
-                  <th>Key</th>
-                  <th>Value</th>
-                  <th>Note</th>
-                  <th>Changed</th>
-                  <th><span className="td-sr">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((entry) => {
-                  if (form?.mode === 'edit' && form.key === entry.key) {
-                    return (
-                      <tr key={entry.key} className="td-form-row">
-                        <td colSpan={COLUMNS}>{formBody()}</td>
-                      </tr>
-                    );
-                  }
-                  const uses = usage?.found?.[entry.key] || [];
-                  const isRevealed = entry.key in revealed;
-                  return (
-                    <Fragment key={entry.key}>
-                      <tr>
-                        <td className="td-cell-key">
-                          <button
-                            className="td-key"
-                            onClick={() => copyKey(entry.key)}
-                            title={`Copy {{${entry.key}}}`}
-                          >
-                            <span className="td-key-text">{`{{${entry.key}}}`}</span>
-                            <Copy size={12} />
-                          </button>
-                          {usage && (
-                            uses.length === 0 ? (
-                              <span className="td-uses muted small">No scenario names it</span>
-                            ) : (
-                              <button
-                                className="td-uses td-uses-link"
-                                onClick={() => setOpenUsage(
-                                  (current) => (current === entry.key ? null : entry.key),
-                                )}
-                              >
-                                {uses.length} scenario{uses.length === 1 ? '' : 's'}
-                              </button>
-                            )
-                          )}
-                        </td>
-                        <td className="td-cell-value">
-                          <span className="td-value-wrap">
-                            <span className="td-value">
-                              {isRevealed ? revealed[entry.key] : entry.value}
-                            </span>
-                            {entry.secret && (
-                              <button
-                                className="icon-btn-tiny"
-                                onClick={() => toggleReveal(entry)}
-                                disabled={revealing === entry.key}
-                                title={isRevealed ? 'Hide it again' : 'Show the real value'}
-                                aria-label={isRevealed ? 'Hide the value' : 'Show the real value'}
-                              >
-                                {revealing === entry.key
-                                  ? <Loader2 size={13} className="spin" />
-                                  : isRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
-                              </button>
-                            )}
-                          </span>
-                        </td>
-                        <td className="td-cell-note">
-                          {entry.note || <span className="td-dash">—</span>}
-                        </td>
-                        <td className="td-cell-when">{when(entry.updatedAt)}</td>
-                        <td className="td-cell-actions">
-                          <span className="td-row-actions">
-                            <button
-                              className="icon-btn-tiny"
-                              onClick={() => startEdit(entry)}
-                              title={`Edit ${entry.key}`}
-                              aria-label={`Edit ${entry.key}`}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              className="icon-btn-tiny td-danger"
-                              onClick={() => remove(entry)}
-                              title={`Delete ${entry.key}`}
-                              aria-label={`Delete ${entry.key}`}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </span>
-                        </td>
-                      </tr>
-                      {openUsage === entry.key && uses.length > 0 && (
-                        <tr className="td-usage-row">
-                          <td colSpan={COLUMNS}>
-                            <ul className="td-usage-list">
-                              {uses.map((use, index) => (
-                                <li key={`${use.suite}-${use.scenario}-${index}`}>
-                                  <span className="td-usage-suite">{use.suite}</span>
-                                  <span className="td-usage-sep">›</span>
-                                  {use.scenario}
-                                </li>
-                              ))}
-                            </ul>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+          )}
+        </section>
+      ) : (
+        <div className="td-groups">
+          {groups.map(groupCard)}
+        </div>
+      )}
 
-        {/* Adding comes after the list, because the list is what the page is
-            for; the form is a row that appears when it is asked for. */}
+      {/* Adding a whole new kind of thing comes after the groups, because the
+          groups are what the page is for; a value that belongs in one is
+          added from that group's own button. */}
+      {!loading && (
         <div className="td-add">
-          {adding ? formBody() : (
+          {addingAt === 'page' ? formBody() : (
             <button className="btn btn-ghost btn-sm" onClick={() => startAdd()}>
               <Plus size={14} />
               Add an entry
             </button>
           )}
         </div>
-      </section>
+      )}
 
       <details className="td-fold">
         <summary>How a scenario reaches these</summary>
         <div className="td-fold-body">
           <p>
             Write the key between double braces in a step, a goal, a precondition
-            or the scenario&apos;s address: <code>{'{{kart.visa.numara}}'}</code>. The
+            or the scenario&apos;s address: <code>{'{{kart.success.numara}}'}</code>. The
             run fills it in as it starts, so the scenario never carries the value
             itself.
+          </p>
+          <p>
+            A key is a path. <code>yolcu.adt.ad</code> is the adult passenger&apos;s
+            first name, <code>yolcu.chd.dogum</code> the child&apos;s date of birth;
+            a new kind of passenger or card is a new prefix in the same shape,
+            and this page files it under the right heading by itself.
+          </p>
+          <p>
+            A date can be relative to the run day: <code>today+7</code>,
+            <code>today-8y</code>, <code>today-10m</code>. The run gets the real
+            date — <code>4 October 2026</code> — so a departure a week out stays a
+            week out, and a child stays a child.
           </p>
           <p>
             A scenario&apos;s own dataset row wins over this store, so a case that

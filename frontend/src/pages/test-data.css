@@ -110,6 +110,76 @@
 
 /* ------------------------------------------------------------- the list -- */
 
+/* One card per group — Passengers, Cards, Dates — stacked, so the store
+   reads as a few short tables with names rather than one long one. */
+.td-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-4);
+  flex-shrink: 0;
+}
+
+.td-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.td-group-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* The prefix every key in the group shares — shown once here, and faded in
+   each row, so the eye reads the part that differs. */
+.td-group-prefix {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.td-group-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.td-group-add {
+  margin-left: auto;
+}
+
+/* A kind within a group — Adult, Child, Infant — is a heading row in the
+   same table, sunken so it reads as a label for the rows under it rather
+   than as an entry. */
+.td-subhead td {
+  padding: 9px 13px 6px;
+  background: var(--bg-sunken);
+}
+
+.td-subhead-inner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gap-2) var(--gap-3);
+}
+
+.td-subhead-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.td-key-prefix {
+  color: var(--text-tertiary);
+}
+
+.td-key-field {
+  font-weight: 600;
+}
+
 /* A long value must scroll inside the card rather than widen the page; the
    minimum keeps the four columns readable while it does. */
 .td-table-wrap {
