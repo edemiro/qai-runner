@@ -443,7 +443,11 @@ export function SuitesPage({
       if (newSuiteFields.os) setOs(newSuiteFields.os);
       setSelectedId(created.id);
       await loadSuites();
-      toast.success(`Test set “${name}” created.`);
+      /* The name that was stored, not the one that was typed. Long names are
+         cut to fit the column, and quoting the full thing back said a set had
+         been created under a name that is not in the list — cut mid-word,
+         with nothing on screen to say so. */
+      toast.success(`Test set “${created.name || name}” created.`);
     } catch (err) {
       toast.error(err.message);
     }
@@ -819,7 +823,18 @@ export function SuitesPage({
             Scenarios live here. Pull them into an execution to run them — locally or from CI.
           </p>
         </div>
-        <PlatformTabs value={platform} onChange={setPlatform} counts={counts} />
+        {/* Across Test Sets the selection is kept on purpose — that is what
+            makes combining two sets one gesture. Across platforms it is not:
+            a web scenario cannot run on a phone, the Move to… list offers only
+            the open set's platform, and nothing on screen is ticked. The bar
+            went on saying "1 scenario picked" over a set where no box was
+            checked, beside a Run button that would have sent it at the wrong
+            target. */}
+        <PlatformTabs
+          value={platform}
+          onChange={(next) => { setPlatform(next); setPicked(new Map()); }}
+          counts={counts}
+        />
         {platform === 'mobile' && (
           <PlatformTabs
             options={OS_TABS} value={os} onChange={setOs} counts={osCounts} sub
@@ -903,6 +918,10 @@ export function SuitesPage({
                   onChange={(event) => setNewSuiteName(event.target.value)}
                   placeholder="New test set name"
                   aria-label="New test set name"
+                  /* Where the store cuts it. Said at the field, so a long name
+                     stops being accepted rather than being quietly shortened
+                     after the fact. */
+                  maxLength={120}
                 />
                 <input
                   className="suite-create-module"

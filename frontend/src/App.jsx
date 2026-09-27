@@ -29,8 +29,10 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
 
   const [activeTab, setActiveTab] = useState('web');
-  // Which platform Bug Report should open on when a raised bug sends us there.
+  // Which platform Bug Report should open on when a raised bug sends us there,
+  // and within Mobile, which phone.
   const [bugsPlatform, setBugsPlatform] = useState(null);
+  const [bugsOs, setBugsOs] = useState(null);
   const [agentSubTab, setAgentSubTab] = useState('chat'); // chat | inspector
 
   const [sessions, setSessions] = useState([]);
@@ -609,10 +611,16 @@ export default function App() {
         <ExecutionsPage
           onOpenRun={openRunReport}
           onWatch={watchExecution}
-          // A bug raised from a mobile scenario has to land on the Mobile tab.
-          // Bug Report opens on Web like every other page, so without this the
-          // tester is sent to a list the bug they just raised is not in.
-          onOpenBugs={(kind) => { setBugsPlatform(kind || null); setActiveTab('bugs'); }}
+          // A bug raised from a mobile scenario has to land on the Mobile tab,
+          // and on the phone it was found on. Bug Report opens on Web, and
+          // within Mobile on iOS, so without both the tester is sent to a list
+          // the bug they just raised is not in — measured on an Android
+          // scenario, which landed on three unrelated iOS bugs.
+          onOpenBugs={(kind, os) => {
+            setBugsPlatform(kind || null);
+            setBugsOs(os || null);
+            setActiveTab('bugs');
+          }}
           focusId={focusExecutionId}
           onFocused={clearExecutionFocus}
         />
@@ -640,7 +648,13 @@ export default function App() {
     }
 
     if (activeTab === 'bugs') {
-      return <BugsPage onOpenRun={openRunReport} initialPlatform={bugsPlatform} />;
+      return (
+        <BugsPage
+          onOpenRun={openRunReport}
+          initialPlatform={bugsPlatform}
+          initialOs={bugsOs}
+        />
+      );
     }
 
     if (activeTab === 'settings') {

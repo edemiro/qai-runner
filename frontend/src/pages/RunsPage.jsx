@@ -943,7 +943,14 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
               : value === 'ungraded'
                 ? runs.filter((run) => !run.priority).length
                 : runs.filter((run) => run.priority === value).length;
-            if (!count && value !== 'all') return null;
+            /* A chip with nothing behind it is noise — unless it is the one
+               doing the filtering. Switching platform recounts every chip, so
+               a priority that exists on Web and not on Mobile vanished while
+               it was still narrowing the list: the platform tab said 91, the
+               phone tab said 31, the status chips said 31, no priority chip
+               was marked, and the page said "No runs yet". The way out was a
+               control that was no longer on screen. */
+            if (!count && value !== 'all' && priority !== value) return null;
             return (
               <button
                 key={value}
@@ -972,12 +979,27 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
       )}
 
       {filtered.length === 0 ? (
+        /* Three different nothings, and they used to be one. A filter that
+           matched none of what is loaded is undone by clearing a chip; a
+           platform that has never been run is not; and neither is the same as
+           still loading. The one sentence they shared sent the reader to a
+           "Studio" and an "Agent tab" that this product does not have. */
         <div className="empty-state">
-          <Clock size={34} />
-          <h3>{loading ? 'Loading runs…' : 'No runs yet'}</h3>
+          {loading ? <Loader2 size={34} className="spin" /> : <Clock size={34} />}
+          <h3>
+            {loading ? 'Loading runs…'
+              : (filter !== 'all' || priority !== 'all' || debounced)
+                ? 'Nothing matches'
+                : `No ${platform} runs yet`}
+          </h3>
           <p>
-            Connect a device in Studio, then describe a scenario in the Agent tab. Each run lands here with a
-            full report and an exportable script.
+            {loading ? 'Reading the most recent runs.'
+              : (filter !== 'all' || priority !== 'all' || debounced)
+                ? `${runs.length} run${runs.length === 1 ? '' : 's'} here, none of `
+                  + 'them matching the filters above.'
+                : 'Run a Test Set from Test Executions, or drive a session on '
+                  + `${platform === 'mobile' ? 'Mobile' : 'Web'} — every run lands `
+                  + 'here with a full report and an exportable script.'}
           </p>
         </div>
       ) : (

@@ -2751,11 +2751,37 @@ optgroup { color: var(--text-tertiary); }
     grid-template-columns: 62px minmax(0, 1fr) auto;
   }
 
+  /* Named again, because `.app-shell.no-mirror` outranks `.app-shell` and a
+     media query adds no specificity of its own. Measured at 1024px: every
+     page without the phone bezel — eight of the nine — kept a 248px rail
+     holding nine unlabelled icons in empty space, so the layout wasted 186px
+     precisely where the screen had none to spare, while the one page that
+     shows the bezel collapsed to 62px as intended. */
+  .app-shell.no-mirror {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
   .brand-text,
-  .nav-item span,
   .user-text,
   .status-line span {
     display: none;
+  }
+
+  /* Hidden from the eye, not from the machine. `display: none` on the only
+     text in the button took its accessible name with it, and the name fell
+     back to the title hint — so the nav stopped answering to "Web", "Bug
+     Report" and "Settings" and started answering to "Open a page and test
+     it", "Defects raised from failed scenarios" and "Appium server and model
+     provider". */
+  .nav-item span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .nav-item,

@@ -209,7 +209,7 @@ export function ExecutionsPage({
       const data = await api.bugDraft(run.id);
       if (data.existingBugId) {
         toast.info('A bug was already raised for this scenario.');
-        onOpenBugs?.(execution?.kind);
+        onOpenBugs?.(execution?.kind, execution?.os);
         return;
       }
       setDraft({ ...data, title: data.title, detail: data.detail });
@@ -237,7 +237,7 @@ export function ExecutionsPage({
       });
       setDraft(null);
       toast.success('Bug raised.');
-      onOpenBugs?.(execution?.kind);
+      onOpenBugs?.(execution?.kind, execution?.os);
     } catch (err) {
       toast.error(err.message);
     }
@@ -376,8 +376,13 @@ export function ExecutionsPage({
                not. */
             (needle || statusFilter !== 'all') ? (
               <EmptyState icon={Search} title="Nothing matches" compact>
+                {/* What emptied it, rather than assuming it was the box: a
+                    verdict chip on its own produced "none of them matching
+                    what you typed" over an empty search field. */}
                 {onOs.length} execution{onOs.length === 1 ? '' : 's'} here, none
-                of them matching what you typed.
+                of them {needle && statusFilter !== 'all'
+                  ? 'matching what you typed and that verdict'
+                  : needle ? 'matching what you typed' : `${statusFilter}`}.
               </EmptyState>
             ) : (
               <EmptyState icon={ClipboardList} title={`No ${platform} executions`} compact>

@@ -25,6 +25,10 @@ import './test-data.css';
 // what a run would resolve — a name may carry dots and dashes.
 const PLACEHOLDER = /\{\{\s*([\w.-]+)\s*\}\}/g;
 
+// The same character set, anchored: what a name has to be for the pattern
+// above to find it. Kept beside it so the two cannot drift apart.
+const NAMEABLE = /^[\w.-]+$/;
+
 // Every full-width row in the table spans exactly this. A colSpan that
 // disagrees with the header is how a row silently stops lining up, so the
 // count lives in one place rather than being retyped at each of them.
@@ -224,6 +228,18 @@ export function TestDataPage() {
     const key = form.key.trim();
     if (!key) {
       setFormError('Give it a name — this is what a scenario writes between braces.');
+      return;
+    }
+    /* A name the runner's own pattern cannot match is a name nothing will
+       ever answer. The page says as much about a typo — "a name nothing
+       answers is left exactly as written" — and then happily stored
+       `yolcu ad{}ı`, offered a copy button for it, and let it be pasted into
+       a step that would type the braces out. Checked against the same regexp
+       the runner uses, one line above. */
+    if (!NAMEABLE.test(key)) {
+      setFormError('A name can hold letters, digits, dots, dashes and '
+        + 'underscores — no spaces or braces. The runner looks for exactly '
+        + `that between the braces, so {{${key}}} would never be filled in.`);
       return;
     }
     if (form.mode === 'new' && entries.some((entry) => entry.key === key)) {

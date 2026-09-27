@@ -76,7 +76,8 @@ function BugShot({ bugId }) {
   );
 }
 
-export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
+export function BugsPage({ onOpenRun = null, initialPlatform = null,
+                           initialOs = null }) {
   const toast = useToast();
   const [bugs, setBugs] = useState([]);
   const [counts, setCounts] = useState({});
@@ -95,7 +96,10 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null }) {
      iOS bug and an Android one are different code and usually different
      people. Which phone is read off the run that raised the bug; one filed by
      hand has no run and stays on both. */
-  const [os, setOs] = useState('ios');
+  /* Opens on the phone the caller names, when one sent us here. Landing on
+     iOS regardless was how pressing Bug on an Android scenario produced three
+     unrelated iOS bugs and an empty detail pane. */
+  const [os, setOs] = useState(initialOs || 'ios');
   const [osCounts, setOsCounts] = useState(null);
 
   // Bumped to re-read after a change of our own. The fetch itself lives in the
