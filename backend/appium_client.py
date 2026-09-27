@@ -185,6 +185,40 @@ async def activate_app(session_id: str, app_id: str) -> bool:
     return ok
 
 
+async def clear_app(session_id: str, platform: str, app_id: str,
+                    source: Optional[str] = None) -> bool:
+    """Make the app forget everything it has stored.
+
+    Android clears in place. iOS has no such command — XCUITest offers no
+    `clearApp` — so the app is removed and installed again, which is the only
+    thing that empties its container. That needs `source`: where the build
+    came from, which on a cloud session is the upload handle the session was
+    booked with. Without it there is nothing to install back, and saying so is
+    better than appearing to succeed and leaving the app as it was.
+
+    Reinstalling costs the permission prompts and the onboarding walk again.
+    The caller does those anyway on the way back in.
+    """
+    if (platform or "").lower().startswith("ios"):
+        if not source:
+            return False
+        gone, _ = await execute(session_id, "mobile: removeApp",
+                                {"bundleId": app_id, "appId": app_id})
+        if not gone:
+            return False
+        back, _ = await execute(session_id, "mobile: installApp",
+                                {"app": source, "appPath": source})
+        return bool(back)
+
+    ok, _ = await execute(session_id, "mobile: clearApp",
+                          {"appId": app_id, "bundleId": app_id})
+    if ok:
+        return True
+    # The older shape, for an Appium that does not know the newer one.
+    res = await post(f"/session/{session_id}/appium/app/reset", {}, timeout=30.0)
+    return res is not None and res.status_code == 200
+
+
 async def terminate_app(session_id: str, app_id: str) -> bool:
     """Close the app, leaving what it wrote to disk alone.
 

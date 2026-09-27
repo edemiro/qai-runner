@@ -35,6 +35,12 @@ MAX_WORKERS = 8
 
 PLACEHOLDER = re.compile(r"\{\{\s*([\w.-]+)\s*\}\}")
 
+# The tag a scenario carries when it needs the app to have forgotten. Written
+# as a tag rather than a field of its own because tags are already editable
+# beside the scenario, and this is a property of the scenario in the same way
+# "smoke" is — not a new dimension of one.
+FRESH_APP = "fresh-app"
+
 
 def substitute(text: Optional[str], row: Optional[Dict[str, Any]],
                shared: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -909,9 +915,13 @@ async def run_suite(
                 # handle the session was booked with, which names nothing on
                 # the phone — terminating it failed silently and every mobile
                 # set stayed order-dependent.
+                # `appId` comes along as well: clearing on iOS means removing
+                # the app and installing it again, and the upload handle is
+                # the only thing there is to install back.
                 restart = (described.get("bundleId") or described.get("appId"),
                            described.get("platform", ""),
-                           device.session_id)
+                           device.session_id,
+                           described.get("appId"))
             except Exception:  # noqa: BLE001
                 restart = None
 
@@ -920,10 +930,24 @@ async def run_suite(
                 # opened on the app's own screen, and closing it again only to
                 # reopen it would cost a restart for nothing. From the second
                 # on it is what keeps one scenario's leftovers — a destination
+                # (see below for the one case that does want it first)
                 # still filled in, a panel left open — out of the next one.
-                if index and restart and restart[0]:
-                    app_id, platform_name, session_id = restart
-                    await mobile_session.restart_app(session_id, platform_name, app_id)
+                # A scenario whose opening state the app cannot be talked into
+                # — an empty port field, a first-run prompt — says so with the
+                # `fresh-app` tag, and gets the app's stored data cleared as
+                # well as the app restarted. Asked for rather than done every
+                # time, because it costs the onboarding walk and any saved
+                # sign-in. Before the first case too, since the session was
+                # opened on an app that has been used by whatever ran last.
+                wants_clean = FRESH_APP in {
+                    str(tag).strip().lower()
+                    for tag in (execution["case"].get("tags") or [])
+                }
+                if (index or wants_clean) and restart and restart[0]:
+                    app_id, platform_name, session_id, source = restart
+                    await mobile_session.restart_app(
+                        session_id, platform_name, app_id,
+                        wipe=wants_clean, source=source)
                 results.append(
                     await _run_mobile_case(execution, device, suite_run_id, options, queue)
                 )

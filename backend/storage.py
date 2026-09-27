@@ -470,6 +470,31 @@ def _detach_executions_from_suites(conn: sqlite3.Connection) -> None:
 def init_db() -> None:
     with _connect() as conn:
         _ensure_schema(conn)
+        _close_what_this_process_cannot_be_running(conn)
+
+
+def _close_what_this_process_cannot_be_running(conn: sqlite3.Connection) -> None:
+    """Settle runs left open by a process that is no longer here.
+
+    A run is marked running in the database and finished by the task driving
+    it. Kill that process — a crash, a restart, a stopped terminal — and the
+    row stays as it was, for ever. Found on the running app: an execution
+    reading "Running" with a spinner, nothing recorded against it, three and a
+    half days old, and the only thing under the Running filter. Selecting it
+    started a four-second poll that would never end.
+
+    Nothing was in flight when this process started, so anything still open
+    belongs to a process that is gone. Closed as "cancelled", which is the
+    word the runner already uses for a run that stopped without reaching a
+    verdict — and which recordings and reports already know not to learn from.
+    Calling it failed would put a red mark against a scenario nothing judged.
+    """
+    for table in ("runs", "suite_runs"):
+        conn.execute(
+            f"UPDATE {table} SET status = 'cancelled', finished_at = ?"
+            "  WHERE status IN ('running', 'queued')",
+            (time.time(),),
+        )
 
 
 def create_run(
@@ -1006,13 +1031,21 @@ def _bug_os_filter(
 ) -> None:
     """Narrow bugs to one phone, through the run that raised them.
 
-    A bug filed by hand has no run and so no OS. It stays on both sub-tabs
-    rather than being hidden by a question it was never asked — the same rule
-    a Test Set written before the field existed follows.
+    A bug that cannot answer which phone it was found on stays on both
+    sub-tabs, rather than being hidden by a question it was never asked — the
+    same rule a Test Set written before the field existed follows.
+
+    Read off the platform rather than off `run_id`, because those are not the
+    same question. A bug raised by hand has no run id; a bug whose run has
+    since been deleted still has one, pointing at a row that is gone. The
+    escape hatch used to name the first, so the second matched neither branch
+    and was in no list at all — five of twenty mobile bugs, counted by the
+    platform tab and shown by neither sub-tab, while the page's own promise is
+    that a bug reads correctly after its run has been deleted.
     """
     wanted = clean_os(os, kind or "mobile")
     if wanted:
-        where.append("(LOWER(COALESCE(r.platform, '')) = ? OR b.run_id IS NULL)")
+        where.append("(LOWER(COALESCE(r.platform, '')) IN (?, ''))")
         params.append(wanted)
 
 
@@ -1167,7 +1200,12 @@ def bug_counts(kind: Optional[str] = None, os: Optional[str] = None) -> Dict[str
 
 
 def bug_os_counts(kind: str = "mobile") -> Dict[str, int]:
-    """How many bugs sit on each phone, for the sub-tabs above them."""
+    """How many bugs sit on each phone, for the sub-tabs above them.
+
+    Counted the way _bug_os_filter lists them, or the tabs promise a number
+    the list cannot produce. One that names no phone — raised by hand, or left
+    behind by a deleted run — is on both sub-tabs, so it is counted on both.
+    """
     counts = {name: 0 for name in MOBILE_OS}
     where: List[str] = []
     params: List[Any] = []
@@ -1180,9 +1218,14 @@ def bug_os_counts(kind: str = "mobile") -> Dict[str, int]:
             + " GROUP BY 1",
             params,
         ).fetchall()
+    unplaced = 0
     for row in rows:
         if row["os"] in counts:
             counts[row["os"]] = row["n"]
+        elif not row["os"]:
+            unplaced = row["n"]
+    for name in counts:
+        counts[name] += unplaced
     return counts
 
 

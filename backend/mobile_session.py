@@ -110,7 +110,8 @@ HOME_MARKERS = (
 MAX_SKIPS = 8
 
 
-async def restart_app(session_id: str, platform: str, app_id: Optional[str]) -> bool:
+async def restart_app(session_id: str, platform: str, app_id: Optional[str],
+                      wipe: bool = False, source: Optional[str] = None) -> bool:
     """Put the app back on its own first screen, between scenarios.
 
     A web case gets a new browser, so it starts from nothing. Mobile cases
@@ -120,9 +121,20 @@ async def restart_app(session_id: str, platform: str, app_id: Optional[str]) -> 
     is the second scenario reading the first one's leftovers — and it makes
     every mobile set order-dependent.
 
-    Closing and reopening clears what the app holds in memory without touching
-    what it holds on disk, so a saved sign-in survives and a half-filled form
-    does not.
+    Closing and reopening clears what the app holds in memory. It does not
+    clear what it holds on disk, which is more than it sounds: measured on the
+    booker, the destination a scenario picked was still there after a restart,
+    and there is nothing in the app that empties a port field once it is set —
+    the airport screen's only control closes it. So a scenario that needs an
+    empty one cannot establish its own starting state, and a scenario that
+    cannot do that can never be recorded, only re-derived for ever.
+
+    `wipe` is for those: it clears the app's stored data first, so the app
+    comes up as it does on a phone that has never run it. It costs the
+    onboarding walk and any saved sign-in, which is why it is asked for rather
+    than done every time. `source` is where the build came from — an upload
+    handle on a cloud session — and iOS needs it, because clearing there means
+    removing the app and installing it again.
     """
     if not app_id:
         return False
@@ -138,6 +150,14 @@ async def restart_app(session_id: str, platform: str, app_id: Optional[str]) -> 
     try:
         await appium.terminate_app(session_id, app_id)
         await asyncio.sleep(0.6)
+        if wipe and not await appium.clear_app(session_id, platform, app_id,
+                                               source):
+            # Said rather than swallowed: the scenario that asked for this
+            # needs the app to have forgotten, and running it against an app
+            # that remembers fails on its own opening premise — which reads
+            # like a defect in the app rather than a run that was not set up.
+            print(f"[mobile] could not clear {app_id}; the app keeps what it"
+                  " had and a scenario needing a clean one will not hold")
         await appium.activate_app(session_id, app_id)
         await asyncio.sleep(1.2)
         await settle_permissions(session_id, platform, window_s=4.0)

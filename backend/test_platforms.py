@@ -405,3 +405,98 @@ def test_the_web_tab_is_untouched_by_a_phone_asked_for_by_mistake(db):
     phone_run("iOS")
 
     assert [r["id"] for r in db.list_runs(kind="web", os="ios")] == [web]
+
+
+def test_a_bug_whose_run_was_deleted_stays_on_both_phones(db):
+    """The page promises a bug reads correctly after its run is deleted.
+
+    Deleting the run was what made it vanish. The escape hatch asked whether
+    the bug had a run id; a bug whose run has been deleted still has one,
+    pointing at a row that is gone, so it matched neither phone and appeared
+    in no list at all. Measured on the running app: five of twenty mobile
+    bugs, counted by the platform tab and shown by neither sub-tab.
+    """
+    run_id = phone_run("Android", "failed")
+    orphan = db.create_bug(title="its run is gone", run_id=run_id)
+    db.delete_run(run_id)
+
+    assert orphan in [b["id"] for b in db.list_bugs(kind="mobile", os="ios")]
+    assert orphan in [b["id"] for b in db.list_bugs(kind="mobile", os="android")]
+
+
+def test_the_phone_counts_match_what_the_phone_tabs_list(db):
+    """A tab that says 3 and lists 2 is worse than one that says nothing."""
+    db.create_bug(title="ios", run_id=phone_run("iOS", "failed"))
+    db.create_bug(title="android", run_id=phone_run("Android", "failed"))
+    gone = phone_run("Android", "failed")
+    db.create_bug(title="orphan", run_id=gone)
+    db.delete_run(gone)
+    db.create_bug(title="by hand", kind="mobile")
+
+    counts = db.bug_os_counts()
+    for phone in ("ios", "android"):
+        assert counts[phone] == len(db.list_bugs(kind="mobile", os=phone)), phone
+
+
+def test_every_mobile_bug_is_on_at_least_one_phone_tab(db):
+    """The property that was broken: a bug the platform tab counts must be
+    reachable somewhere."""
+    db.create_bug(title="ios", run_id=phone_run("iOS", "failed"))
+    gone = phone_run("Android", "failed")
+    db.create_bug(title="orphan", run_id=gone)
+    db.delete_run(gone)
+    db.create_bug(title="by hand", kind="mobile")
+
+    everything = {b["id"] for b in db.list_bugs(kind="mobile")}
+    shown = {b["id"] for phone in ("ios", "android")
+             for b in db.list_bugs(kind="mobile", os=phone)}
+    assert everything - shown == set()
+
+
+def test_a_run_left_open_by_a_dead_process_is_settled_at_startup(db):
+    """A run is marked running here and finished by the task driving it.
+
+    Kill that task — a crash, a restart, a closed terminal — and the row stays
+    as it was. Found on the running app: an execution reading "Running" with a
+    spinner, nothing recorded against it, three and a half days old, and the
+    only thing under the Running filter. Selecting it started a four-second
+    poll that would never end.
+    """
+    stuck = db.create_run("left running")
+    finished = db.create_run("finished properly")
+    db.finish_run(finished, "passed")
+
+    db._schema_ready = False
+    db.init_db()
+
+    assert db.get_run(stuck)["status"] == "cancelled"
+    assert db.get_run(stuck)["finished_at"]
+    assert db.get_run(finished)["status"] == "passed", "a real verdict stands"
+
+
+def test_an_execution_left_open_is_settled_too(db):
+    suite_id = db.create_suite("Set")
+    stuck = db.create_suite_run(suite_id, "Execution")
+
+    db._schema_ready = False
+    db.init_db()
+
+    assert db.get_suite_run(stuck)["status"] == "cancelled"
+
+
+def test_a_settled_run_teaches_the_recordings_nothing(db):
+    """Cancelled is the word the runner already uses for a run that reached no
+    verdict, and promote_recording already refuses to learn from one. Calling
+    it failed would have put a red mark against a scenario nothing judged."""
+    suite_id = db.create_suite("Set")
+    case_id = db.add_case(suite_id, "Scenario", "goal",
+                          steps=[{"action": "a", "expected": "b"}])
+    run_id = db.create_run("g")
+    db.add_step(run_id, action="click", status="passed", scenario_idx=1,
+                element={"xpath": "#a", "label": "a"})
+
+    db._schema_ready = False
+    db.init_db()
+
+    assert db.promote_recording(run_id, case_id) == 0
+    assert not db.get_case(case_id)["steps"][0].get("recorded")

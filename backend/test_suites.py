@@ -885,3 +885,20 @@ def test_clearing_the_tags_is_still_an_edit_that_lands():
     suite_id = storage.create_suite("Homepage", tags=["smoke", "ow"])
     storage.update_suite(suite_id, tags=[])
     assert storage.get_suite(suite_id)["tags"] == []
+
+
+# --------------------------------------------------------------------------- #
+# A scenario that needs the app to have forgotten
+# --------------------------------------------------------------------------- #
+
+def test_the_fresh_app_tag_is_read_off_the_scenarios_tags():
+    """Written as a tag rather than a field of its own: it is a property of
+    the scenario the same way "smoke" is, and tags are already editable
+    beside it."""
+    def wants(tags):
+        return runner.FRESH_APP in {str(t).strip().lower() for t in tags}
+
+    assert wants(["fresh-app"])
+    assert wants(["smoke", "Fresh-App"]), "however it was typed"
+    assert not wants(["smoke", "regression"])
+    assert not wants([])

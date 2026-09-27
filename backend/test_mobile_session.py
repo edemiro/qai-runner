@@ -380,3 +380,154 @@ class StartingEachScenarioFromTheSamePlace(unittest.IsolatedAsyncioTestCase):
              patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
             self.assertFalse(await mobile_session.restart_app("s", "iOS", "bs://x"))
         kill.assert_not_awaited()
+
+
+class WhenAScenarioNeedsAnAppThatHasForgotten(unittest.IsolatedAsyncioTestCase):
+    """Some opening states cannot be reached by driving the app.
+
+    Measured on the booker: a scenario picked ESB as the destination, and the
+    next run of the scenario that needs an empty destination found ESB still
+    there. A restart does not help — that value is on disk — and nothing in
+    the app empties a port field once it is set; the airport screen's only
+    control closes it. So the scenario fails on its own opening premise every
+    time, and reads like a defect in the app.
+    """
+
+    def _restart(self, **extra):
+        """restart_app with everything around it stubbed out."""
+        return patch.multiple(
+            mobile_session,
+            settle_permissions=AsyncMock(return_value=0),
+            settle_onboarding=AsyncMock(return_value=0),
+            **extra,
+        )
+
+    async def test_asking_for_a_clean_app_clears_it_before_it_comes_back(self):
+        order = []
+        with self._restart(), \
+             patch.object(mobile_session.appium, "terminate_app",
+                          AsyncMock(side_effect=lambda *a: order.append("terminate"))), \
+             patch.object(mobile_session.appium, "clear_app",
+                          AsyncMock(side_effect=lambda *a: order.append("clear") or True)), \
+             patch.object(mobile_session.appium, "activate_app",
+                          AsyncMock(side_effect=lambda *a: order.append("activate"))), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            ok = await mobile_session.restart_app(
+                "s", "Android", "com.thy.app", wipe=True)
+        self.assertTrue(ok)
+        self.assertEqual(order, ["terminate", "clear", "activate"],
+                         "cleared while it is closed, not while it is running")
+
+    async def test_an_ordinary_restart_leaves_what_the_app_stored(self):
+        """A saved sign-in is worth keeping, so this is asked for, not
+        assumed."""
+        cleared = AsyncMock(return_value=True)
+        with self._restart(), \
+             patch.object(mobile_session.appium, "terminate_app", AsyncMock()), \
+             patch.object(mobile_session.appium, "clear_app", cleared), \
+             patch.object(mobile_session.appium, "activate_app", AsyncMock()), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            await mobile_session.restart_app("s", "Android", "com.thy.app")
+        cleared.assert_not_awaited()
+
+    async def test_a_platform_that_cannot_forget_says_so_and_carries_on(self):
+        """iOS has no equivalent short of reinstalling. The run continues —
+        the scenario will fail on its premise, and the log says why."""
+        with self._restart(), \
+             patch.object(mobile_session.appium, "terminate_app", AsyncMock()), \
+             patch.object(mobile_session.appium, "clear_app",
+                          AsyncMock(return_value=False)), \
+             patch.object(mobile_session.appium, "activate_app", AsyncMock()) as back, \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            ok = await mobile_session.restart_app(
+                "s", "iOS", "com.thy.app", wipe=True)
+        self.assertTrue(ok, "the app still comes back")
+        back.assert_awaited()
+
+    async def test_ios_is_not_asked_to_do_what_it_cannot(self):
+        ran = []
+        with patch.object(mobile_session.appium, "execute",
+                          AsyncMock(side_effect=lambda *a, **k: ran.append(a) or (True, None))):
+            self.assertFalse(
+                await mobile_session.appium.clear_app("s", "iOS", "com.thy.app"))
+        self.assertEqual(ran, [])
+
+
+class WhatForgettingMeansOnEachPlatform(unittest.IsolatedAsyncioTestCase):
+    """Android clears in place. iOS has no such command at all.
+
+    XCUITest offers no clearApp, so the only thing that empties an iOS app's
+    container is removing it and installing it again — which needs the build
+    it came from, and on a cloud session that is the upload handle the session
+    was booked with.
+    """
+
+    async def test_android_clears_where_it_stands(self):
+        ran = []
+
+        async def execute(_sid, script, args=None):
+            ran.append((script, args))
+            return True, None
+
+        with patch.object(mobile_session.appium, "execute", execute):
+            ok = await mobile_session.appium.clear_app(
+                "s", "Android", "com.thy.app", "bs://abc")
+        self.assertTrue(ok)
+        self.assertEqual([script for script, _ in ran], ["mobile: clearApp"],
+                         "not removed and reinstalled, which costs a minute")
+
+    async def test_ios_removes_and_installs_again(self):
+        ran = []
+
+        async def execute(_sid, script, args=None):
+            ran.append((script, args))
+            return True, None
+
+        with patch.object(mobile_session.appium, "execute", execute):
+            ok = await mobile_session.appium.clear_app(
+                "s", "iOS", "com.thy.app", "bs://abc")
+        self.assertTrue(ok)
+        self.assertEqual([script for script, _ in ran],
+                         ["mobile: removeApp", "mobile: installApp"])
+        self.assertEqual(ran[1][1]["app"], "bs://abc",
+                         "installed back from where it came")
+
+    async def test_ios_with_nothing_to_install_back_refuses(self):
+        """Removing the app and failing to reinstall it would leave the phone
+        without the thing under test — worse than not clearing."""
+        touched = AsyncMock(return_value=(True, None))
+        with patch.object(mobile_session.appium, "execute", touched):
+            self.assertFalse(await mobile_session.appium.clear_app(
+                "s", "iOS", "com.thy.app", None))
+        touched.assert_not_awaited()
+
+    async def test_ios_that_will_not_uninstall_is_not_left_half_done(self):
+        ran = []
+
+        async def execute(_sid, script, args=None):
+            ran.append(script)
+            return script != "mobile: removeApp", None
+
+        with patch.object(mobile_session.appium, "execute", execute):
+            self.assertFalse(await mobile_session.appium.clear_app(
+                "s", "iOS", "com.thy.app", "bs://abc"))
+        self.assertEqual(ran, ["mobile: removeApp"], "no install attempted")
+
+    async def test_the_install_handle_reaches_the_platform_call(self):
+        """It travels restart_app -> clear_app; losing it there was how iOS
+        silently kept its data."""
+        seen = {}
+
+        async def clear(_sid, platform, app_id, source=None):
+            seen.update(platform=platform, app_id=app_id, source=source)
+            return True
+
+        with patch.object(mobile_session.appium, "clear_app", clear), \
+             patch.object(mobile_session.appium, "terminate_app", AsyncMock()), \
+             patch.object(mobile_session.appium, "activate_app", AsyncMock()), \
+             patch.object(mobile_session, "settle_permissions", AsyncMock(return_value=0)), \
+             patch.object(mobile_session, "settle_onboarding", AsyncMock(return_value=0)), \
+             patch.object(mobile_session.asyncio, "sleep", AsyncMock()):
+            await mobile_session.restart_app(
+                "s", "iOS", "com.thy.app", wipe=True, source="bs://abc")
+        self.assertEqual(seen["source"], "bs://abc")
