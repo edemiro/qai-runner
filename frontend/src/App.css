@@ -7150,3 +7150,37 @@ textarea,
   color: var(--text-tertiary);
   font-style: italic;
 }
+
+/* The app moved and the run kept up. Drawn as a note rather than a warning:
+   it is not a problem, it is the thing the product is for — and it was
+   happening in silence, readable only by opening the database. */
+.scenario-step-healed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--info-ink, var(--accent));
+  margin-top: 2px;
+}
+
+/* A run the site would not let in. Neither green nor red on purpose: it
+   reached no verdict, and counting it as a failure is what makes a pass rate
+   describe the bot protection's mood rather than the product's quality. */
+.execution-bar-blocked {
+  background: var(--warning-ink, var(--warning));
+  opacity: 0.55;
+}
+
+.execution-score-text .blocked {
+  color: var(--warning-ink, var(--warning));
+}
+
+.scenario-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning-ink, var(--warning));
+}

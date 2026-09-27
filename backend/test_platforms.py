@@ -500,3 +500,47 @@ def test_a_settled_run_teaches_the_recordings_nothing(db):
 
     assert db.promote_recording(run_id, case_id) == 0
     assert not db.get_case(case_id)["steps"][0].get("recorded")
+
+
+def test_a_refused_run_is_counted_apart_from_a_failing_one(db):
+    """A run the site would not let in is not a failing test.
+
+    The first time these were not separated, a critical bug was raised against
+    an airline's website for a button that was grey only because a data call
+    had been refused. A pass rate that mixes them measures the mood of the bot
+    protection rather than the quality of what is under test.
+    """
+    suite_id = db.create_suite("Set")
+    execution = db.create_suite_run(suite_id, "Run")
+    for status, blocked in (("passed", False), ("failed", False),
+                            ("failed", True), ("failed", True)):
+        run_id = db.create_run("g")
+        db.link_run_to_suite(run_id, execution, None, title="s")
+        db.finish_run(run_id, status, blocked=blocked)
+
+    summary = db.get_suite_run(execution)
+    assert summary["passed"] == 1
+    assert summary["failed"] == 1, "the refused ones are not failures"
+    assert summary["blocked"] == 2
+
+
+def test_being_refused_does_not_hide_the_run_from_someone_reading_failures(db):
+    """It did end without a verdict, so it keeps its status — only the
+    counting changes."""
+    run_id = db.create_run("g")
+    db.finish_run(run_id, "failed", blocked=True)
+
+    run = db.get_run(run_id)
+    assert run["status"] == "failed"
+    assert run["blocked"] == 1
+
+
+def test_closing_a_run_twice_does_not_lose_the_refusal(db):
+    """A run is finished by the agent and then again by the suite runner, and
+    the second call is the one that usually knows nothing — the same reason
+    the error is COALESCEd rather than written."""
+    run_id = db.create_run("g")
+    db.finish_run(run_id, "failed", blocked=True)
+    db.finish_run(run_id, "failed")
+
+    assert db.get_run(run_id)["blocked"] == 1

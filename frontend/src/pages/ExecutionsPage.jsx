@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Ban, Bug, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock, Download, Loader2,
-  Radio, Search, Square, Trash2, X, XCircle,
+  Radio, Search, ShieldOff, Square, Trash2, Wrench, X, XCircle,
 } from 'lucide-react';
 
 import { EmptyState } from '../components/EmptyState';
@@ -457,10 +457,22 @@ export function ExecutionsPage({
                         className="execution-bar-fail"
                         style={{ width: `${(execution.failed / Math.max(1, execution.runs.length)) * 100}%` }}
                       />
+                      {/* Its own band, neither green nor red: these runs
+                          reached no verdict because the site would not let
+                          them in, and colouring them as failures is what
+                          makes a pass rate describe the bot protection's mood
+                          instead of the product's quality. */}
+                      <div
+                        className="execution-bar-blocked"
+                        style={{ width: `${((execution.blocked || 0) / Math.max(1, execution.runs.length)) * 100}%` }}
+                      />
                     </div>
                     <span className="execution-score-text">
                       <strong>{execution.passed}</strong> passed
                       {execution.failed > 0 && <> · <strong className="fail">{execution.failed}</strong> failed</>}
+                      {execution.blocked > 0 && (
+                        <> · <strong className="blocked">{execution.blocked}</strong> blocked</>
+                      )}
                       {' '}of {execution.runs.length}
                     </span>
                   </div>
@@ -566,10 +578,26 @@ export function ExecutionsPage({
                       #{run.case_idx ?? index + 1}
                     </span>
                     <div className="scenario-body">
-                      <span className="scenario-title">{run.title}</span>
+                      <span className="scenario-title">
+                        {run.title}
+                        {/* Said on the row, not only in the error underneath:
+                            a reader scanning a column of red needs to know
+                            which of them were never given the chance. */}
+                        {run.blocked === 1 && (
+                          <span className="scenario-blocked" title="The site refused this run its data">
+                            <ShieldOff size={11} />
+                            Blocked
+                          </span>
+                        )}
+                      </span>
                       <span className="scenario-meta">
                         {run.step_count} step{run.step_count === 1 ? '' : 's'}
                         {run.failed_count ? ` · ${run.failed_count} failed` : ''}
+                        {/* Beside the failures on purpose: a scenario that
+                            passed with two steps healed is a different piece
+                            of news from one that just passed, and it is the
+                            news this product exists to deliver. */}
+                        {run.healed_steps ? ` · ${run.healed_steps} healed` : ''}
                         {' · '}{duration(run.duration_ms)}
                         {run.dataset_row ? ` · ${JSON.stringify(run.dataset_row)}` : ''}
                       </span>
@@ -644,6 +672,18 @@ export function ExecutionsPage({
                                   </span>
                                   <div>
                                     <span className="scenario-step-action">{step.action}</span>
+                                    {/* The app moved and the run kept up. It
+                                        was doing this in silence, readable
+                                        only in the database — and it is the
+                                        difference between a suite that breaks
+                                        on a redesign and one that does not. */}
+                                    {step.healed === 1 && (
+                                      <span className="scenario-step-healed">
+                                        <Wrench size={11} />
+                                        Healed
+                                        {step.healed_note ? ` — ${step.healed_note}` : ''}
+                                      </span>
+                                    )}
                                     {/* A flow is judged where it arrives, so a
                                         step on the way can be red inside a run
                                         that passed. Said here, because

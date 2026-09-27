@@ -582,3 +582,49 @@ def test_a_stale_recording_on_a_step_that_failed_is_still_dropped(db, case):
     }])
     db.promote_recording(run_id, case)
     assert not db.get_case(case)["steps"][0].get("recorded")
+
+
+# --------------------------------------------------------------------------- #
+# Healing is the argument, so it has to be readable
+# --------------------------------------------------------------------------- #
+
+def test_a_step_that_had_to_be_found_again_says_so(db, case):
+    """The product's claim is that it keeps up when the app moves.
+
+    It was doing exactly that and saying nothing: a recording that no longer
+    fitted was dropped, the model worked the step out again, the recording was
+    refreshed, and the only way to know any of it had happened was to read the
+    steps table by hand.
+    """
+    run_id = a_run(case, status="passed")
+    row = storage.start_scenario_step(run_id, 1, "Devam et'e bas")
+    storage.finish_scenario_step(
+        row, "passed", healed=True,
+        healed_note='"Devam et" at #old is now "Continue" at #new')
+
+    step = storage.list_scenario_steps(run_id)[0]
+    assert step["healed"] == 1
+    assert "#new" in step["healed_note"]
+
+
+def test_a_step_that_replayed_cleanly_is_not_called_healed(db, case):
+    """Otherwise the number means nothing — every recorded step would carry
+    it, and a report that says everything moved says nothing moved."""
+    run_id = a_run(case, status="passed")
+    row = storage.start_scenario_step(run_id, 1, "Tek yön seç")
+    storage.finish_scenario_step(row, "passed")
+
+    assert storage.list_scenario_steps(run_id)[0]["healed"] == 0
+
+
+def test_the_run_counts_the_steps_that_moved(db, case):
+    """Counted at the step, not at the action: the action count answers how
+    often a selector was re-found, this answers how much of the scenario had
+    moved since it last ran."""
+    run_id = a_run(case, status="passed")
+    for idx, healed in ((1, True), (2, False), (3, True)):
+        row = storage.start_scenario_step(run_id, idx, f"step {idx}")
+        storage.finish_scenario_step(row, "passed", healed=healed,
+                                     healed_note="moved" if healed else None)
+
+    assert storage.get_run(run_id)["healed_steps"] == 2

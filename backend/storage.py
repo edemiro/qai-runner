@@ -277,6 +277,18 @@ MIGRATIONS = [
     # Defaults to 1 so every step recorded before this reads as judged, which
     # is what it was.
     ("scenario_steps", "judged", "INTEGER NOT NULL DEFAULT 1"),
+    # Whether the recording for this step no longer fitted the screen and the
+    # model found the way again. The product's whole argument is that it heals
+    # rather than breaking, and it was doing exactly that in silence — visible
+    # only by reading the steps table by hand. The note says what moved.
+    ("scenario_steps", "healed", "INTEGER NOT NULL DEFAULT 0"),
+    ("scenario_steps", "healed_note", "TEXT"),
+    # Whether the site refused this run its data rather than the run finding a
+    # defect. Kept beside the status rather than replacing it: the run did end
+    # without a verdict, and a reader filtering for failures should still see
+    # it — but a pass rate that counts it as a failure describes the site's
+    # bot protection, not the product under test.
+    ("runs", "blocked", "INTEGER NOT NULL DEFAULT 0"),
     # Positive / Negative / Boundary. A suite of happy paths proves the feature
     # works when used correctly and nothing about what happens when it is not.
     ("suite_cases", "scenario_type", "TEXT"),
@@ -532,6 +544,7 @@ def finish_run(
     status: str,
     error: Optional[str] = None,
     verdict_note: Optional[str] = None,
+    blocked: bool = False,
 ) -> None:
     with _connect() as conn:
         conn.execute(
@@ -540,11 +553,16 @@ def finish_run(
             # suite runner closes it again with whatever it knows, which for an
             # ordinary scenario failure is nothing. Writing that None over the
             # agent's reason is why failed runs showed an empty error.
+            # `blocked` is ORed rather than written: like the error above, a
+            # run is closed twice, and the second call is the one that usually
+            # knows nothing.
             """UPDATE runs SET status = ?, finished_at = ?,
                                error = COALESCE(?, error),
-                               verdict_note = COALESCE(?, verdict_note)
+                               verdict_note = COALESCE(?, verdict_note),
+                               blocked = MAX(blocked, ?)
                WHERE id = ?""",
-            (status, time.time(), error, verdict_note, run_id),
+            (status, time.time(), error, verdict_note,
+             1 if blocked else 0, run_id),
         )
 
 
@@ -845,6 +863,11 @@ def get_run(run_id: str, include_screenshots: bool = False) -> Optional[Dict[str
     run["pageEvents"] = list_page_events(run_id)
     run["artifacts"] = list_artifacts(run_id)
     run["scenarioSteps"] = list_scenario_steps(run_id)
+    # Counted at the step, which is the unit a scenario is read in. The count
+    # above it is of driver actions and answers a different question — how
+    # often a selector was re-found — where this one answers "how much of this
+    # scenario had moved since it last ran".
+    run["healed_steps"] = sum(1 for s in run["scenarioSteps"] if s.get("healed"))
     return run
 
 
@@ -877,13 +900,25 @@ def start_scenario_step(
 def finish_scenario_step(
     step_row_id: int, status: str, message: Optional[str] = None,
     actions_used: Optional[int] = None, duration_ms: Optional[int] = None,
+    healed: bool = False, healed_note: Optional[str] = None,
 ) -> None:
+    """Close a scenario step, saying whether it had to be found again.
+
+    `healed` is the product's own selling point and it was invisible: a step
+    whose recording no longer fitted the screen was quietly re-derived by the
+    model, the recording was refreshed, and the report said nothing — the only
+    way to know it had happened was to read the steps table. A report that
+    says "the Continue button moved" is the sentence a test lead wants; the
+    work behind it was already being done.
+    """
     with _connect() as conn:
         conn.execute(
             """UPDATE scenario_steps
-                  SET status = ?, message = ?, actions_used = ?, duration_ms = ?
+                  SET status = ?, message = ?, actions_used = ?,
+                      duration_ms = ?, healed = ?, healed_note = ?
                 WHERE id = ?""",
-            (status, message, actions_used, duration_ms, step_row_id),
+            (status, message, actions_used, duration_ms,
+             1 if healed else 0, healed_note, step_row_id),
         )
 
 
@@ -2113,7 +2148,13 @@ def get_suite_run(suite_run_id: str) -> Optional[Dict[str, Any]]:
                       COALESCE(r.case_layer, c.layer)       AS layer,
                       (SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count,
                       (SELECT COUNT(*) FROM steps s
-                        WHERE s.run_id = r.id AND s.status = 'failed') AS failed_count
+                        WHERE s.run_id = r.id AND s.status = 'failed') AS failed_count,
+                      -- How much of this scenario had moved since it last ran.
+                      -- On the row beside the failures, because a scenario
+                      -- that passed with two steps healed is different news
+                      -- from one that simply passed.
+                      (SELECT COUNT(*) FROM scenario_steps ss
+                        WHERE ss.run_id = r.id AND ss.healed = 1) AS healed_steps
                FROM runs r
                LEFT JOIN suite_cases c ON c.id = r.case_id
                WHERE r.suite_run_id = ?
@@ -2136,7 +2177,14 @@ def get_suite_run(suite_run_id: str) -> Optional[Dict[str, Any]]:
     result["suite_exists"] = suite is not None
     result["runs"] = [_row_to_run(r) for r in run_rows]
     result["passed"] = sum(1 for r in result["runs"] if r["status"] == "passed")
-    result["failed"] = sum(1 for r in result["runs"] if r["status"] == "failed")
+    # A run the site would not let in is not a failing test. Counted apart,
+    # because a pass rate that mixes the two measures the environment's mood
+    # rather than the product's quality — and because the first time this was
+    # not separated, a critical bug was raised against an airline's website
+    # for a button that was grey only because a data call had been refused.
+    result["blocked"] = sum(1 for r in result["runs"] if r.get("blocked"))
+    result["failed"] = sum(1 for r in result["runs"]
+                           if r["status"] == "failed" and not r.get("blocked"))
     started, finished = result.get("started_at"), result.get("finished_at")
     result["duration_ms"] = int((finished - started) * 1000) if started and finished else None
     return result

@@ -398,6 +398,12 @@ async def _execute_one(
     target: Optional[WebTarget] = None
     status = "failed"
     error: Optional[str] = None
+    # Whether the site refused this run its data. Kept apart from the status
+    # so a pass rate measures the product rather than the mood of its bot
+    # protection — the first time the two were mixed, a critical bug was
+    # raised against an airline for a button that was grey only because a
+    # data call had been refused.
+    was_blocked = False
     started = time.time()
 
     # Checked before anything is opened: a stopped execution must not spend a
@@ -525,6 +531,7 @@ async def _execute_one(
                     and not e.get("thirdParty")]
         if refusals:
             status = "failed"
+            was_blocked = True
             error = (
                 "The site's bot protection refused this session. The call"
                 " named is the first one refused, not the only one — a"
@@ -569,7 +576,8 @@ async def _execute_one(
                 pass
         _cleanup(staging)
         if run_id:
-            storage.finish_run(run_id, status, error, verdict_note=error)
+            storage.finish_run(run_id, status, error, verdict_note=error,
+                               blocked=was_blocked)
             _keep_what_worked(run_id, case, row)
             _raise_bug_if_it_found_one(run_id, case)
         else:
@@ -614,6 +622,12 @@ async def _run_mobile_case(
     run_id: Optional[str] = None
     status = "failed"
     error: Optional[str] = None
+    # Whether the site refused this run its data. Kept apart from the status
+    # so a pass rate measures the product rather than the mood of its bot
+    # protection — the first time the two were mixed, a critical bug was
+    # raised against an airline for a button that was grey only because a
+    # data call had been refused.
+    was_blocked = False
     started = time.time()
 
     # Checked before anything is opened: a stopped execution must not spend a
@@ -681,7 +695,8 @@ async def _run_mobile_case(
         print(f"[suite] {label} crashed:\n{traceback.format_exc()}")
     finally:
         if run_id:
-            storage.finish_run(run_id, status, error, verdict_note=error)
+            storage.finish_run(run_id, status, error, verdict_note=error,
+                               blocked=was_blocked)
             _keep_what_worked(run_id, case, row)
             _raise_bug_if_it_found_one(run_id, case)
         else:

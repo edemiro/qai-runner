@@ -1841,6 +1841,12 @@ async def run_agent(
     # Whether the step `scenario_row_id` points at has already been resolved.
     # Without it the teardown would close a step the loop had just closed.
     step_closed = False
+    # Whether this step's recording stopped fitting the screen and the model
+    # found the way again, and what it was that moved. Reported, because that
+    # is the difference between a tool that breaks when the app changes and
+    # one that keeps up — and it was happening in silence.
+    healed_here = False
+    heal_note: Optional[str] = None
     step_actions = 0
     step_asserted = False
     step_started = time.monotonic()
@@ -1899,10 +1905,15 @@ async def run_agent(
 
     def open_step(index: int):
         nonlocal step_closed, replay_queue, replayed_actions, screen_at_step_open
+        nonlocal healed_here, heal_note
         entry = scenario_steps[index]
         step_closed = False
         replay_queue = [dict(item) for item in (entry.get("recorded") or [])]
         replayed_actions = 0
+        # Reset per step: the question is whether *this* step had to be found
+        # again, not whether anything in the run did.
+        healed_here = False
+        heal_note = None
         # Taken on the first look after the step opens, and kept so an
         # assertion can be told whether it is proving anything — see
         # `_already_true`.
@@ -1955,6 +1966,7 @@ async def run_agent(
                     scenario_row_id, "skipped" if optional else "failed",
                     message=stalled, actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
+                    healed=healed_here, healed_note=heal_note,
                 )
                 step_closed = True
                 yield _event(
@@ -2098,6 +2110,11 @@ async def run_agent(
                 wrong = _label_moved(snapshot, entry)
                 if wrong is not None:
                     replay_queue.clear()
+                    healed_here = True
+                    heal_note = (
+                        f'"{entry.get("label")}" at {entry.get("selector")} '
+                        f'is now "{wrong}"'
+                    )
                     yield _event(
                         "replay_abandoned", step=step_no,
                         action=entry.get("action"),
@@ -2269,6 +2286,7 @@ async def run_agent(
                     scenario_row_id, status,
                     message=reason or None, actions_used=step_actions,
                     duration_ms=int((time.monotonic() - step_started) * 1000),
+                    healed=healed_here, healed_note=heal_note,
                 )
                 step_closed = True
                 yield _event(
@@ -2431,6 +2449,11 @@ async def run_agent(
             # position it would be in had it done those actions itself.
             if replaying and not result["ok"]:
                 replay_queue.clear()
+                healed_here = True
+                heal_note = heal_note or (
+                    f"the recorded {kind} stopped working: "
+                    f"{str(result['message'])[:160]}"
+                )
                 yield _event(
                     "replay_abandoned", step=step_no, action=kind,
                     message=result["message"],
@@ -2555,6 +2578,7 @@ async def run_agent(
                 message=final_error or "The run ended before this step closed.",
                 actions_used=step_actions,
                 duration_ms=int((time.monotonic() - step_started) * 1000),
+                healed=healed_here, healed_note=heal_note,
             )
         storage.finish_run(run_id, final_status, final_error)
         # Written here rather than per step: the total is what a run costs, and
