@@ -95,6 +95,21 @@ def test_a_stopped_run_is_not_a_defect_at_all():
     assert bug_report.compose(r)["isAppDefect"] is False
 
 
+def test_a_session_the_site_refused_is_not_a_defect_whatever_step_it_was_on():
+    """The first purchase run on the web was refused at its fourth step and
+    filed as "the step's expected result did not hold" — a defect, on a page
+    it never reached. Nothing about the product was tested."""
+    r = run(
+        blocked=1,
+        error="The site's bot protection refused this session. First refused: "
+              "https://nuat.turkishairlines.com/api/v1/availability/price-calendar.",
+        scenarioSteps=[sstep(4, "failed", "Tarih alanını aç", "gün yazar",
+                             "The run ended before this step closed.")],
+    )
+    assert bug_report.classify(r) == "SITE_BLOCKED"
+    assert bug_report.compose(r)["isAppDefect"] is False
+
+
 def test_page_errors_are_recognised_when_nothing_else_failed():
     assert bug_report.classify(
         run(error="13 page error(s) while the run was otherwise green — first: HTTP 500")

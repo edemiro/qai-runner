@@ -37,6 +37,7 @@ CODES: Dict[str, str] = {
     "NAVIGATION_FAILED": "The page could not be reached",
     "PAGE_ERRORS": "The page logged errors while the run was otherwise green",
     "RUN_CANCELLED": "The run was stopped before it finished",
+    "SITE_BLOCKED": "The site's bot protection refused the session",
     "UNCLASSIFIED": "The run failed without a recognised cause",
 }
 
@@ -51,6 +52,11 @@ NOT_APP_DEFECTS = {
     # run failed without a recognised cause". Nobody should get a defect
     # assigned to them because the tool had no idea.
     "UNCLASSIFIED",
+    # The site would not talk to this session. Nothing about the product was
+    # tested, so nothing about the product can be wrong. The first purchase
+    # run on the web was refused at its fourth step and filed as "the step's
+    # expected result did not hold" — a defect, on a page it never reached.
+    "SITE_BLOCKED",
 }
 
 
@@ -61,6 +67,11 @@ def classify(run: Dict[str, Any]) -> str:
     failed says more than the scenario step around it, which says more than the
     run's summary.
     """
+    # Before the evidence: a refused session fails whichever step it was on,
+    # and that step's message says nothing about the refusal.
+    if run.get("blocked"):
+        return "SITE_BLOCKED"
+
     for step in run.get("steps") or []:
         if step.get("status") != "failed":
             continue
