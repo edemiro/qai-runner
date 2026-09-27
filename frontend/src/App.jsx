@@ -9,6 +9,7 @@ import { Sidebar } from './components/Sidebar';
 import { useAgentRun } from './hooks/useAgentRun';
 import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
+import { useAddressBar } from './hooks/useAddressBar';
 import { useToast } from './hooks/useToast';
 import { parseBounds, roleColor } from './lib/elements';
 import { applyEnvironment } from './lib/environments';
@@ -28,7 +29,14 @@ export default function App() {
   const toast = useToast();
   const { theme, toggle: toggleTheme } = useTheme();
 
-  const [activeTab, setActiveTab] = useState('web');
+  /* The page, and whatever is open on it, live in the address bar. Before
+     this every page was the same URL: Back left the product, a reload always
+     came home to the Web workspace, and a failing run could not be sent to
+     the person who needed to read it — which for a team's test tool is most
+     of what a report is for. */
+  const [address, goTo] = useAddressBar('web');
+  const activeTab = address.tab;
+  const setActiveTab = useCallback((tab) => goTo(tab), [goTo]);
   // Which platform Bug Report should open on when a raised bug sends us there,
   // and within Mobile, which phone.
   const [bugsPlatform, setBugsPlatform] = useState(null);
@@ -54,7 +62,11 @@ export default function App() {
   const [hoveredElement, setHoveredElement] = useState(null);
 
   const [fps, setFps] = useState(2);
-  const [selectedRunId, setSelectedRunId] = useState(null);
+  // Derived, not held: two copies of "which run is open" is how the address
+  // bar and the page come to disagree after a Back.
+  const selectedRunId = activeTab === 'runs' ? address.id : null;
+  const setSelectedRunId = useCallback(
+    (runId) => goTo('runs', runId || null), [goTo]);
   // An execution just started elsewhere, to open and follow on the Executions
   // page — starting one should land you where you can watch it.
   const [focusExecutionId, setFocusExecutionId] = useState(null);
@@ -402,7 +414,7 @@ export default function App() {
       }
       agent.start(goal, options);
     },
-    [agent, llmConfigured, toast],
+    [agent, llmConfigured, setActiveTab, toast],
   );
 
   /* Run one saved scenario against the session that is already open, instead
@@ -449,7 +461,7 @@ export default function App() {
       setAgentSubTab('chat');
       startAgent(item.goal, { steps: item.steps || null, on: sessionId });
     },
-    [activeSessionId, activeSession, openWebPage, startAgent, toast],
+    [activeSessionId, activeSession, openWebPage, setActiveTab, startAgent, toast],
   );
 
   // ----------------------------------------------------------------- replay -
@@ -538,15 +550,12 @@ export default function App() {
     return () => { cancelled = true; };
   }, [agentSubTab, agent.status, loadDeviceSuggestions]);
 
-  const openRunReport = useCallback((runId) => {
-    setSelectedRunId(runId);
-    setActiveTab('runs');
-  }, []);
+  const openRunReport = useCallback((runId) => goTo('runs', runId), [goTo]);
 
   const openExecution = useCallback((suiteRunId) => {
     setFocusExecutionId(suiteRunId);
-    setActiveTab('executions');
-  }, []);
+    goTo('executions', suiteRunId);
+  }, [goTo]);
 
   /* Starting a run lands on the workspace, watching it. A suite drives browsers
      of its own, so before this the tester was sent to a list of status chips
@@ -563,7 +572,7 @@ export default function App() {
     setWatchSeen(false);
     setWatchProgress(null);
     setActiveTab('web');
-  }, []);
+  }, [setActiveTab]);
 
   const stopWatching = useCallback(() => {
     setWatchExecutionId(null);
@@ -591,7 +600,7 @@ export default function App() {
   const needsKey = useCallback(() => {
     toast.warning('Choose a model provider and save its API key in Settings first.');
     setActiveTab('settings');
-  }, [toast]);
+  }, [setActiveTab, toast]);
 
   // ------------------------------------------------------------------ views -
   const renderMain = () => {
@@ -621,7 +630,7 @@ export default function App() {
             setBugsOs(os || null);
             setActiveTab('bugs');
           }}
-          focusId={focusExecutionId}
+          focusId={focusExecutionId || (activeTab === 'executions' ? address.id : null)}
           onFocused={clearExecutionFocus}
         />
       );
@@ -777,8 +786,7 @@ export default function App() {
       <Sidebar
         activeTab={activeTab}
         onTabChange={(tab) => {
-          setActiveTab(tab);
-          if (tab === 'runs') setSelectedRunId(null);
+          goTo(tab);
           // Reaching Bug Report from the nav is not following a bug there, so
           // it opens on the default platform rather than on wherever the last
           // raised bug happened to be.
