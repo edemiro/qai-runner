@@ -190,6 +190,17 @@ EXTRACT_JS = r"""
 
   const nodes = [];
   const indexOf = new Map();
+  // Mid-navigation there is no body yet. Reported as busy rather than as an
+  // empty page, so the run waits for the document instead of judging one
+  // that has not arrived — this used to throw out of createTreeWalker.
+  if (!document.body) {
+    return {
+      nodes, busy: 'document not ready',
+      viewport: { width: vw, height: vh },
+      page: { width: 0, height: 0 }, scrollY: 0,
+      url: location.href, title: document.title,
+    };
+  }
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
   let el = document.body;
 
@@ -218,7 +229,14 @@ EXTRACT_JS = r"""
                   el.getAttribute('title') || el.getAttribute('alt') || '';
     const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') ||
                    el.getAttribute('data-cy') || el.getAttribute('data-qa') || '';
-    const value = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? (el.value || '') : '';
+    const value = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? (el.value || '')
+      // A select's value is what its chosen option says, not its value attribute.
+      : el.tagName === 'SELECT' ? ((el.selectedOptions[0] || {}).label || '') : '';
+    // What a select offers, so a step can name a real choice at the first try
+    // rather than learn the list from a failed one.
+    const options = el.tagName === 'SELECT'
+      ? [...el.options].map((o) => (o.label || o.textContent || '').trim()).filter(Boolean).slice(0, 40)
+      : null;
     const interactive = INTERACTIVE_ROLES_JS.has(role);
 
     // Layout-only nodes carry nothing a tester can target. Keep them out; their
@@ -245,6 +263,7 @@ EXTRACT_JS = r"""
       text: text.slice(0, 200) || null,
       label: label.slice(0, 200) || null,
       value: value.slice(0, 200) || null,
+      options,
       selector: cssPath(el, testId),
       bounds: {
         x1: Math.round(rect.left), y1: Math.round(rect.top),
@@ -322,6 +341,8 @@ class WebElement:
         # Keeping the attribute name lets locator.py stay platform-neutral.
         self.xpath: str = raw["selector"]
         self.href: Optional[str] = raw.get("href")
+        # A <select>'s choices. Typing one of them into the select chooses it.
+        self.options: Optional[List[str]] = raw.get("options") or None
         self.enabled: bool = bool(raw.get("enabled", True))
         self.checked: Optional[bool] = raw.get("checked")
         self.displayed = True
@@ -419,6 +440,10 @@ class WebElement:
             res["href"] = self.href
         if self.checked is not None:
             res["checked"] = self.checked
+        if self.options:
+            # So the step names a real choice at the first try; typing one of
+            # these into the select chooses it.
+            res["options"] = self.options
         if not self.enabled:
             res["enabled"] = False
         return res

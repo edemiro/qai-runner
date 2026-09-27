@@ -1328,8 +1328,18 @@ class WebTarget:
                 await locator_handle.click(timeout=12000)
                 message = f'Clicked "{label}"'
             elif kind == "type":
-                await locator_handle.fill(value or "", timeout=12000)
-                message = f'Typed "{value}" into "{label}"'
+                # A <select> cannot be typed into and its options are not
+                # elements on the page, so the model has nothing to click
+                # either. Measured on the payment form: the expiry month and
+                # year are selects, and typing "02" into one cost twelve
+                # actions and the step. Typing into a select chooses.
+                tag = await locator_handle.evaluate("el => el.tagName.toLowerCase()")
+                if tag == "select":
+                    chosen = await self._choose(locator_handle, value or "")
+                    message = f'Chose "{chosen}" in "{label}"'
+                else:
+                    await locator_handle.fill(value or "", timeout=12000)
+                    message = f'Typed "{value}" into "{label}"'
             elif kind == "clear":
                 await locator_handle.fill("", timeout=12000)
                 message = f'Cleared "{label}"'
@@ -1347,3 +1357,53 @@ class WebTarget:
         except Exception as exc:
             detail = str(exc).split("\n")[0][:220]
             return ActionResult(False, f'Could not {kind} "{label}": {detail}', info)
+
+    @staticmethod
+    async def _choose(locator, wanted: str) -> str:
+        """Pick the option of a <select> that means `wanted`; return its label.
+
+        Meaning, not spelling: a step says "02" and the month select may
+        list "2", "02" or "Şubat"; it says "30" and the year select lists
+        "2030". The option's label and value are both tried, exactly first,
+        then as numbers, then as the last digits of a year, then as a word
+        inside the label. When nothing matches, the choices are in the error,
+        so the model's next try is one of them rather than another guess.
+        """
+        options = await locator.evaluate(
+            "el => [...el.options].map(o => ({value: o.value, "
+            "label: (o.label || o.textContent || '').trim()}))"
+        )
+        text = " ".join((wanted or "").split())
+        fold = text.casefold()
+        digits = "".join(ch for ch in text if ch.isdigit())
+
+        def digits_of(option):
+            return "".join(ch for ch in f"{option['label']} {option['value']}" if ch.isdigit())
+
+        pick = None
+        for option in options:
+            if fold and fold in (option["label"].casefold(), option["value"].casefold()):
+                pick = option
+                break
+        if pick is None and digits:
+            for option in options:
+                found = digits_of(option)
+                if found and int(found) == int(digits):
+                    pick = option
+                    break
+            if pick is None and len(digits) == 2:
+                for option in options:
+                    found = digits_of(option)
+                    if len(found) == 4 and found.endswith(digits):
+                        pick = option
+                        break
+        if pick is None and fold:
+            for option in options:
+                if fold in option["label"].casefold():
+                    pick = option
+                    break
+        if pick is None:
+            choices = ", ".join(o["label"] or o["value"] for o in options[:16])
+            raise ValueError(f'no option reads "{wanted}"; the choices are: {choices}')
+        await locator.select_option(value=pick["value"], timeout=12000)
+        return pick["label"] or pick["value"]
