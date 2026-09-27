@@ -6,6 +6,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from .base import ProviderError, Turn, add_usage, image_media_type
 
 # Models whose refusals can be rescued by the server-side fallback chain.
+# Matched by prefix, so a dated or context-suffixed id — claude-opus-5-5,
+# claude-fable-5-1, claude-opus-5[1m] — is recognised without this list
+# having to name every variant the lineup grows.
 _FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
 
 # Thinking counts against max_tokens, and adaptive thinking is on by default on

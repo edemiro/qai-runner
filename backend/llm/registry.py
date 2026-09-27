@@ -37,8 +37,16 @@ CATALOG: List[Dict[str, Any]] = [
             "help": "Only needed for identity-linked keys. Console → Settings → Workspaces.",
             "optional": True,
         },
+        # Newest first, because the list is read top-down by someone deciding
+        # what to spend. Still not a whitelist — the field below takes any id,
+        # which is how a model released this week gets used today.
         "models": [
-            {"id": "claude-opus-5", "note": "Most capable — best at recovering from unexpected screens"},
+            {"id": "claude-opus-5-5", "note": "Newest Opus — best at recovering from unexpected screens"},
+            {"id": "claude-opus-5", "note": "Most capable of the 5 line"},
+            # Named as the gateway this key goes through names it. It lists
+            # `claude-fable-5`, and `claude-fable-5-1` only under an azure_ai/
+            # route — so the suffixed id would have failed here on first use.
+            {"id": "claude-fable-5", "note": "Claude 5 family"},
             {"id": "claude-sonnet-5", "note": "Cheaper, still strong on long runs"},
             {"id": "claude-haiku-4-5", "note": "Fastest and cheapest, for simple flows"},
         ],
