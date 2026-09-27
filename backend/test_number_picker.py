@@ -106,3 +106,152 @@ def test_a_wheel_with_no_bounds_says_so(monkeypatch):
     ok, message = asyncio.run(target._interact("type", Ghost(), "2000"))
     assert not ok
     assert "no bounds" in message
+
+
+# --- the iOS wheel ---------------------------------------------------------- #
+
+class IosWheel:
+    """An XCUIElementTypePickerWheel as the snapshot shows it: its text is
+    the value it is on."""
+    xpath = ("/AppiumAUT[1]/XCUIElementTypeApplication[1]/XCUIElementTypeWindow[1]"
+             "/XCUIElementTypePicker[1]/XCUIElementTypePickerWheel[3]")
+    bounds = {"x1": 0, "y1": 0, "x2": 100, "y2": 200, "width": 100,
+              "height": 200, "cx": 50, "cy": 100}
+
+    def __init__(self, text):
+        self.text = text
+
+    def describe(self):
+        return "year wheel"
+
+
+def _turning(monkeypatch, notches, start):
+    """A wheel that really turns: `notches` in order, `start` where it is."""
+    state = {"at": notches.index(start), "orders": []}
+
+    async def found(session_id, xpath):
+        return "wheel-1"
+
+    async def execute(session_id, script, args=None):
+        assert script == "mobile: selectPickerWheelValue"
+        assert args["element"] == "wheel-1"
+        state["orders"].append(args["order"])
+        step = 1 if args["order"] == "next" else -1
+        state["at"] = min(max(state["at"] + step, 0), len(notches) - 1)
+        return True, None
+
+    class Res:
+        status_code = 200
+
+        def json(self):
+            return {"value": notches[state["at"]]}
+
+    async def get(path, timeout=None, base_url=None):
+        assert path.endswith("/element/wheel-1/attribute/value")
+        return Res()
+
+    async def never(*args, **kwargs):
+        raise AssertionError("a wheel is not typed into through the element endpoint")
+
+    monkeypatch.setattr(appium, "find_element_by_xpath", found)
+    monkeypatch.setattr(appium, "execute", execute)
+    monkeypatch.setattr(appium, "get", get)
+    monkeypatch.setattr(appium, "post", never)
+    return state
+
+
+def test_a_year_wheel_is_turned_up_to_the_year(monkeypatch):
+    state = _turning(monkeypatch, [str(y) for y in range(1990, 2011)], "1998")
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, message = asyncio.run(target._interact("type", IosWheel("1998"), "2000"))
+
+    assert ok, message
+    assert state["orders"] == ["next", "next"]
+    assert message == 'Turned "year wheel" to "2000"'
+
+
+def test_a_month_wheel_knows_which_way_january_is(monkeypatch):
+    months = ["January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December"]
+    state = _turning(monkeypatch, months, "October")
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, _ = asyncio.run(target._interact("type", IosWheel("October"), "Jan"))
+
+    assert ok
+    assert state["orders"] == ["previous"] * 9
+
+
+def test_a_day_wheel_already_there_is_left_alone(monkeypatch):
+    state = _turning(monkeypatch, [str(d) for d in range(1, 32)], "1")
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, _ = asyncio.run(target._interact("type", IosWheel("1"), "01"))
+
+    assert ok
+    assert state["orders"] == []
+
+
+def test_a_value_the_wheel_does_not_have_is_reported(monkeypatch):
+    state = _turning(monkeypatch, [str(y) for y in range(1990, 2011)], "2009")
+    target = MobileTarget("s1", {"platform": "iOS"}, {})
+
+    ok, message = asyncio.run(target._interact("type", IosWheel("2009"), "2030"))
+
+    assert not ok
+    assert 'stops at "2010"' in message
+    assert state["orders"] == ["next"] * 2
+
+
+# --- what a wheel is recorded as ------------------------------------------- #
+
+IOS_PICKER = """
+<AppiumAUT>
+  <XCUIElementTypeApplication name="THY" x="0" y="0" width="390" height="844" visible="true" enabled="true">
+    <XCUIElementTypeWindow x="0" y="0" width="390" height="844" visible="true" enabled="true">
+      <XCUIElementTypeButton name="doneButton" label="Done" x="300" y="500" width="80" height="40" visible="true" enabled="true"/>
+      <XCUIElementTypePicker x="0" y="600" width="390" height="200" visible="true" enabled="true">
+        <XCUIElementTypePickerWheel value="4" x="0" y="600" width="100" height="200" visible="true" enabled="true"/>
+        <XCUIElementTypePickerWheel value="October" x="100" y="600" width="150" height="200" visible="true" enabled="true"/>
+        <XCUIElementTypePickerWheel value="1998" x="250" y="600" width="140" height="200" visible="true" enabled="true"/>
+      </XCUIElementTypePicker>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</AppiumAUT>
+"""
+
+ANDROID_PICKER = """
+<hierarchy rotation="0">
+  <android.widget.FrameLayout bounds="[0,0][1080,2400]" displayed="true">
+    <android.widget.Button bounds="[800,1800][1000,1900]" displayed="true" text="Select" resource-id="ivDone"/>
+    <android.widget.NumberPicker bounds="[0,1000][300,1400]" displayed="true">
+      <android.widget.EditText bounds="[0,1150][300,1250]" displayed="true" text="2014" class="android.widget.EditText"/>
+    </android.widget.NumberPicker>
+  </android.widget.FrameLayout>
+</hierarchy>
+"""
+
+
+def _selectors(xml, platform):
+    from mobile_dom import MobileDOMManager
+    manager = MobileDOMManager(xml, platform, 1080, 2400)
+    return {(e.class_name, e.text): e.selector for e in manager.get_all_elements()}
+
+
+def test_an_ios_wheel_is_recorded_by_its_position_not_its_value():
+    """Named by its value, the year wheel was to be found as "1998" on a run
+    where it opened on 2014."""
+    selectors = _selectors(IOS_PICKER, "iOS")
+    year = selectors[("XCUIElementTypePickerWheel", "1998")]
+    assert year.endswith("XCUIElementTypePickerWheel[3]"), year
+    assert "@text" not in year
+    # A control whose words are its own keeps being found by them.
+    assert selectors[("XCUIElementTypeButton", "Done")] == '//*[@content-desc="doneButton"]'
+
+
+def test_an_android_wheel_is_recorded_by_its_position_not_its_value():
+    selectors = _selectors(ANDROID_PICKER, "Android")
+    year = selectors[("android.widget.EditText", "2014")]
+    assert "NumberPicker" in year and "@text" not in year, year
+    assert selectors[("android.widget.Button", "Select")] == '//*[@resource-id="ivDone"]'

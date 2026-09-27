@@ -35,9 +35,18 @@ def _identities(element: "MobileElement") -> List[tuple]:
         found.append(("resource-id", element.resource_id))
     if element.name:
         found.append(("content-desc", element.name))
-    if element.text and len(element.text) <= NAMEABLE_TEXT:
+    if element.text and len(element.text) <= NAMEABLE_TEXT and not _wheel(element):
         found.append(("text", element.text))
     return [(attr, value) for attr, value in found if _quote(value)]
+
+
+def _wheel(element: "MobileElement") -> bool:
+    """A picker wheel's text is the value it is on, and it is on a different
+    one after every turn. Recorded by that, the year wheel was to be found as
+    "1998" on a run where it opened on 2014 — so a wheel keeps its position."""
+    class_name = element.class_name or ""
+    return ("PickerWheel" in class_name
+            or ("NumberPicker" in (element.xpath or "") and class_name.endswith("EditText")))
 
 
 def _quote(value: str) -> Optional[str]:
