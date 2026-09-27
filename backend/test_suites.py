@@ -84,11 +84,11 @@ def test_a_step_keeps_everything_the_substitution_did_not_touch():
     assert filled[0]["judged"] is False
 
 
-def test_a_step_the_data_rewrote_gives_up_its_recording():
-    """The recording typed what the step used to say.
+def test_a_step_a_dataset_row_rewrote_gives_up_its_recording():
+    """The recording typed what the step said under the previous row.
 
-    Replaying it for a different row fills in the previous passenger or the
-    previous card — the right actions with the wrong values, and green.
+    Replaying it for a different row fills in the previous passenger — the
+    right actions with the wrong values, and green.
     """
     steps = [{
         "action": "Ad alanına {{yolcu.ad}} yaz",
@@ -96,12 +96,12 @@ def test_a_step_the_data_rewrote_gives_up_its_recording():
         "recorded": [{"action": "type", "selector": "#name",
                       "label": "Ad", "value": "Eski"}],
     }]
-    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    filled = runner.substitute_steps(steps, {"yolcu.ad": "Ergün"}, None)
     assert "recorded" not in filled[0]
     assert filled[0]["action"] == "Ad alanına Ergün yaz"
 
 
-def test_only_the_rewritten_step_loses_its_recording():
+def test_only_the_step_the_row_rewrote_loses_its_recording():
     """A scenario is not sent back to the model wholesale over one field."""
     steps = [
         {"action": "Tek yön seç", "expected": "Seçilidir",
@@ -111,9 +111,30 @@ def test_only_the_rewritten_step_loses_its_recording():
          "recorded": [{"action": "type", "selector": "#name",
                        "label": "Ad", "value": "Eski"}]},
     ]
-    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    filled = runner.substitute_steps(steps, {"yolcu.ad": "Ergün"}, None)
     assert filled[0]["recorded"] == steps[0]["recorded"]
     assert "recorded" not in filled[1]
+
+
+def test_a_step_that_names_the_store_keeps_its_recording():
+    """The store says the same thing on every run, so a recording made under
+    it is still right. This used to drop the recording of every step that
+    used a name from the store — the passenger form, eleven actions long,
+    went back to the model on every run of a scenario it already knew."""
+    steps = [{
+        "action": "Ad alanına {{yolcu.ad}} yaz",
+        "expected": "Ad {{yolcu.ad}} olur",
+        "recorded": [{"action": "type", "selector": "#name",
+                      "label": "Ad", "value": "{{yolcu.ad}}"},
+                     {"action": "assert_text", "selector": None,
+                      "label": None, "value": "Ergün"}],
+    }]
+    filled = runner.substitute_steps(steps, None, {"yolcu.ad": "Ergün"})
+    assert filled[0]["action"] == "Ad alanına Ergün yaz"
+    # A value the recording kept by name is filled in like the words were —
+    # which is how a card number is typed without ever being written down.
+    assert [item["value"] for item in filled[0]["recorded"]] == ["Ergün", "Ergün"]
+    assert steps[0]["recorded"][0]["value"] == "{{yolcu.ad}}", "the case is not rewritten"
 
 
 def test_a_case_without_a_dataset_runs_once():
@@ -902,3 +923,56 @@ def test_the_fresh_app_tag_is_read_off_the_scenarios_tags():
     assert wants(["smoke", "Fresh-App"]), "however it was typed"
     assert not wants(["smoke", "regression"])
     assert not wants([])
+
+
+# --------------------------------------------------------------------------- #
+# A value worked out on the day
+# --------------------------------------------------------------------------- #
+
+from datetime import date as _date  # noqa: E402
+
+
+def test_a_date_relative_to_today_is_made_concrete_on_the_day():
+    """"Pick a date a few days from today" was recorded picking the 25th and
+    checking for "25 Eyl" — right for a week. The step is about when, and a
+    recording can only hold what, so the date is not in the step at all: the
+    store holds today+7 and the run gets the real day."""
+    assert runner.computed("today+7", today=_date(2026, 9, 27)) == "4 October 2026"
+    assert runner.computed("today", today=_date(2026, 9, 27)) == "27 September 2026"
+    assert runner.computed("today-1", today=_date(2026, 1, 1)) == "31 December 2025"
+
+
+def test_the_turkish_spelling_and_loose_spacing_work_too():
+    assert runner.computed("bugün + 3", today=_date(2026, 9, 27)) == "30 September 2026"
+    assert runner.computed("Bugun-2", today=_date(2026, 9, 27)) == "25 September 2026"
+
+
+def test_a_value_can_be_years_or_months_from_today():
+    """A child's date of birth kept as `today-8y` is a child's on every run;
+    typed in once as a date, it is an adult's one day and nobody is told."""
+    assert runner.computed("today-8y", today=_date(2026, 9, 27)) == "27 September 2018"
+    assert runner.computed("today-10m", today=_date(2026, 9, 27)) == "27 November 2025"
+    assert runner.computed("bugün-2yıl", today=_date(2026, 9, 27)) == "27 September 2024"
+    assert runner.computed("today+3 ay", today=_date(2026, 9, 27)) == "27 December 2026"
+    assert runner.computed("today+2d", today=_date(2026, 9, 27)) == "29 September 2026"
+    assert runner.computed("bugün-5 gün", today=_date(2026, 9, 27)) == "22 September 2026"
+
+
+def test_a_month_step_lands_on_a_day_the_month_has():
+    assert runner.computed("today+1m", today=_date(2026, 1, 31)) == "28 February 2026"
+    assert runner.computed("today-1y", today=_date(2024, 2, 29)) == "28 February 2023"
+
+
+def test_an_ordinary_value_passes_through_untouched():
+    """Only the relative shape is computed; a card number, a name and a
+    literal date all stay exactly as stored."""
+    for value in ("4111111111111111", "Ergün", "25 September 2026", "today's"):
+        assert runner.computed(value) == value
+
+
+def test_a_computed_value_reaches_the_step_through_the_store():
+    filled = runner.substitute(
+        "Tarih alanını aç ve {{tarih.gidis}} gününü seç",
+        None, {"tarih.gidis": "today+7"})
+    assert "today" not in filled
+    assert "20" in filled, filled  # a real year is in there

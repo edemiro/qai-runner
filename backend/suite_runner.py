@@ -11,12 +11,14 @@ and replay all work on it unchanged.
 """
 
 import asyncio
+import calendar
 import json
 import os
 import re
 import shutil
 import time
 import traceback
+from datetime import date, timedelta
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 from uuid import uuid4
@@ -33,7 +35,9 @@ from drivers.web import WebTarget, run_artifact_dir
 # worker is a full browser with its own renderer processes.
 MAX_WORKERS = 8
 
-PLACEHOLDER = re.compile(r"\{\{\s*([\w.-]+)\s*\}\}")
+# One definition of what a {{name}} looks like: storage reads them too, to
+# tell which recorded values came from the store.
+PLACEHOLDER = storage.PLACEHOLDER
 
 # The tag a scenario carries when it needs the app to have forgotten. Written
 # as a tag rather than a field of its own because tags are already editable
@@ -63,12 +67,69 @@ def substitute(text: Optional[str], row: Optional[Dict[str, Any]],
     def resolve(match):
         name = match.group(1)
         if row and name in row:
-            return str(row[name])
+            return computed(str(row[name]))
         if shared and name in shared:
-            return str(shared[name])
+            return computed(str(shared[name]))
         return match.group(0)
 
     return PLACEHOLDER.sub(resolve, text)
+
+
+# A value that is worked out when the run starts rather than stored: `today`,
+# `today+7`, `bugün-1`, `today-8y`, `today-10m`. Days unless a unit says
+# otherwise; either language, spaces allowed.
+COMPUTED = re.compile(
+    r"^\s*(today|bug[üu]n)\s*(?:([+-])\s*(\d{1,4})\s*([dmy]|g[üu]n|ay|y[ıi]l)?)?\s*$",
+    re.IGNORECASE)
+
+MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+          "August", "September", "October", "November", "December")
+
+
+def computed(value: str, today: Optional[date] = None) -> str:
+    """A stored value that names a day relative to now, made concrete.
+
+    A scenario that says "pick a date a few days from today" was recorded
+    picking the 25th and checking for "25 Eyl", which was right for a week.
+    The step is about *when*, and a recording can only hold *what*. So the
+    date is not written into the step at all: the step names `{{tarih.gidis}}`,
+    the store holds `today+7`, and the run gets "4 October 2026" — a concrete
+    target for the model and a correct assertion, on the day it runs.
+
+    The step's words change with the day, so it is one the model carries out
+    rather than replays. That is the trade: a model call a run for the one
+    step that genuinely is different every day, and recordings for the rest.
+
+    Written as "4 October 2026" — day first, month in full — because it is
+    read by a model looking at a calendar, and that form maps onto every
+    screen this runs against: "4 Eki", "4 OCT 2026", "04.10.2026".
+    """
+    found = COMPUTED.match(value or "")
+    if not found:
+        return value
+    amount = int(found.group(3) or 0) * (-1 if found.group(2) == "-" else 1)
+    unit = (found.group(4) or "d").lower()
+    base = today or date.today()
+    # Years and months are for ages: a child's date of birth kept as
+    # `today-8y` is a child's on every run, where a date typed in once turns
+    # into an adult's one day and nobody is told.
+    if unit in ("y", "yıl", "yil"):
+        when = _months_on(base, amount * 12)
+    elif unit in ("m", "ay"):
+        when = _months_on(base, amount)
+    else:
+        when = base + timedelta(days=amount)
+    return f"{when.day} {MONTHS[when.month - 1]} {when.year}"
+
+
+def _months_on(day: date, months: int) -> date:
+    """The same day of the month, `months` on — or the last day the month
+    has, where that day does not exist: 31 January and a month is 28 (or
+    29) February."""
+    total = day.year * 12 + (day.month - 1) + months
+    year, month = divmod(total, 12)
+    last = calendar.monthrange(year, month + 1)[1]
+    return date(year, month + 1, min(day.day, last))
 
 
 def with_precondition(goal: str, precondition: Optional[str]) -> str:
@@ -114,13 +175,27 @@ def substitute_steps(
         expected = substitute(step.get("expected"), row, shared)
         replaced["action"], replaced["expected"] = action, expected
 
-        # Except where the data changed the step's own words. The recording
-        # typed what the step used to say, so replaying it would fill in the
-        # previous row's passenger or the previous card — right actions,
-        # wrong values, and green. Those steps go back to the model, which
-        # carries them out against the data this run was given.
-        if action != step.get("action") or expected != step.get("expected"):
+        # Except where the *row* changed the step's own words. The recording
+        # typed what the step said under the previous row, so replaying it
+        # would fill in that row's passenger — right actions, wrong values,
+        # and green. Those steps go back to the model.
+        #
+        # The shared store is not that. Its values are the same on every run,
+        # and a recording names them rather than spelling them out (see
+        # storage.named_not_spelled), so it is filled in here the way the
+        # step's own words were. This used to drop the recording for any
+        # step whose words changed at all, which was every step that used a
+        # name from the store — the passenger form, eleven actions long,
+        # went back to the model on every run of a scenario it already knew.
+        if row and (substitute(step.get("action"), row) != step.get("action")
+                    or substitute(step.get("expected"), row) != step.get("expected")):
             replaced.pop("recorded", None)
+        elif replaced.get("recorded"):
+            replaced["recorded"] = [
+                {**item, "value": substitute(item.get("value"), row, shared)}
+                if item.get("value") else item
+                for item in replaced["recorded"]
+            ]
         filled.append(replaced)
     return filled
 

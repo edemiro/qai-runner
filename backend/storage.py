@@ -5,6 +5,7 @@ can be replayed, reported on, or exported as a script.
 """
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -645,6 +646,17 @@ def add_step(
     if not selector and element:
         selector = element.get("xpath") or None
     with _connect() as conn:
+        # What the store keeps secret is named here, never spelled out. The
+        # run typed the card number; the run's log says it typed
+        # {{kart.numara}}. Recordings are built from these rows, so a card
+        # never reaches a scenario either, and neither does the model's
+        # message about typing it.
+        secrets = conn.execute(
+            "SELECT key, value FROM test_data WHERE secret = 1").fetchall()
+        value, message, reason, target = (
+            _named(text, secrets) for text in (value, message, reason, target))
+        element_json = (_named(json.dumps(element, ensure_ascii=False), secrets)
+                        if element else None)
         cursor = conn.execute("SELECT COALESCE(MAX(idx), 0) + 1 AS next FROM steps WHERE run_id = ?", (run_id,))
         idx = cursor.fetchone()["next"]
         cursor = conn.execute(
@@ -654,12 +666,28 @@ def add_step(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, idx, action, target, value, reason, status, message,
-                json.dumps(element, ensure_ascii=False) if element else None,
+                element_json,
                 screenshot, duration_ms, time.time(),
                 selector, 1 if healed else 0, scenario_idx,
             ),
         )
         return cursor.lastrowid
+
+
+def _named(text: Optional[str], secrets) -> Optional[str]:
+    """`text` with each secret in it replaced by the store's name for it."""
+    if not text:
+        return text
+    out = str(text)
+    for row in secrets:
+        spelled = str(row["value"] or "")
+        if not spelled:
+            continue
+        # A short secret — a CVV — is only taken for itself when it is the
+        # whole text. "123" inside a timestamp is not a card.
+        if out == spelled or (len(spelled) >= 6 and spelled in out):
+            out = out.replace(spelled, "{{" + row["key"] + "}}")
+    return out
 
 
 def _row_to_run(row: sqlite3.Row) -> Dict[str, Any]:
@@ -1451,6 +1479,115 @@ MAX_STEPS = 40
 # struggle is not worth replaying — the budget that cuts a step off is 12.
 MAX_RECORDED_ACTIONS = 12
 
+# A step that describes when rather than what: "a few days from today", "a
+# week out", "yarın". Both languages, because the sets are written in both.
+RELATIVE_TO_NOW = re.compile(
+    r"bug[üu]n|toda[yi]|g[üu]n sonra|days? from|hafta sonra|next week"
+    r"|yar[ıi]n|tomorrow|within the next|ileri bir tarih|from now",
+    re.IGNORECASE,
+)
+
+# A value that names a particular day. Deliberately loose: it only has to
+# recognise a moment well enough to notice one has been written down.
+A_PARTICULAR_DAY = re.compile(
+    r"\b\d{1,2}[./\- ]\s*(?:\d{1,2}|Oca|Şub|Mar|Nis|May|Haz|Tem|Ağu|Eyl|Eki"
+    r"|Kas|Ara|Jan|Feb|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+    # "October 4" — the way an iOS calendar names its days.
+    r"|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}\b",
+    re.IGNORECASE,
+)
+
+# A {{name}} in a step, as suite_runner reads them. It defines the same
+# shape; this module cannot import it back.
+PLACEHOLDER = re.compile(r"\{\{\s*([\w.-]+)\s*\}\}")
+
+# A store value that is worked out on the day it is used: `today+7`, `bugün-1`.
+NAMES_A_MOVING_DAY = re.compile(r"^\s*(?:today|bug[üu]n)\b", re.IGNORECASE)
+
+
+def froze_a_moment(step: Dict[str, Any], recorded: List[Dict[str, Any]],
+                   moving_keys=()) -> bool:
+    """Did this recording write down a day the step described only as "soon"?
+
+    A step reading "open the calendar and pick a day a few days from today"
+    was recorded clicking the 25th button and checking the screen said
+    "25 Eyl". That is correct for about a week. It is not a recording that
+    might have gone stale — it is one that is guaranteed to be wrong
+    tomorrow, so replaying it buys a failed assertion, a timeout, and then
+    the model doing the step anyway.
+
+    Better to keep no recording for it. The step costs a model call every
+    run, which is what it costs today, without also paying for the replay
+    that cannot work.
+
+    The words that make a step about *when* may sit in the store rather than
+    in the step: `{{tarih.gidis}}` with the store holding `today+7` is "a
+    week from today" moved one level out. `moving_keys` are the store's
+    names that are worked out on the day, and a step naming one is about
+    when. Measured on the iOS set: the departure-date step named the store,
+    was recorded clicking "Sunday, October 4, 2026" and checking "4 OCT
+    2026", and was kept — its own words never said "today". Checked on the
+    selector as well as the value, because that click's day was in the
+    selector.
+    """
+    words = f"{step.get('action') or ''} {step.get('expected') or ''}"
+    about_when = bool(RELATIVE_TO_NOW.search(words)) or any(
+        name in moving_keys for name in PLACEHOLDER.findall(words))
+    if not about_when:
+        return False
+    return any(
+        A_PARTICULAR_DAY.search(
+            f"{action.get('value') or ''} {action.get('selector') or ''}")
+        for action in recorded)
+
+
+def named_not_spelled(recorded: List[Dict[str, Any]], step: Dict[str, Any],
+                      store: Dict[str, str]) -> List[Dict[str, Any]]:
+    """A recording's values written as the store's names, where they came from it.
+
+    The step says `{{yolcu.ad}}` and the run typed "Ergün". Kept as "Ergün",
+    the recording goes on typing it after the store has said otherwise —
+    right actions, the previous passenger, and green. Kept as `{{yolcu.ad}}`
+    it types whatever the store says on the day, and a card number is never
+    written into a scenario at all: the recording says which card, not what
+    is printed on it.
+
+    Only the names the step itself uses, so a typed "1" is not mistaken for
+    a passenger count that happens to be 1. Whole values first; a name inside
+    a longer value ("Ergün Demiro" on a card) only when the value is long
+    enough not to be there by coincidence.
+    """
+    words = f"{step.get('action') or ''} {step.get('expected') or ''}"
+    names = [name for name in dict.fromkeys(PLACEHOLDER.findall(words))
+             if store.get(name)]
+    if not names:
+        return recorded
+    whole = {store[name]: name for name in names}
+    within = [(store[name], name) for name in names if len(store[name]) >= 4]
+    out = []
+    for action in recorded:
+        spelled = str(action.get("value") or "")
+        if not spelled:
+            out.append(action)
+            continue
+        text = spelled
+        if text in whole:
+            text = "{{" + whole[text] + "}}"
+        else:
+            for value, name in within:
+                text = text.replace(value, "{{" + name + "}}")
+        out.append({**action, "value": text} if text != spelled else action)
+    return out
+
+# Actions that only read the screen. Asking one of these the same question
+# twice in a row has the same answer as asking it once, so the repeat is a
+# round trip that proves nothing. Nothing that changes the screen is in here:
+# two identical taps can be a passenger count going up twice.
+REPEATABLE_CHECKS = {
+    "assert_visible", "assert_text", "assert_absent", "assert_disabled",
+    "assert_no_errors", "assert_visual",
+}
+
 # What a recorded action keeps. Deliberately the minimum needed to perform it
 # again: everything else — the screenshot, the timing, the model's reasoning —
 # belongs to the run that produced it, not to the scenario.
@@ -1465,6 +1602,17 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
     a recording with a hole in it is worse than no recording, because the
     replay would skip a step and then assert against a screen that never
     reached the state the assertion describes.
+
+    A check repeated straight after itself is dropped too. Asking the screen
+    the same question twice in a row has the same answer as asking it once, so
+    every repeat is a device round trip that proves nothing — and on a phone
+    that is about three seconds each. Found across the sets: seventy-three
+    steps carrying a hundred and fifty-four of them, one step asserting the
+    same word eight times over.
+
+    Only checks, and only consecutive ones. Two identical taps can be a
+    passenger count going up twice, and a check after something has happened
+    in between is proving it survived.
     """
     if not isinstance(raw, list):
         return []
@@ -1484,10 +1632,16 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
         # `scroll` act on the page as a whole.
         if not selector and kind not in ACTIONS_WITHOUT_A_TARGET:
             return []
-        actions.append({
+        step = {
             "action": kind, "selector": selector, "value": value,
             "label": (str(entry.get("label") or "").strip())[:120] or None,
-        })
+        }
+        if (kind in REPEATABLE_CHECKS and actions
+                and actions[-1]["action"] == kind
+                and actions[-1]["selector"] == selector
+                and actions[-1]["value"] == value):
+            continue
+        actions.append(step)
         if len(actions) > MAX_RECORDED_ACTIONS:
             return []
     return actions
@@ -1989,6 +2143,14 @@ def promote_recording(run_id: str, case_id: str) -> int:
                 "value": row["value"], "label": row["target"],
             })
 
+        # The store, for two reasons: a value the run typed that came from
+        # it is kept by name (named_not_spelled), and a name worked out on
+        # the day makes its step about *when* (froze_a_moment).
+        store = {row["key"]: str(row["value"] or "")
+                 for row in conn.execute("SELECT key, value FROM test_data")}
+        moving = {name for name, value in store.items()
+                  if NAMES_A_MOVING_DAY.match(value)}
+
         kept = 0
         for position, step in enumerate(steps, start=1):
             proved = (
@@ -1996,7 +2158,14 @@ def promote_recording(run_id: str, case_id: str) -> int:
                 == "passed"
                 and position not in spoiled
             )
-            recorded = clean_recorded(by_step.get(position) or [])
+            recorded = named_not_spelled(
+                clean_recorded(by_step.get(position) or []), step, store)
+            if recorded and froze_a_moment(step, recorded, moving):
+                # Written down, and wrong by tomorrow. Dropped rather than
+                # kept for healing to sort out: this one is not stale by
+                # accident, it is stale by construction.
+                step.pop("recorded", None)
+                continue
             if proved and recorded:
                 # Overwrites a stale recording as well as filling an empty
                 # step: a step whose stored actions were what failed keeps the

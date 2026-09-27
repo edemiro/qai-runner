@@ -628,3 +628,202 @@ def test_the_run_counts_the_steps_that_moved(db, case):
                                      healed_note="moved" if healed else None)
 
     assert storage.get_run(run_id)["healed_steps"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# Asking the same question twice
+# --------------------------------------------------------------------------- #
+
+def test_a_check_repeated_straight_after_itself_is_dropped():
+    """Found across the sets: one step asserted the same word eight times.
+
+    The answer to a question asked twice in a row is the answer to asking it
+    once, so every repeat is a device round trip that proves nothing — about
+    three seconds each on a phone. Seventy-three steps were carrying a hundred
+    and fifty-four of them.
+    """
+    kept = storage.clean_recorded([
+        {"action": "assert_text", "selector": None, "value": "İstanbul"},
+        {"action": "assert_text", "selector": None, "value": "İstanbul"},
+        {"action": "assert_text", "selector": None, "value": "İstanbul"},
+    ])
+    assert len(kept) == 1
+
+
+def test_a_check_after_something_happened_is_proving_it_survived():
+    """Only consecutive repeats go. The same check after a tap is a different
+    question: did it still hold once the screen changed."""
+    kept = storage.clean_recorded([
+        {"action": "assert_text", "selector": None, "value": "IST"},
+        {"action": "click", "selector": "#swap", "label": "Swap"},
+        {"action": "assert_text", "selector": None, "value": "IST"},
+    ])
+    assert [a["action"] for a in kept] == ["assert_text", "click", "assert_text"]
+
+
+def test_two_identical_taps_are_left_alone():
+    """A passenger count going up twice is two taps, and dropping one of them
+    would record a booking for one passenger fewer."""
+    kept = storage.clean_recorded([
+        {"action": "click", "selector": "#plus", "label": "+"},
+        {"action": "click", "selector": "#plus", "label": "+"},
+    ])
+    assert len(kept) == 2
+
+
+def test_the_same_check_on_two_different_things_is_two_checks():
+    kept = storage.clean_recorded([
+        {"action": "assert_text", "selector": None, "value": "IST"},
+        {"action": "assert_text", "selector": None, "value": "ESB"},
+    ])
+    assert len(kept) == 2
+
+
+# --------------------------------------------------------------------------- #
+# A recording that wrote down a moment
+# --------------------------------------------------------------------------- #
+
+def test_a_step_about_soon_does_not_keep_the_day_it_happened_to_pick():
+    """"Open the calendar and pick a day a few days from today" was recorded
+    clicking the 25th button and checking the screen said "25 Eyl". Correct
+    for about a week. Not stale by accident — stale by construction, so
+    replaying it buys a failed assertion, a timeout, and then the model doing
+    the step anyway."""
+    step = {"action": "Tarih alanını aç, bugünden birkaç gün sonrası için "
+                      "müsait bir gün seç",
+            "expected": "Seçilen gün gidiş tarihi alanında yazar."}
+    recorded = [
+        {"action": "click", "selector": "#day", "value": None, "label": "25"},
+        {"action": "assert_text", "selector": None, "value": "25 Eyl",
+         "label": None},
+    ]
+    assert storage.froze_a_moment(step, recorded)
+
+
+def test_a_step_about_a_fixed_date_keeps_its_recording():
+    """A scenario that means the 25th of September means it every time, and
+    throwing its recording away would cost a model call a run for nothing."""
+    step = {"action": "25 Eylül tarihini seç",
+            "expected": "Tarih alanı 25 Eyl gösterir."}
+    recorded = [{"action": "assert_text", "selector": None, "value": "25 Eyl",
+                 "label": None}]
+    assert not storage.froze_a_moment(step, recorded)
+
+
+def test_a_relative_step_that_wrote_down_no_day_is_left_alone():
+    """Opening the calendar is the same gesture whatever the date is."""
+    step = {"action": "Tarih alanını aç ve bugünden bir hafta sonrasını seç",
+            "expected": "Takvim açılır."}
+    recorded = [{"action": "click", "selector": "#dateField", "value": None,
+                 "label": "Tarih"}]
+    assert not storage.froze_a_moment(step, recorded)
+
+
+def test_the_moment_is_recognised_in_either_language():
+    english = {"action": "Pick a departure date about a week from today",
+               "expected": "The field shows the chosen day."}
+    recorded = [{"action": "assert_text", "selector": None,
+                 "value": "4 OCT 2026", "label": None}]
+    assert storage.froze_a_moment(english, recorded)
+
+
+def test_the_moment_is_recognised_when_the_store_names_the_day():
+    """`{{tarih.gidis}}` with the store holding `today+7` is "a week from
+    today" moved one level out. Measured on the iOS set: this step was
+    recorded clicking "Sunday, October 4, 2026" and checking "4 OCT 2026",
+    and kept, because its own words never said today."""
+    step = {"action": "Tap the DEPARTURE DATE field, select {{tarih.gidis}}"
+                      " in the calendar and confirm it.",
+            "expected": "The field shows the chosen day ({{tarih.gidis}})."}
+    recorded = [{"action": "click", "label": None, "value": None,
+                 "selector": '//*[@text="Sunday, October 4, 2026, ₺ 2.000,"]'},
+                {"action": "click", "selector": '//*[@content-desc="doneButton"]',
+                 "label": None, "value": None}]
+    assert storage.froze_a_moment(step, recorded, moving_keys={"tarih.gidis"})
+    # The same recording under a name that holds a fixed value is fine.
+    assert not storage.froze_a_moment(step, recorded, moving_keys=set())
+    # And the day in the *selector* is what gave it away.
+    assert storage.froze_a_moment(step, recorded[:1], moving_keys={"tarih.gidis"})
+
+
+def test_a_step_naming_a_moving_day_loses_its_recording_when_promoted(db, case):
+    db.set_test_data("tarih.gidis", "today+7", "gidis")
+    storage.update_case(case, steps=[{
+        "action": "Takvimden {{tarih.gidis}} gününü seç",
+        "expected": "Seçilen gün ({{tarih.gidis}}) yazar.",
+    }])
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "click", element={"xpath": "#day-4", "label": "4 Eki"})
+    did(run_id, 1, "assert_text", value="4 OCT 2026")
+
+    storage.promote_recording(run_id, case)
+    assert not storage.get_case(case)["steps"][0].get("recorded")
+
+
+def test_a_value_that_came_from_the_store_is_recorded_by_name(db, case):
+    """Kept as "Ergün", the recording goes on typing it after the store has
+    said otherwise. Kept as {{yolcu.ad}} it types whatever the store says on
+    the day — and a card number is never written into a scenario at all."""
+    db.set_test_data("yolcu.ad", "Ergün", None)
+    db.set_test_data("yolcu.soyad", "Demiro", None)
+    db.set_test_data("yolcu.sayi", "1", None)
+    storage.update_case(case, steps=[{
+        "action": "Ad {{yolcu.ad}}, soyad {{yolcu.soyad}} ve kart üstü isim",
+        "expected": "Form dolar",
+    }])
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "type", value="Ergün", element={"xpath": "#name", "label": "Ad"})
+    did(run_id, 1, "type", value="Ergün Demiro",
+        element={"xpath": "#card-name", "label": "Kart üstü isim"})
+    # "1" is in the store too, but this step never names it: a wait of one
+    # second is not a passenger count.
+    did(run_id, 1, "wait", value="1", element={"xpath": None, "label": None})
+
+    storage.promote_recording(run_id, case)
+    values = [a["value"] for a in storage.get_case(case)["steps"][0]["recorded"]]
+    assert values == ["{{yolcu.ad}}", "{{yolcu.ad}} {{yolcu.soyad}}", "1"]
+
+
+def test_a_secret_is_named_in_the_run_log_never_spelled(db):
+    """The run typed the card number; the run's log says it typed
+    {{kart.numara}}. Recordings are built from these rows, so a card never
+    reaches a scenario either."""
+    db.set_test_data("kart.numara", "4111111111111111", "test", secret=True)
+    db.set_test_data("kart.cvv", "123", "test", secret=True)
+    run_id = storage.create_run(goal="a run", kind="web")
+    storage.add_step(
+        run_id, action="type", status="passed", value="4111111111111111",
+        target="Kart numarası", message='Typed "4111111111111111" into "Kart numarası"',
+        element={"xpath": "#card", "label": "Kart numarası"}, scenario_idx=1,
+    )
+    storage.add_step(run_id, action="type", status="passed", value="123",
+                     message='Typed "123" into "CVV"', scenario_idx=1)
+    storage.add_step(run_id, action="wait", status="passed", value="1123",
+                     message="Waited 1123ms", scenario_idx=1)
+
+    steps = storage.get_run(run_id)["steps"]
+    assert steps[0]["value"] == "{{kart.numara}}"
+    assert steps[0]["message"] == 'Typed "{{kart.numara}}" into "Kart numarası"'
+    assert steps[1]["value"] == "{{kart.cvv}}"
+    # A short secret is only taken for itself when it is the whole value:
+    # "123" inside a wait is not a card.
+    assert steps[2]["value"] == "1123"
+    assert steps[2]["message"] == "Waited 1123ms"
+
+
+def test_a_dated_step_loses_its_recording_when_the_run_is_promoted(db, case):
+    """End to end, because the rule is only worth anything where it is read."""
+    storage.update_case(case, steps=[{
+        "action": "Tarih alanını aç, bugünden birkaç gün sonrasını seç",
+        "expected": "Seçilen gün yazar.",
+        "recorded": [{"action": "assert_text", "selector": None,
+                      "value": "25 Eyl", "label": None}],
+    }])
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "assert_text", value="27 Eyl")
+
+    storage.promote_recording(run_id, case)
+    assert not storage.get_case(case)["steps"][0].get("recorded")
