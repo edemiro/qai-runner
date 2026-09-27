@@ -126,6 +126,8 @@ class MobileTarget:
     async def _interact(self, kind: str, element, value: Optional[str]):
         """W3C interaction with a coordinate fallback."""
         label = element.describe()
+        if kind == "type" and "NumberPicker" in (element.xpath or ""):
+            return await self._set_number_picker(element, value, label)
         handle = await appium.find_element_by_xpath(self.session_id, element.xpath)
 
         if handle:
@@ -171,6 +173,32 @@ class MobileTarget:
             return ok, (f'Typed "{value}" into "{label}"' if ok else f'Could not type into "{label}"')
 
         return False, f"Unsupported action: {kind}"
+
+    async def _set_number_picker(self, element, value: Optional[str], label: str):
+        """Type a value into one wheel of an Android date picker.
+
+        A NumberPicker reads its text field only when the field loses focus.
+        Measured on the passenger form's date of birth: W3C setValue put
+        "2000" into the year field, Done was pressed, and the picker stayed
+        on 2014 — four times over, twenty-four actions, the step lost.
+        setValue writes the text without ever focusing the field, so nothing
+        told the picker to read it.
+
+        Done the way a thumb does it: a real tap on the wheel focuses the
+        field (and opens it for typing), the value goes in, and TAB moves
+        focus on — which is the moment the picker takes the value.
+        """
+        bounds = element.bounds
+        if not bounds:
+            return False, f'"{label}" has no bounds to tap'
+        cx, cy = bounds["cx"], bounds["cy"]
+        if not await MobileGestureController.perform_tap(self.session_id, cx, cy):
+            return False, f'Could not focus "{label}"'
+        await asyncio.sleep(0.4)
+        if not await MobileGestureController.perform_type_text(self.session_id, value or ""):
+            return False, f'Could not type into "{label}"'
+        await MobileGestureController.perform_key_event(self.session_id, "android", "tab")
+        return True, f'Set "{label}" to "{value}"'
 
     # --- lifecycle ------------------------------------------------------- #
 

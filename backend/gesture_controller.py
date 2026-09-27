@@ -16,6 +16,9 @@ ANDROID_KEYCODES = {
     "recents": 187,
     "app_switch": 187,
     "enter": 66,
+    # Moves focus to the next field. What a NumberPicker waits for before it
+    # reads what was typed into it — see MobileTarget._set_number_picker.
+    "tab": 61,
     "power": 26,
     "volume_up": 24,
     "volume_down": 25,
