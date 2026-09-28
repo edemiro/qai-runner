@@ -1,4 +1,5 @@
 import re
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
@@ -321,6 +322,10 @@ class MobileDOMManager:
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.snapshot_id = uuid.uuid4().hex[:12]
+        # When this screen was read. A caller deciding whether the reading it
+        # already has is worth reusing needs to know how old it is — see
+        # locator.REUSABLE_SNAPSHOT_SECONDS.
+        self.taken_at = time.monotonic()
         # A page's loading overlay has no equivalent in a view hierarchy: a
         # phone that is busy simply has not sent its next frame. Declared so
         # both screens answer the same call — the two drifting apart is how a

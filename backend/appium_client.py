@@ -321,7 +321,25 @@ async def screen_has_text(session_id: str, platform: str, needles) -> bool:
     return any(needle.lower() in source.lower() for needle in needles)
 
 
-async def get_source(session_id: str) -> Optional[str]:
+# What XCUITest works out while it serialises the screen, and nothing here
+# reads: the tree is parsed by type, name, label, value, enabled, visible and
+# geometry, and its xpaths are built from sibling counts rather than from the
+# `index` attribute. Measured on an iPhone 16 Pro Max, leaving these out took
+# the source from 2.94s to 2.00s with the same 210 elements in it — a third
+# off the most expensive call a mobile run makes, and it makes it constantly.
+_UNREAD_ATTRIBUTES = ("traits", "index", "accessible", "accessibilityContainer")
+
+
+async def get_source(session_id: str, platform: str = "") -> Optional[str]:
+    if (platform or "").lower() == "ios":
+        ok, value = await execute(
+            session_id, "mobile: source",
+            {"format": "xml", "excludedAttributes": list(_UNREAD_ATTRIBUTES)},
+        )
+        if ok and value:
+            return value
+        # Older drivers do not take the arguments; the plain endpoint below
+        # answers the same question, only slower.
     res = await get(f"/session/{session_id}/source", timeout=20.0)
     if res is not None and res.status_code == 200:
         return res.json().get("value")
@@ -389,6 +407,27 @@ async def find_element(session_id: str, using: str, value: str,
 
 async def find_element_by_xpath(session_id: str, xpath: str) -> Optional[str]:
     return await find_element(session_id, "xpath", xpath)
+
+
+async def find_elements(session_id: str, using: str, value: str,
+                        timeout: float = 10.0) -> List[str]:
+    """Every element this locator reaches, by handle.
+
+    Plural on purpose where a recording is being replayed: a name that was
+    one element's alone when it was written down can be shared by the time it
+    is played back, and acting on whichever the device returned first is the
+    blind replay the snapshot path exists to prevent. Two matches means fall
+    back and look properly.
+    """
+    res = await post(f"/session/{session_id}/elements", {"using": using, "value": value},
+                     timeout=timeout)
+    if res is None or res.status_code != 200:
+        return []
+    found = res.json().get("value")
+    if not isinstance(found, list):
+        return []
+    handles = [extract_element_id(item) for item in found if isinstance(item, dict)]
+    return [handle for handle in handles if handle]
 
 
 async def get_active_element(session_id: str) -> Optional[str]:

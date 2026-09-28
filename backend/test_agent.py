@@ -727,11 +727,19 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
             def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
             def visible_text(self): return ["Bir ekran"]
 
+        # Every reading of the screen, counted: on a phone one costs 2.9
+        # seconds, and what a replayed action does *not* ask for is the
+        # saving. See `a recording that names its element reads no screen`.
+        reads = []
+        self.reads = reads
+
         class Target:
             kind, session_id = "web", "replay-test"
             def describe(self): return {"name": "t", "platform": "Web"}
             def is_alive(self): return True
-            async def snapshot(self): return Snapshot()
+            async def snapshot(self):
+                reads.append(1)
+                return Snapshot()
             async def screenshot(self): return None
 
         async def execute(_target, action, _snapshot):
@@ -771,6 +779,36 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asked, [], "the model should not have been asked anything")
         self.assertEqual([kind for kind, _, _ in ran], ["click", "assert_visible"])
         self.assertEqual(self._verdicts(events), [(1, "passed")])
+
+    NAMED = [
+        {"action": "click", "selector": '//*[@resource-id="btnSearch"]',
+         "value": None, "label": "Search Flight"},
+        {"action": "assert_text", "selector": None, "value": "ESB", "label": None},
+    ]
+
+    async def test_a_recording_that_names_its_element_reads_no_screen(self):
+        """The device finds a name by itself and a text check takes its own
+        reading, so the loop's reading is one nobody asked for. Measured on an
+        iPhone 16 Pro Max it is 2.9 seconds, and a booking run took ninety
+        three of them."""
+        await self._run([
+            {"action": "Search", "expected": "Results", "recorded": self.NAMED},
+        ])
+        # One, at the start, proving there is a screen at all to run against.
+        self.assertEqual(len(self.reads), 1)
+
+    async def test_a_recording_that_names_a_position_still_reads_the_screen(self):
+        """A position has to be checked against the screen before it is
+        trusted — that check is why blind replays stopped clicking the wrong
+        airport."""
+        positional = [
+            {"action": "click", "selector": "/hierarchy[1]/android.widget.Button[2]",
+             "value": None, "label": "Search Flight"},
+        ]
+        await self._run([
+            {"action": "Search", "expected": "Results", "recorded": positional},
+        ])
+        self.assertGreater(len(self.reads), 1)
 
     async def test_the_recorded_selector_is_what_gets_acted_on(self):
         _, _, ran = await self._run([

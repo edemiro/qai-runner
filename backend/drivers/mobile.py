@@ -106,7 +106,7 @@ class MobileTarget:
             origin_x, origin_y = bounds["x1"], bounds["y1"]
             width, height = max(bounds["width"], 1), max(bounds["height"], 1)
         else:
-            size = await appium.get_window_size(self.session_id)
+            size = await locator.screen_size(self.session_id)
             width, height = size["width"], size["height"]
 
         ok = await MobileGestureController.perform_scroll(
@@ -133,43 +133,132 @@ class MobileTarget:
         if not element_id and not selector:
             return ActionResult(False, f"Action '{kind}' needs an elementId")
 
-        try:
-            resolved = await locator.resolve(
-                self.session_id, self._platform_cache,
-                element_id=element_id, xpath=selector, snapshot_id=snapshot_id,
-            )
-        except locator.AmbiguousElementError as exc:
-            return ActionResult(False, str(exc))
+        # A recording addresses its element by name, and the device can find a
+        # name on its own. Going through a snapshot for one costs a full page
+        # source — 2.9 seconds on an iPhone 16 Pro Max — to build a tree that
+        # nothing on this path then reads: measured on the booking scenario, a
+        # replayed tap took 6.9 seconds, six of them two readings of the same
+        # screen. Only a recording, which carries a selector and no elementId,
+        # comes through here; the model addresses what it saw in its own
+        # snapshot and goes the careful way below.
+        if element_id is None and locator.names_one_element(selector or ""):
+            straight = await self._act_by_name(kind, selector, value)
+            if straight is not None:
+                return straight
 
-        if resolved is None:
-            return ActionResult(
-                False,
-                f"Element {element_id or selector} never became actionable within 10s",
-            )
+        # Twice at most: the screen the caller already read, then one taken
+        # now. What fails on a remembered screen is tried again on a real one
+        # rather than acted on blind — see _interact.
+        message, info = "", None
+        for attempt in (0, 1):
+            try:
+                resolved = await locator.resolve(
+                    self.session_id, self._platform_cache,
+                    element_id=element_id, xpath=selector, snapshot_id=snapshot_id,
+                    allow_cached=attempt == 0,
+                )
+            except locator.AmbiguousElementError as exc:
+                return ActionResult(False, str(exc))
 
-        element = resolved.element
-        info = {
-            "id": element.resource_id,
-            "text": element.text,
-            "content-desc": element.name,
-            "role": element.role,
-            # The locator that goes into the recording: what the element is
-            # where the screen says so, its position otherwise. Recording the
-            # position meant every replayed tap on a phone failed — the path
-            # from the root moves when anything above it does.
-            "xpath": getattr(element, "selector", None) or element.xpath,
-            "bounds": element.bounds,
-            "label": element.describe(),
-        }
+            if resolved is None:
+                return ActionResult(
+                    False,
+                    f"Element {element_id or selector} never became actionable within 10s",
+                )
+
+            element = resolved.element
+            info = {
+                "id": element.resource_id,
+                "text": element.text,
+                "content-desc": element.name,
+                "role": element.role,
+                # The locator that goes into the recording: what the element is
+                # where the screen says so, its position otherwise. Recording the
+                # position meant every replayed tap on a phone failed — the path
+                # from the root moves when anything above it does.
+                "xpath": getattr(element, "selector", None) or element.xpath,
+                "bounds": element.bounds,
+                "label": element.describe(),
+            }
+
+            if kind == "assert_visible":
+                return ActionResult(True, f'"{element.describe()}" is visible', info)
+
+            ok, message = await self._interact(kind, element, value, resolved.fresh)
+            if ok or resolved.fresh:
+                return ActionResult(ok, message, info)
+
+        return ActionResult(False, message, info)
+
+    async def _act_by_name(self, kind: str, selector: str,
+                           value: Optional[str]) -> Optional[ActionResult]:
+        """Carry the action out against the element the device finds by name.
+
+        Returns None when that cannot be done — the name reaches more than one
+        element now, the driver refused, or this is an action with its own way
+        of being performed — and the caller takes the careful path instead.
+        """
+        # A picker wheel is typed into by turning it, not by setting a value.
+        if kind == "type" and ("PickerWheel" in selector or "NumberPicker" in selector):
+            return None
+
+        handles = await appium.find_elements(self.session_id, "xpath", selector)
+        if len(handles) != 1:
+            # None: gone, or not there yet — the careful path waits for it.
+            # Several: the name stopped being this element's alone, which is
+            # exactly the case that must not be acted on blind.
+            return None
+
+        handle = handles[0]
+        label = locator.named_value(selector) or selector
+        # Thin on purpose: no tree was read, so there is nothing to describe
+        # beyond how the element was addressed. The run's own record falls
+        # back to the name the recording carries.
+        info = {"xpath": selector}
 
         if kind == "assert_visible":
-            return ActionResult(True, f'"{element.describe()}" is visible', info)
+            res = await appium.get(f"/session/{self.session_id}/element/{handle}/displayed")
+            if res is None or res.status_code != 200:
+                return None
+            if res.json().get("value") is True:
+                return ActionResult(True, f'"{label}" is visible', info)
+            # On the screen and not shown yet: let the careful path wait.
+            return None
 
-        ok, message = await self._interact(kind, element, value)
-        return ActionResult(ok, message, info)
+        if kind == "click":
+            res = await appium.post(f"/session/{self.session_id}/element/{handle}/click")
+            if res is not None and res.status_code == 200:
+                return ActionResult(True, f'Clicked "{label}"', info)
+            return None
 
-    async def _interact(self, kind: str, element, value: Optional[str]):
-        """W3C interaction with a coordinate fallback."""
+        if kind == "type":
+            await appium.post(f"/session/{self.session_id}/element/{handle}/clear")
+            res = await appium.post(
+                f"/session/{self.session_id}/element/{handle}/value",
+                {"text": value or "", "value": list(value or "")},
+            )
+            if res is not None and res.status_code == 200:
+                return ActionResult(True, f'Typed "{value}" into "{label}"', info)
+            return None
+
+        if kind == "clear":
+            res = await appium.post(f"/session/{self.session_id}/element/{handle}/clear")
+            if res is not None and res.status_code == 200:
+                return ActionResult(True, f'Cleared "{label}"', info)
+            return None
+
+        return None
+
+    async def _interact(self, kind: str, element, value: Optional[str],
+                        fresh: bool = True):
+        """W3C interaction with a coordinate fallback.
+
+        The fallback taps where the element was, which is only safe on a
+        screen that was read just now: `fresh` off means the element came
+        from the reading the caller already had, and a tap at coordinates it
+        gave would land wherever the screen has since moved to. Refused, so
+        the caller resolves again against a screen taken now.
+        """
         label = element.describe()
         if kind == "type" and "NumberPicker" in (element.xpath or ""):
             return await self._set_number_picker(element, value, label)
@@ -197,6 +286,9 @@ class MobileTarget:
             else:
                 return False, f"Unsupported action: {kind}"
 
+        if not fresh:
+            return False, (f'"{label}" could not be reached on the screen that was '
+                           "already in hand")
         if not element.bounds:
             return False, f'W3C interaction failed and "{label}" has no bounds to tap'
 

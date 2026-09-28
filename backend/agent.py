@@ -16,6 +16,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import authoring
 import storage
+import locator
 import text_match
 from mobile_dom import is_wheel
 import visual
@@ -1308,6 +1309,27 @@ async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
     )
 
 
+# What a recorded action needs from the screen before it can be carried out.
+#
+# The first four address an element, and a recording that names one —
+# //*[@resource-id="btnContinue"] — is a name the device can find on its own.
+# The next three read the screen themselves, one reading, inside the check.
+# The last three touch no element at all.
+REPLAY_WITHOUT_READING = {
+    "click", "type", "clear", "assert_visible",
+    "assert_text", "assert_absent", "assert_no_errors",
+    "wait", "key", "scroll",
+}
+
+
+def _needs_no_screen(entry: Dict[str, Any]) -> bool:
+    """Can this recorded action be carried out without reading the screen?"""
+    if (entry.get("action") or "").lower() not in REPLAY_WITHOUT_READING:
+        return False
+    selector = entry.get("selector") or ""
+    return not selector or locator.names_one_element(selector)
+
+
 def _question(action: Dict[str, Any]) -> tuple:
     """What a check asks, so the same question is known when asked again."""
     return (
@@ -2079,14 +2101,36 @@ async def run_agent(
             # The page source is still taken. _label_moved checks the recording
             # against it before anything is replayed, and that check is the
             # reason blind replays stopped clicking the wrong airport.
+            # And a recording that names its element needs no reading of the
+            # screen at all. The device finds a name by itself, a text check
+            # takes its own reading, and a wait touches nothing — only a
+            # recording that addresses its element by position needs the tree,
+            # because that is the one `_label_moved` has to check first.
+            # Measured on an iPhone 16 Pro Max, a page source is 2.9 seconds
+            # and a booking run took ninety-three of them.
+            #
+            # `screen_at_step_open` stays unread on a step that replays from
+            # its first action, and with it the note that says a check was
+            # already true before the step ran. That note is a lesson for the
+            # model, and a step carried out from a recording has no model in
+            # it to teach.
             from_recording = bool(replay_queue)
-            snapshot, screen_json, screenshot = await _screen_context(
-                target, use_vision and not from_recording)
-            publish_live_frame(target.session_id, screenshot)
-            if snapshot is not None:
-                yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
-                if stepwise and screen_at_step_open is None:
-                    screen_at_step_open = snapshot.visible_text()
+            # The turn that closes a step on its own recording is the same: it
+            # emits `step_done` from what the recording already proved, and
+            # looks at nothing to do it.
+            needs_no_screen = (
+                _needs_no_screen(replay_queue[0]) if from_recording
+                else (stepwise and replayed_actions and step_asserted and not step_closed)
+            )
+            snapshot, screen_json, screenshot = None, "", None
+            if not needs_no_screen:
+                snapshot, screen_json, screenshot = await _screen_context(
+                    target, use_vision and not from_recording)
+                publish_live_frame(target.session_id, screenshot)
+                if snapshot is not None:
+                    yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
+                    if stepwise and screen_at_step_open is None:
+                        screen_at_step_open = snapshot.visible_text()
 
             # In a written scenario the model is shown the step it is on, not
             # the scenario as a whole — handing it the finished article invites
@@ -2201,6 +2245,17 @@ async def run_agent(
                 }
 
             if action is None:
+                # The recording was abandoned before it ran, and the screen was
+                # not read because the recording said it did not need to be.
+                # The model is about to be asked, and it is asked about a
+                # screen or not at all.
+                if snapshot is None:
+                    snapshot, screen_json, screenshot = await _screen_context(
+                        target, use_vision)
+                    publish_live_frame(target.session_id, screenshot)
+                    if snapshot is not None:
+                        yield _event("snapshot", snapshotId=snapshot.snapshot_id,
+                                     step=step_no)
                 turns = _build_turns(
                     state.history, screen_json, screenshot if use_vision else None, focus,
                 )

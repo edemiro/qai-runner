@@ -35,12 +35,24 @@ class AmbiguousElementError(Exception):
         self.count = count
 
 
+# How old the screen the caller already read may be before this stops
+# trusting it. A replayed action hands one over a fraction of a second after
+# it was taken; a model-driven one is a few seconds later, because the model
+# was thinking in between, and those go on being matched against a screen
+# taken now.
+REUSABLE_SNAPSHOT_SECONDS = 2.0
+
+
 @dataclass
 class ResolvedElement:
     element: MobileElement
     manager: MobileDOMManager
     screen_width: int
     screen_height: int
+    # Was this read from a screen captured just now, or from the one the
+    # caller already had? Only the first may be tapped by coordinates — see
+    # MobileTarget._interact.
+    fresh: bool = True
 
 
 class SnapshotStore:
@@ -71,9 +83,23 @@ class SnapshotStore:
 
     def clear(self, session_id: str) -> None:
         self._by_session.pop(session_id, None)
+        _screen_sizes.pop(session_id, None)
 
 
 snapshots = SnapshotStore()
+
+# The screen's size, per session. Every capture used to ask the device for it
+# — 0.4 seconds on an iPhone, ninety times in a run, for a number that does
+# not change while the session lives.
+_screen_sizes: Dict[str, Dict[str, int]] = {}
+
+
+async def screen_size(session_id: str) -> Dict[str, int]:
+    size = _screen_sizes.get(session_id)
+    if size is None:
+        size = await appium.get_window_size(session_id)
+        _screen_sizes[session_id] = size
+    return size
 
 
 def calculate_semantic_similarity(cached: MobileElement, candidate: MobileElement) -> float:
@@ -135,12 +161,14 @@ def _best_matches(cached: MobileElement, manager: MobileDOMManager) -> List[Tupl
 
 async def capture_snapshot(session_id: str, platform_cache: Dict[str, str]) -> Optional[MobileDOMManager]:
     """Fetch the current screen and register it as a new snapshot."""
-    xml_source = await appium.get_source(session_id)
+    # The platform first, and from the cache after the first call: it decides
+    # how the source is asked for, and an iPhone answers a cheaper question.
+    platform = await appium.get_platform(session_id, platform_cache)
+    xml_source = await appium.get_source(session_id, platform)
     if not xml_source:
         return None
 
-    platform = await appium.get_platform(session_id, platform_cache)
-    size = await appium.get_window_size(session_id)
+    size = await screen_size(session_id)
     manager = MobileDOMManager(xml_source, platform, size["width"], size["height"])
     return snapshots.add(session_id, manager)
 
@@ -203,6 +231,24 @@ def _answers_to(element: MobileElement, selector: str) -> bool:
     return False
 
 
+def names_one_element(selector: str) -> bool:
+    """Does this locator say what the element is, rather than where it sits?
+
+    `//*[@resource-id="btnContinue"]` names it and the device can find it on
+    its own; `/hierarchy[1]/…/android.widget.Button[2]` is a position, and a
+    position has to be checked against the screen before it is trusted.
+    """
+    return bool(_NAMED.match(selector or ""))
+
+
+def named_value(selector: str) -> Optional[str]:
+    """What a naming locator calls its element, for the record and the report."""
+    named = _NAMED.match(selector or "")
+    if not named:
+        return None
+    return named.group(2) if named.group(2) is not None else named.group(3)
+
+
 def _only_match(elements: List[MobileElement], selector: str) -> Optional[MobileElement]:
     """The one element that answers to this locator, or nothing.
 
@@ -224,12 +270,16 @@ async def resolve(
     snapshot_id: Optional[str] = None,
     timeout: float = 10.0,
     poll_interval: float = 0.5,
+    allow_cached: bool = True,
 ) -> Optional[ResolvedElement]:
     """
     Wait until the requested element exists, is actionable, and is unambiguous.
 
     Raises AmbiguousElementError when several candidates match equally well.
     Returns None if the element never becomes actionable within `timeout`.
+
+    `allow_cached` off forces a screen taken now, for the caller that has
+    already tried what the remembered one said and found it out of date.
     """
     source_manager = snapshots.get(session_id, snapshot_id)
     cached: Optional[MobileElement] = None
@@ -244,45 +294,65 @@ async def resolve(
     deadline = time.monotonic() + timeout
     pending_ambiguity: Optional[AmbiguousElementError] = None
 
-    while time.monotonic() < deadline:
-        manager = await capture_snapshot(session_id, platform_cache)
+    # The first look is the screen the caller already read, when it took one
+    # moments ago. Reading it again costs a page source — 2.9 seconds on an
+    # iPhone — to answer a question the reading in hand answers. It is only
+    # reused while it is still warm: past that the screen has had time to
+    # move, and the careful re-match against a screen taken now is the whole
+    # reason this function polls.
+    # Named, not merely latest: a caller that passes no snapshot id is not
+    # saying "the screen as I last read it", and the newest reading in the
+    # store can be from before the action that has just changed the screen.
+    manager = source_manager if (
+        allow_cached and snapshot_id and source_manager is not None
+        and time.monotonic() - getattr(source_manager, "taken_at", 0) < REUSABLE_SNAPSHOT_SECONDS
+    ) else None
+    reused = manager is not None
+
+    while True:
         if manager is None:
+            manager = await capture_snapshot(session_id, platform_cache)
+
+        if manager is not None:
+            match: Optional[MobileElement] = None
+
+            if cached is not None:
+                scored = _best_matches(cached, manager)
+                if scored and scored[0][0] >= ACCEPTANCE_THRESHOLD:
+                    best_score, best_elem = scored[0]
+                    runner_up = scored[1][0] if len(scored) > 1 else float("-inf")
+                    if best_score - runner_up < AMBIGUITY_MARGIN:
+                        # The screen may still be settling, so remember the conflict
+                        # and keep polling; only report it if it never resolves.
+                        tied = sum(1 for score, _ in scored if best_score - score < AMBIGUITY_MARGIN)
+                        pending_ambiguity = AmbiguousElementError(cached.describe(), tied)
+                    else:
+                        pending_ambiguity = None
+                        match = best_elem
+
+            # Structural fallback: the locator the caller named, matched exactly.
+            if match is None and target_xpath:
+                match = _only_match(manager.get_all_elements(), target_xpath)
+
+            if match is not None:
+                width, height = manager.screen_width, manager.screen_height
+                if match.is_actionable(width, height):
+                    return ResolvedElement(match, manager, width, height, fresh=not reused)
+
+                if match.bounds:
+                    cx, cy = match.bounds["cx"], match.bounds["cy"]
+                    if cy < 0 or cy > height or cx < 0 or cx > width:
+                        if await _auto_scroll(session_id, cy, width, height):
+                            await asyncio.sleep(1.0)
+                            manager, reused = None, False
+                            continue
+
+        if time.monotonic() >= deadline:
+            break
+        # Nothing to wait for when the look was free: take a real one at once.
+        if not reused:
             await asyncio.sleep(poll_interval)
-            continue
-
-        match: Optional[MobileElement] = None
-
-        if cached is not None:
-            scored = _best_matches(cached, manager)
-            if scored and scored[0][0] >= ACCEPTANCE_THRESHOLD:
-                best_score, best_elem = scored[0]
-                runner_up = scored[1][0] if len(scored) > 1 else float("-inf")
-                if best_score - runner_up < AMBIGUITY_MARGIN:
-                    # The screen may still be settling, so remember the conflict
-                    # and keep polling; only report it if it never resolves.
-                    tied = sum(1 for score, _ in scored if best_score - score < AMBIGUITY_MARGIN)
-                    pending_ambiguity = AmbiguousElementError(cached.describe(), tied)
-                else:
-                    pending_ambiguity = None
-                    match = best_elem
-
-        # Structural fallback: the locator the caller named, matched exactly.
-        if match is None and target_xpath:
-            match = _only_match(manager.get_all_elements(), target_xpath)
-
-        if match is not None:
-            width, height = manager.screen_width, manager.screen_height
-            if match.is_actionable(width, height):
-                return ResolvedElement(match, manager, width, height)
-
-            if match.bounds:
-                cx, cy = match.bounds["cx"], match.bounds["cy"]
-                if cy < 0 or cy > height or cx < 0 or cx > width:
-                    if await _auto_scroll(session_id, cy, width, height):
-                        await asyncio.sleep(1.0)
-                        continue
-
-        await asyncio.sleep(poll_interval)
+        manager, reused = None, False
 
     if pending_ambiguity is not None:
         raise pending_ambiguity

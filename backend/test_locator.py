@@ -91,6 +91,11 @@ class TestResolve(unittest.IsolatedAsyncioTestCase):
 
     async def _resolve_against(self, cached_xml, current_xml, **kwargs):
         cached = locator.snapshots.add("s1", _manager(cached_xml))
+        # The caller's reading is from before: these are the cases where the
+        # screen has moved since it was taken, which is what the re-matching
+        # below exists for. Said in time because that is what resolve reads —
+        # a reading taken a moment ago is reused instead, and has its own test.
+        cached.taken_at -= locator.REUSABLE_SNAPSHOT_SECONDS + 1
         current = _manager(current_xml)
         with patch.object(locator, "capture_snapshot", new=AsyncMock(return_value=current)):
             return await locator.resolve(
@@ -126,6 +131,37 @@ class TestResolve(unittest.IsolatedAsyncioTestCase):
         resolved = await self._resolve_against(TWO_IDENTICAL_ROWS, TWO_IDENTICAL_ROWS, element_id="el_2")
         self.assertIsNotNone(resolved)
         self.assertEqual(resolved.element.bounds["y1"], 100)
+
+    async def test_a_screen_read_a_moment_ago_is_not_read_again(self):
+        """A page source is 2.9 seconds on an iPhone, and a replayed action
+        hands one over a twentieth of a second after it was taken. Reading it
+        again answers a question the reading in hand already answers."""
+        cached = locator.snapshots.add("s1", _manager(SINGLE_BUTTON))
+        again = AsyncMock(return_value=_manager(SINGLE_BUTTON))
+        with patch.object(locator, "capture_snapshot", new=again):
+            resolved = await locator.resolve(
+                "s1", {}, element_id="el_1", snapshot_id=cached.snapshot_id,
+                timeout=1.0, poll_interval=0.05,
+            )
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.element.text, "Confirm")
+        again.assert_not_awaited()
+        # And it says where it came from, because only a screen read now may
+        # be tapped by coordinates.
+        self.assertFalse(resolved.fresh)
+
+    async def test_the_caller_can_insist_on_a_screen_taken_now(self):
+        """What failed on the remembered screen is tried again on a real one."""
+        cached = locator.snapshots.add("s1", _manager(SINGLE_BUTTON))
+        again = AsyncMock(return_value=_manager(SHIFTED_BUTTON))
+        with patch.object(locator, "capture_snapshot", new=again):
+            resolved = await locator.resolve(
+                "s1", {}, element_id="el_1", snapshot_id=cached.snapshot_id,
+                timeout=1.0, poll_interval=0.05, allow_cached=False,
+            )
+        again.assert_awaited()
+        self.assertTrue(resolved.fresh)
+        self.assertEqual(resolved.element.bounds["cx"], 250)
 
     async def test_missing_element_times_out_instead_of_matching_anything(self):
         resolved = await self._resolve_against(
