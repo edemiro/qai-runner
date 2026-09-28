@@ -2763,7 +2763,11 @@ optgroup { color: var(--text-tertiary); }
 
   .brand-text,
   .user-text,
-  .status-line span {
+  .status-line span,
+  /* A group heading is a word, and a 62px rail cuts a word into "PLATF",
+     "TEST SET" and "REPOR". The rail reads as broken rather than collapsed,
+     and the headings say nothing an icon column needs. */
+  .nav-group-title {
     display: none;
   }
 
@@ -5659,7 +5663,15 @@ textarea,
    same Test Set, so the tail is the only part that tells two runs apart. */
 .execution-item-main { min-width: 0; gap: 4px; }
 .execution-name { white-space: normal; overflow-wrap: anywhere; }
-.execution-when { white-space: nowrap; }
+/* Cut with an ellipsis rather than painted under the badge beside it. The
+   track it sits in can shrink below its content, so a long verdict — Running,
+   Stopped — pushed the last 14px of the time under the chip. */
+.execution-when {
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Name, platform, Add: the name takes the row and the other two share the next
    one, rather than three controls fighting over one line. */

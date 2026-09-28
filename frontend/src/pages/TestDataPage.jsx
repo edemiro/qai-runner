@@ -85,7 +85,8 @@ function rank(list, id) {
 
 function when(seconds) {
   if (!seconds) return '—';
-  return new Date(seconds * 1000).toLocaleString('tr-TR', {
+  // The reader's own locale, not one written into the source.
+  return new Date(seconds * 1000).toLocaleString(undefined, {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
   });
 }

@@ -14,10 +14,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * two fields wide.
  */
 
-/** `/executions/ab12` → { tab: 'executions', id: 'ab12' }. */
-export function readAddress(fallback) {
+/**
+ * `/executions/ab12` → { tab: 'executions', id: 'ab12' }.
+ *
+ * A page nobody has is the fallback, not whatever the app renders last. Any
+ * unknown first segment used to arrive as a tab of its own and fall through
+ * the page list to the Mobile workspace — so a typo or a stale link landed on
+ * the screen that owns the live device session, one button away from
+ * disconnecting a phone in the middle of a run.
+ */
+export function readAddress(fallback, known) {
   const parts = window.location.pathname.split('/').filter(Boolean);
-  return { tab: parts[0] || fallback, id: parts[1] || null };
+  const tab = parts[0] || fallback;
+  if (known && !known.includes(tab)) return { tab: fallback, id: null };
+  return { tab, id: parts[1] || null };
 }
 
 function write(tab, id, replace) {
@@ -30,11 +40,12 @@ function write(tab, id, replace) {
 
 /**
  * @param fallback which page an address with nothing in it means.
+ * @param known the pages there are. Anything else in the address is not one.
  * @returns [{tab, id}, go] — `go(tab, id)` moves, and the browser's own
  *   Back and Forward move it too.
  */
-export function useAddressBar(fallback) {
-  const [where, setWhere] = useState(() => readAddress(fallback));
+export function useAddressBar(fallback, known) {
+  const [where, setWhere] = useState(() => readAddress(fallback, known));
 
   // The address is corrected to whatever we actually opened on, without
   // adding an entry — otherwise the first Back goes to the URL the reader
@@ -47,10 +58,10 @@ export function useAddressBar(fallback) {
   }, [where.tab, where.id]);
 
   useEffect(() => {
-    const onPop = () => setWhere(readAddress(fallback));
+    const onPop = () => setWhere(readAddress(fallback, known));
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, [fallback]);
+  }, [fallback, known]);
 
   const go = useCallback((tab, id = null) => {
     setWhere((current) => {

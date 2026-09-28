@@ -922,7 +922,10 @@ export function RunsPage({ activeSessionId, onReplay, selectedRunId, onSelectRun
         </div>
 
         <div className="filter-row">
-          {['all', 'passed', 'failed', 'cancelled'].map((value) => (
+          {/* `running` belongs here: without it the chips counted 27 + 21 + 1
+              against an All of 50, and the run in flight — the one a tester
+              opens the page to watch — could only be found by scrolling. */}
+          {['all', 'passed', 'failed', 'running', 'cancelled'].map((value) => (
             <button
               key={value}
               className={`filter-chip ${filter === value ? 'active' : ''}`}

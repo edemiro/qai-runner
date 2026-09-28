@@ -28,7 +28,10 @@ const STATUS_LABEL = {
 
 function when(seconds) {
   if (!seconds) return '—';
-  return new Date(seconds * 1000).toLocaleString('tr-TR', {
+  // The reader's own locale, not one written into the source. Pinned to
+  // tr-TR, an English product showed "27 Eyl 23:37" on every row of two of
+  // its pages — the first thing anyone outside the team saw.
+  return new Date(seconds * 1000).toLocaleString(undefined, {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
   });
 }
@@ -264,11 +267,17 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
                         </span>
                         {bug.severity && (
                           <span className={`priority-tag p-${bug.severity.toLowerCase()}`}>
-                            {bug.severity}
+                            {bug.severity[0].toUpperCase() + bug.severity.slice(1).toLowerCase()}
                           </span>
                         )}
+                        {/* The sentence, not the token. Every row carried
+                            EXPECTATION_NOT_MET while the panel beside it
+                            already showed what that means. */}
                         {bug.code && (
-                          <span className={`bug-code ${notApp ? 'soft' : ''}`}>{bug.code}</span>
+                          <span className={`bug-code ${notApp ? 'soft' : ''}`}
+                                title={bug.code}>
+                            {meta.codes?.[bug.code] || bug.code}
+                          </span>
                         )}
                         <span className="muted small">{when(bug.created_at)}</span>
                       </span>

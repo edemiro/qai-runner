@@ -25,10 +25,14 @@ const NAV = [
   { id: 'runs', label: 'Test Runs', icon: History, hint: 'Every run, with steps and script export' },
   { id: 'insights', label: 'Insights', icon: Activity, hint: 'Trends and flaky tests' },
   { id: 'bugs', label: 'Bug Report', icon: Bug, hint: 'Defects raised from failed scenarios' },
-  { id: 'settings', label: 'Settings', icon: SettingsIcon, hint: 'Appium server and model provider' },
+  { id: 'settings', label: 'Settings', icon: SettingsIcon, hint: 'Devices, models and integrations' },
 ];
 
 const byId = Object.fromEntries(NAV.map((item) => [item.id, item]));
+
+// The pages there are, for the address bar: anything else in a URL is not one
+// of them, and must not be rendered as though it were.
+export const TABS = NAV.map((item) => item.id);
 
 /* Grouped rather than listed flat: seven equal rows made the reader scan for
    the one they wanted every time. The headings say what each part is for. */
@@ -38,7 +42,7 @@ const NAV_GROUPS = [
   // tester opens every day, and the store is what they open when a card
   // expires. Putting it between them pushed the run list down the list for a
   // page most days never need.
-  { title: 'TEST SUITE', items: ['suites', 'executions', 'test-data'].map((id) => byId[id]) },
+  { title: 'TEST SETS', items: ['suites', 'executions', 'test-data'].map((id) => byId[id]) },
   // Bugs above Insights: a defect is something to act on today, trends are
   // something to read at the end of the week.
   { title: 'REPORT', items: ['runs', 'bugs', 'insights'].map((id) => byId[id]) },

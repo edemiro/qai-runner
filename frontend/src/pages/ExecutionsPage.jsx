@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Ban, Bug, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock, Download, Loader2,
   Radio, Search, ShieldOff, Square, Trash2, Wrench, X, XCircle,
@@ -75,7 +75,7 @@ function duration(ms) {
 }
 
 export function ExecutionsPage({
-  onOpenRun, onWatch = null, focusId = null, onFocused = null,
+  onOpenRun, onWatch = null, focusId = null, onFocused = null, onSelect = null,
   // Where a raised bug goes, so the tester lands on it rather than being told
   // it exists somewhere.
   onOpenBugs = null,
@@ -128,17 +128,24 @@ export function ExecutionsPage({
     ? selectedId
     : (visible[0]?.id ?? null);
 
+  // Read rather than depended on: the address carries the open execution now,
+  // so `focusId` changes with every pick, and depending on it here refetched
+  // the whole list on each one.
+  const wanted = useRef(focusId);
+  wanted.current = focusId;
+
   const load = useCallback(async () => {
     try {
       const data = await api.suiteRuns(null, 50);
       setExecutions(data.suiteRuns);
       // An execution just started elsewhere wins the selection, so starting one
       // lands on it rather than on whatever ran last.
-      setSelectedId((current) => focusId || current || data.suiteRuns[0]?.id || null);
-      if (focusId) {
+      const asked = wanted.current;
+      setSelectedId((current) => asked || current || data.suiteRuns[0]?.id || null);
+      if (asked) {
         // …and brings its platform with it. Starting a mobile execution and
         // landing on a page filtered to web would hide the run just started.
-        const focused = data.suiteRuns.find((item) => item.id === focusId);
+        const focused = data.suiteRuns.find((item) => item.id === asked);
         if (focused) setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
         onFocused?.();
       }
@@ -147,7 +154,17 @@ export function ExecutionsPage({
     } finally {
       setLoading(false);
     }
-  }, [toast, focusId, onFocused]);
+  }, [toast, onFocused]);
+
+  // An execution asked for after the list is already here — one just started,
+  // or an address typed into the bar.
+  useEffect(() => {
+    if (!focusId) return;
+    setSelectedId(focusId);
+    const focused = executions.find((item) => item.id === focusId);
+    if (focused) setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
+    onFocused?.();
+  }, [focusId, executions, onFocused]);
 
   useEffect(() => {
     let cancelled = false;
@@ -394,9 +411,13 @@ export function ExecutionsPage({
             <ul className="execution-list">
               {visible.map((item) => (
                 <li key={item.id}>
+                  {/* The pick goes into the address bar as well as into the
+                      pane: the point of a report is that it can be sent to
+                      whoever needs to see it, and the link in the bar was
+                      whichever execution the page happened to open on. */}
                   <button
                     className={`execution-item ${item.id === shownId ? 'active' : ''}`}
-                    onClick={() => setSelectedId(item.id)}
+                    onClick={() => { setSelectedId(item.id); onSelect?.(item.id); }}
                   >
                     <div className="execution-item-main">
                       <span className="execution-name">{item.suite_name || 'Test Set'}</span>

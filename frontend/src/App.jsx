@@ -5,7 +5,7 @@ import { AgentPanel } from './components/AgentPanel';
 import { DeviceMirror } from './components/DeviceMirror';
 import { Inspector } from './components/Inspector';
 import { ScenarioReviewModal } from './components/ScenarioReviewModal';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, TABS } from './components/Sidebar';
 import { useAgentRun } from './hooks/useAgentRun';
 import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
@@ -34,7 +34,7 @@ export default function App() {
      came home to the Web workspace, and a failing run could not be sent to
      the person who needed to read it — which for a team's test tool is most
      of what a report is for. */
-  const [address, goTo] = useAddressBar('web');
+  const [address, goTo] = useAddressBar('web', TABS);
   const activeTab = address.tab;
   const setActiveTab = useCallback((tab) => goTo(tab), [goTo]);
   // Which platform Bug Report should open on when a raised bug sends us there,
@@ -632,6 +632,7 @@ export default function App() {
           }}
           focusId={focusExecutionId || (activeTab === 'executions' ? address.id : null)}
           onFocused={clearExecutionFocus}
+          onSelect={(id) => goTo('executions', id)}
         />
       );
     }

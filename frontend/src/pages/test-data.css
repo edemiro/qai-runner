@@ -119,6 +119,15 @@
   flex-shrink: 0;
 }
 
+/* Positioned so what is inside it stays inside it. The screen-reader heading
+   at the end of each table is `position: absolute`, and without a positioned
+   ancestor its containing block is the page itself — so it escaped `.page`'s
+   own scrolling and stretched the document to 1636px, which is where this
+   page's band of empty background came from. */
+.td-group {
+  position: relative;
+}
+
 .td-group-head {
   display: flex;
   align-items: center;
@@ -184,6 +193,11 @@
    minimum keeps the four columns readable while it does. */
 .td-table-wrap {
   overflow-x: auto;
+  /* Named, because `overflow-x: auto` alone computes `overflow-y` to `auto`
+     as well, and the table's height then escaped into the root scroll box:
+     this page, alone of the nine, drew 660px of empty background under
+     itself and left the sidebar stopping dead in the middle of the window. */
+  overflow-y: hidden;
 }
 
 .td-table {
