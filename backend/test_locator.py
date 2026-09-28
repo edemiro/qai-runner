@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -162,6 +163,21 @@ class TestResolve(unittest.IsolatedAsyncioTestCase):
         again.assert_awaited()
         self.assertTrue(resolved.fresh)
         self.assertEqual(resolved.element.bounds["cx"], 250)
+
+    async def test_an_element_it_can_never_reach_still_gives_up(self):
+        """Off to the side, where a vertical swipe can never bring it back.
+        The scroll branch used to skip the deadline, so resolve scrolled at it
+        for ever — a page source and a swipe at a time, and the run could not
+        end."""
+        away = ('<hierarchy rotation="0">'
+                '<android.widget.Button bounds="[5000,100][5200,200]" displayed="true"'
+                ' text="Confirm" resource-id="confirm_btn"/></hierarchy>')
+        swipes = AsyncMock(return_value=True)
+        started = time.monotonic()
+        with patch.object(locator, "_auto_scroll", new=swipes):
+            resolved = await self._resolve_against(SINGLE_BUTTON, away, element_id="el_1")
+        self.assertIsNone(resolved)
+        self.assertLess(time.monotonic() - started, 8.0, "it never gave up")
 
     async def test_missing_element_times_out_instead_of_matching_anything(self):
         resolved = await self._resolve_against(

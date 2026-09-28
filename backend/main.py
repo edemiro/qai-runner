@@ -29,7 +29,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import (
-    FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect,
+    FastAPI, File, HTTPException, Path, Query, UploadFile, WebSocket,
+    WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -1258,21 +1259,29 @@ async def agent_status(session_id: str):
 
 @app.get("/api/runs")
 async def get_runs(
-    limit: int = 50,
+    # Bounded, because both ends of the range were reachable and neither was
+    # survivable: SQLite reads LIMIT -1 as "no limit", so `?limit=-1` handed
+    # back the entire run history in one request, and a number past 2^63
+    # came out of the driver as an OverflowError and a bare 500.
+    limit: int = Query(50, ge=1, le=500),
     priority: Optional[str] = None,
     q: Optional[str] = None,
-    offset: int = 0,
+    offset: int = Query(0, ge=0, le=1_000_000),
     kind: Optional[str] = None,
     phone_os: Optional[str] = Query(None, alias="os"),
 ):
+    # One more than asked for, and trimmed: "is there another page" cannot be
+    # answered by a full page, which is exactly what the last page is when the
+    # total divides evenly — the UI then offered a Load more that returned
+    # nothing.
     runs = storage.list_runs(
-        limit, priority=priority, search=q, offset=offset, kind=kind, os=phone_os,
+        limit + 1, priority=priority, search=q, offset=offset, kind=kind, os=phone_os,
     )
-    # Whether another page exists, so the UI can hide "Load more" at the end
-    # rather than offering a button that returns nothing.
+    has_more = len(runs) > limit
+    runs = runs[:limit]
     return {
         "runs": runs,
-        "hasMore": len(runs) == limit,
+        "hasMore": has_more,
         # Counted over every run, not the page just returned: the platform tabs
         # are above the paging, so their numbers cannot come from one page of it.
         "counts": storage.platform_counts("runs"),
@@ -1293,7 +1302,7 @@ async def get_run(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/steps/{step_id}/screenshot")
-async def get_step_screenshot(run_id: str, step_id: int):
+async def get_step_screenshot(run_id: str, step_id: int = Path(..., ge=0, le=2**62)):
     screenshot = storage.get_step_screenshot(run_id, step_id)
     if screenshot is None:
         raise HTTPException(status_code=404, detail="No screenshot recorded for that step.")
@@ -1606,11 +1615,12 @@ async def patch_suite(suite_id: str, body: SuitePatchBody):
     passed through at all, so a set could not be moved between iOS and
     Android once written.
     """
-    if not storage.update_suite(
+    if storage.get_suite(suite_id) is None:
+        raise HTTPException(status_code=404, detail="Suite not found.")
+    storage.update_suite(
         suite_id, name=body.name, description=body.description,
         kind=body.kind, tags=body.tags, module=body.module, os=body.os,
-    ):
-        raise HTTPException(status_code=404, detail="Suite not found.")
+    )
     return storage.get_suite(suite_id)
 
 
@@ -1973,8 +1983,12 @@ async def patch_case(case_id: str, body: CasePatchBody):
         fields["enabled"] = body.enabled
     if body.steps is not None:
         fields["steps"] = [step.model_dump() for step in body.steps]
-    if not storage.update_case(case_id, **fields):
+    # Absent is the only 404. `update_case` also answers False for a patch
+    # that named nothing, and reporting that as "Case not found." told the
+    # caller its scenario had been deleted when the scenario was right there.
+    if storage.get_case(case_id) is None:
         raise HTTPException(status_code=404, detail="Case not found.")
+    storage.update_case(case_id, **fields)
     return storage.get_case(case_id)
 
 
@@ -2068,7 +2082,8 @@ async def post_suite_run_start(suite_id: str, body: SuiteRunBody):
 
 
 @app.get("/api/suite-runs")
-async def get_suite_runs(suite_id: Optional[str] = None, limit: int = 50):
+async def get_suite_runs(suite_id: Optional[str] = None,
+                         limit: int = Query(50, ge=1, le=500)):
     return {"suiteRuns": storage.list_suite_runs(suite_id, limit)}
 
 
@@ -2133,7 +2148,7 @@ async def list_bugs(
     status: Optional[str] = None,
     code: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=1000),
     kind: Optional[str] = None,
     phone_os: Optional[str] = Query(None, alias="os"),
 ):
@@ -2181,8 +2196,19 @@ async def get_bug_screenshot(bug_id: str):
 
 @app.patch("/api/bugs/{bug_id}")
 async def patch_bug(bug_id: str, body: BugPatchBody):
-    if not storage.update_bug(bug_id, **body.model_dump(exclude_none=True)):
-        raise HTTPException(status_code=404, detail="Bug not found, or nothing to change.")
+    if storage.get_bug(bug_id) is None:
+        raise HTTPException(status_code=404, detail="Bug not found.")
+    sent = body.model_dump(exclude_none=True)
+    # Said rather than swallowed. A status outside the vocabulary was dropped
+    # on the floor, the update then changed nothing, and the caller was told
+    # its bug did not exist — three wrong answers to one typo.
+    status = sent.get("status")
+    if status is not None and status not in storage.BUG_STATUSES:
+        raise HTTPException(status_code=422, detail=(
+            f"'{status}' is not a bug status. Use one of: "
+            + ", ".join(sorted(storage.BUG_STATUSES)) + "."
+        ))
+    storage.update_bug(bug_id, **sent)
     return storage.get_bug(bug_id)
 
 
@@ -2268,11 +2294,15 @@ async def get_run_report(run_id: str, format: str = "junit"):
 
 @app.get("/api/runs/{run_id}/artifacts")
 async def get_run_artifacts(run_id: str):
+    # Checked, like every other sub-resource of a run: an empty list for a run
+    # that does not exist reads exactly like a run that produced nothing.
+    if storage.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
     return {"artifacts": storage.list_artifacts(run_id)}
 
 
 @app.get("/api/artifacts/{artifact_id}/download")
-async def download_artifact(artifact_id: int):
+async def download_artifact(artifact_id: int = Path(..., ge=0, le=2**62)):
     artifact = storage.get_artifact(artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -2369,7 +2399,9 @@ async def get_usage(days: int = 14, kind: Optional[str] = None,
 
 
 @app.get("/api/insights/flaky")
-async def get_flaky(limit: int = 20, window: int = 20, kind: Optional[str] = None,
+async def get_flaky(limit: int = Query(20, ge=1, le=200),
+                    window: int = Query(20, ge=1, le=1000),
+                    kind: Optional[str] = None,
                     phone_os: Optional[str] = Query(None, alias="os")):
     return {"flaky": storage.flakiness_report(limit, window, kind=kind, os=phone_os)}
 
@@ -2460,9 +2492,16 @@ class TestDataBody(BaseModel):
 
 
 @app.get("/api/test-data")
-async def get_test_data(reveal: bool = False):
-    """The store. Secrets come back masked unless asked for one at a time."""
-    return {"entries": storage.list_test_data(reveal=reveal)}
+async def get_test_data():
+    """The store, with every secret masked.
+
+    There is deliberately no way to ask this one for the real values. It used
+    to take `?reveal=true` and hand back every card and code in the store at
+    once — which is exactly what the endpoint below says must not exist, and
+    what `list_test_data` promises it never does. One entry at a time, asked
+    for on purpose, is the whole of the difference.
+    """
+    return {"entries": storage.list_test_data()}
 
 
 @app.get("/api/test-data/{key}/value")

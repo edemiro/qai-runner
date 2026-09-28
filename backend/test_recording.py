@@ -148,6 +148,20 @@ def test_a_wait_before_a_check_is_the_check_waiting_twice():
     assert [a["action"] for a in kept] == ["click", "assert_visible"]
 
 
+def test_a_wait_in_front_of_a_check_that_does_not_wait_is_kept():
+    """`assert_no_errors` peeks at what the page has logged so far and
+    answers; `assert_visual` compares one screenshot. Neither waits, so the
+    wait in front of them is the only thing giving the page time to fail —
+    dropping it turns a run that went red into one that goes green."""
+    for check in ("assert_no_errors", "assert_visual"):
+        kept = storage.clean_recorded([
+            {"action": "click", "selector": "#pay"},
+            {"action": "wait", "value": "5"},
+            {"action": check, "value": "checkout"},
+        ])
+        assert [a["action"] for a in kept] == ["click", "wait", check], check
+
+
 def test_waits_before_an_action_become_the_longest_one():
     """A tap on a page still arriving is the one thing a check's patience
     does not cover, so a wait in front of an action stays — one of them."""
@@ -837,6 +851,47 @@ def test_a_value_that_came_from_the_store_is_recorded_by_name(db, case):
     storage.promote_recording(run_id, case)
     values = [a["value"] for a in storage.get_case(case)["steps"][0]["recorded"]]
     assert values == ["{{yolcu.ad}}", "{{yolcu.ad}} {{yolcu.soyad}}", "1"]
+
+
+def test_a_recording_that_holds_a_secret_is_not_kept(db, case):
+    """Three scenarios carried `assert_text "5610 5910 8101 8250"` — the
+    screen groups a card number and the recording copied the grouping, so the
+    store's unspaced value did not match and the name was never put back. A
+    recording lives in the scenario file the whole team reads."""
+    db.set_test_data("kart.numara", "5610591081018250", "test", secret=True)
+    storage.update_case(case, steps=[{
+        "action": "Kart numarasını yaz", "expected": "Alan dolar",
+    }])
+    run_id = a_run(case, status="passed")
+    _stepwise(run_id, {1: "passed"})
+    did(run_id, 1, "type", value="5610591081018250",
+        element={"xpath": "#card", "label": "Kart numarası"})
+    did(run_id, 1, "assert_text", value="5610 5910 8101 8250")
+
+    storage.promote_recording(run_id, case)
+    assert not storage.get_case(case)["steps"][0].get("recorded")
+
+
+def test_a_scenario_step_never_carries_a_secret_either(db):
+    """The scenario on disk says {{kart.numara}}; what reaches the run has
+    already been filled in, and this row is what the run detail, the JUnit
+    file a CI job attaches and an automatically raised bug all quote."""
+    db.set_test_data("kart.numara", "5610591081018250", "test", secret=True)
+    db.set_test_data("kart.cvv", "123", "test", secret=True)
+    run_id = storage.create_run(goal="a run", kind="web")
+    row = storage.start_scenario_step(
+        run_id, 1, "Type 5610591081018250 into the card number field.",
+        "The field shows 5610591081018250.",
+    )
+    storage.finish_scenario_step(row, "failed",
+                                 message="Typed 123 into the CVV field, 1123ms")
+
+    step = storage.list_scenario_steps(run_id)[0]
+    assert step["action"] == "Type {{kart.numara}} into the card number field."
+    assert step["expected"] == "The field shows {{kart.numara}}."
+    # A short secret only where it stands as a word of its own: 123 inside
+    # 1123 is a duration, not a code.
+    assert step["message"] == "Typed {{kart.cvv}} into the CVV field, 1123ms"
 
 
 def test_a_secret_is_named_in_the_run_log_never_spelled(db):

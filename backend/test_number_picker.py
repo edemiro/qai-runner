@@ -122,6 +122,22 @@ def test_a_field_that_is_not_a_wheel_still_goes_through_the_element(monkeypatch)
     assert done == [], "no tap, no key: the ordinary path went through the element"
 
 
+def test_a_wheel_is_never_tapped_at_remembered_coordinates(monkeypatch):
+    """The wheel paths sat above the freshness guard: one taps where the wheel
+    was on a screen already in hand, and the other is handed the value that
+    screen showed — which, if it already matches, reports the wheel set
+    without the device being touched at all."""
+    done = _thumb(monkeypatch)
+    target = MobileTarget("s1", {"platform": "Android"}, {})
+
+    ok, message = asyncio.run(
+        target._interact("type", YearWheel(), "2000", fresh=False))
+
+    assert not ok
+    assert "already in hand" in message
+    assert done == [], "nothing was tapped or typed"
+
+
 def test_a_wheel_with_no_bounds_says_so(monkeypatch):
     _thumb(monkeypatch)
 

@@ -797,6 +797,30 @@ class ReplayingARecording(unittest.IsolatedAsyncioTestCase):
         # One, at the start, proving there is a screen at all to run against.
         self.assertEqual(len(self.reads), 1)
 
+    TEXT = ('```json\n{"type":"action","action":"assert_text",'
+            '"value":"Bir ekran","reason":"r"}\n```')
+
+    async def test_a_step_that_reads_no_screen_first_keeps_no_opening_screen(self):
+        """`screen_at_step_open` is what a check is compared against to say it
+        was already true before the step ran. Filled from a screen read partway
+        through the step, it demotes a check that genuinely proved the step —
+        and the step then fails for having verified nothing.
+
+        Two steps, because the first is exempt from that comparison: it opens
+        on the screen it is about.
+        """
+        events, _, _ = await self._run(
+            [{"action": "Open", "expected": "Open"},
+             {"action": "Search", "expected": "Results", "recorded": [
+                 {"action": "click", "selector": '//*[@resource-id="btnSearch"]',
+                  "value": None, "label": "Search"}]}],
+            script=[self.ASSERT, self.CLOSE, self.TEXT, self.CLOSE],
+        )
+        self.assertEqual(self._verdicts(events), [(1, "passed"), (2, "passed")])
+        demoted = [e for e in events if "already true when the step opened"
+                   in (e.get("message") or "")]
+        self.assertEqual(demoted, [], "the check that proved step 2 was demoted")
+
     async def test_a_recording_that_names_a_position_still_reads_the_screen(self):
         """A position has to be checked against the screen before it is
         trusted — that check is why blind replays stopped clicking the wrong

@@ -31,12 +31,22 @@ def _identities(element: "MobileElement") -> List[tuple]:
     content description survives a re-layout; the words on the control survive
     neither but still beat its position in the tree.
     """
+    if is_wheel(element):
+        # A picker wheel keeps its position, all of it. Its text is the value
+        # it is on, and its id is shared with the other wheels of the same
+        # picker — but the point is what a locator that names a wheel would
+        # let through: the driver decides an action is a wheel's by reading
+        # the class out of the locator, so a wheel addressed as
+        # //*[@resource-id="numberpicker_input"] would be typed into with
+        # setValue, which a picker accepts and ignores, and the step would go
+        # green on a date nobody set.
+        return []
     found = []
     if element.resource_id:
         found.append(("resource-id", element.resource_id))
     if element.name:
         found.append(("content-desc", element.name))
-    if element.text and len(element.text) <= NAMEABLE_TEXT and not is_wheel(element):
+    if element.text and len(element.text) <= NAMEABLE_TEXT:
         found.append(("text", element.text))
     return [(attr, value) for attr, value in found if _quote(value)]
 

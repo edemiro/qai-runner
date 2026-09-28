@@ -19,11 +19,23 @@ WHEEL_TURNS = 60
 # How long a wheel is given to settle before it is read a second time.
 WHEEL_SETTLE = 0.4
 
-# The order a month wheel keeps, in the two languages the app is used in.
+# How a month wheel spells its months, in the two languages the app is used
+# in and in both the short and the long form. Matched whole rather than by
+# prefix: "Mar" is March and "Marmaris" is an airport, and a wheel of airports
+# taken for a wheel of months is a value typed into the wrong one.
 _MONTHS = (
-    ("jan", "oca"), ("feb", "şub"), ("mar", "mar"), ("apr", "nis"), ("may", "may"),
-    ("jun", "haz"), ("jul", "tem"), ("aug", "ağu"), ("sep", "eyl"), ("oct", "eki"),
-    ("nov", "kas"), ("dec", "ara"),
+    ("jan", "january", "oca", "ocak"),
+    ("feb", "february", "şub", "sub", "şubat", "subat"),
+    ("mar", "march", "mart"),
+    ("apr", "april", "nis", "nisan"),
+    ("may", "mayıs", "mayis"),
+    ("jun", "june", "haz", "haziran"),
+    ("jul", "july", "tem", "temmuz"),
+    ("aug", "august", "ağu", "agu", "ağustos", "agustos"),
+    ("sep", "sept", "september", "eyl", "eylül", "eylul"),
+    ("oct", "october", "eki", "ekim"),
+    ("nov", "november", "kas", "kasım", "kasim"),
+    ("dec", "december", "ara", "aralık", "aralik"),
 )
 
 
@@ -36,7 +48,7 @@ def _notch(text: str):
     if folded.isdigit():
         return ("number", int(folded))
     for index, names in enumerate(_MONTHS):
-        if any(folded.startswith(name) for name in names):
+        if folded in names:
             return ("month", index)
     return ("words", folded)
 
@@ -66,6 +78,10 @@ def _holds(text: str) -> str:
     at the day's wheel and the replay found nothing at all. A day is a short
     number, a year is four digits, a month says its name.
     """
+    if not str(text or "").strip():
+        # A wheel the device would not answer for. Kept distinct so it can
+        # never be mistaken for the one a value was meant for.
+        return "nothing"
     kind, _ = _notch(text)
     if kind == "number":
         digits = "".join(ch for ch in str(text) if ch.isdigit())
@@ -162,11 +178,15 @@ class MobileTarget:
         # path it wrote down runs through every container above the wheel,
         # and on the next run it reaches nothing. Three date-of-birth steps
         # were being re-derived every single time for that.
+        asked_the_wheels = False
         if kind == "type" and _looks_like_a_wheel(selector or ""):
             turned = await self._set_wheel(value)
             if turned is not None:
                 ok, message = turned
                 return ActionResult(ok, message, {"xpath": selector})
+            # Asked and answered: the careful path below must not ask again,
+            # which on a three-wheel picker is another seven round trips.
+            asked_the_wheels = True
 
         # A recording addresses its element by name, and the device can find a
         # name on its own. Going through a snapshot for one costs a full page
@@ -219,7 +239,8 @@ class MobileTarget:
             if kind == "assert_visible":
                 return ActionResult(True, f'"{element.describe()}" is visible', info)
 
-            ok, message = await self._interact(kind, element, value, resolved.fresh)
+            ok, message = await self._interact(
+                kind, element, value, resolved.fresh, asked_the_wheels)
             if ok or resolved.fresh:
                 return ActionResult(ok, message, info)
 
@@ -285,7 +306,7 @@ class MobileTarget:
         return None
 
     async def _interact(self, kind: str, element, value: Optional[str],
-                        fresh: bool = True):
+                        fresh: bool = True, asked_the_wheels: bool = False):
         """W3C interaction with a coordinate fallback.
 
         The fallback taps where the element was, which is only safe on a
@@ -300,9 +321,16 @@ class MobileTarget:
             # picked one out of the tree and can pick the wrong one: a
             # recording promoted from a green run sent the month to the day's
             # wheel, because that is where the model had put it.
-            turned = await self._set_wheel(value)
+            turned = None if asked_the_wheels else await self._set_wheel(value)
             if turned is not None:
                 return turned
+            # Neither path below can be trusted on a remembered screen: one
+            # taps where the wheel was, and the other is handed the value the
+            # wheel was showing then — which, if it already matches, reports
+            # the wheel set without the device being touched at all.
+            if not fresh:
+                return False, (f'"{label}" could not be reached on the screen '
+                               "that was already in hand")
             if "NumberPicker" in (element.xpath or ""):
                 return await self._set_number_picker(element, value, label)
             return await self._spin_wheel(element, value, label)
@@ -446,6 +474,12 @@ class MobileTarget:
         if not await MobileGestureController.perform_type_text(self.session_id, wanted):
             return False, f"Could not type into {name}"
         await MobileGestureController.perform_key_event(self.session_id, "android", "tab")
+        # Read back, because a picker takes a value or ignores it and says
+        # nothing either way. Reporting the gestures as the outcome is how a
+        # step goes green on a date nobody set.
+        settled = await self._wheel_value(handle)
+        if settled is not None and not _same_notch(settled, wanted):
+            return False, f'{name} still reads "{settled}", not "{wanted}"'
         return True, f'Set {name} to "{wanted}"'
 
     async def _spin_wheel(self, element, value: Optional[str], label: str):

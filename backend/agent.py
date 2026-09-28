@@ -2129,7 +2129,14 @@ async def run_agent(
                 publish_live_frame(target.session_id, screenshot)
                 if snapshot is not None:
                     yield _event("snapshot", snapshotId=snapshot.snapshot_id, step=step_no)
-                    if stepwise and screen_at_step_open is None:
+                    # Only from the step's own first action. Taken later it is
+                    # not the screen the step opened on but one the step has
+                    # already changed, and `_already_true` would then call a
+                    # check that genuinely proved the step "already true" —
+                    # which stops it counting as proof and fails the step. A
+                    # step that replays its first action reads nothing, so it
+                    # keeps no opening screen and no check is demoted.
+                    if stepwise and step_actions == 0 and screen_at_step_open is None:
                         screen_at_step_open = snapshot.visible_text()
 
             # In a written scenario the model is shown the step it is on, not

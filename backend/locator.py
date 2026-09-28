@@ -308,6 +308,7 @@ async def resolve(
         and time.monotonic() - getattr(source_manager, "taken_at", 0) < REUSABLE_SNAPSHOT_SECONDS
     ) else None
     reused = manager is not None
+    scrolled = False
 
     while True:
         if manager is None:
@@ -342,17 +343,24 @@ async def resolve(
                 if match.bounds:
                     cx, cy = match.bounds["cx"], match.bounds["cy"]
                     if cy < 0 or cy > height or cx < 0 or cx > width:
+                        # Swiped towards it and looked again — but the
+                        # deadline below still ends this, and it must: an
+                        # element off to the *side* is one a vertical swipe
+                        # can never bring back, and skipping the deadline here
+                        # left resolve scrolling at it for ever, a page source
+                        # and a swipe at a time, with no way for the run to
+                        # end.
                         if await _auto_scroll(session_id, cy, width, height):
                             await asyncio.sleep(1.0)
-                            manager, reused = None, False
-                            continue
+                            scrolled = True
 
         if time.monotonic() >= deadline:
             break
-        # Nothing to wait for when the look was free: take a real one at once.
-        if not reused:
+        # Nothing to wait for when the look was free, or when a swipe has just
+        # been given its own second to land.
+        if not reused and not scrolled:
             await asyncio.sleep(poll_interval)
-        manager, reused = None, False
+        manager, reused, scrolled = None, False, False
 
     if pending_ambiguity is not None:
         raise pending_ambiguity

@@ -651,8 +651,7 @@ def add_step(
         # {{kart.numara}}. Recordings are built from these rows, so a card
         # never reaches a scenario either, and neither does the model's
         # message about typing it.
-        secrets = conn.execute(
-            "SELECT key, value FROM test_data WHERE secret = 1").fetchall()
+        secrets = _secrets(conn)
         value, message, reason, target = (
             _named(text, secrets) for text in (value, message, reason, target))
         element_json = (_named(json.dumps(element, ensure_ascii=False), secrets)
@@ -674,6 +673,10 @@ def add_step(
         return cursor.lastrowid
 
 
+def _secrets(conn) -> List[Any]:
+    return conn.execute("SELECT key, value FROM test_data WHERE secret = 1").fetchall()
+
+
 def _named(text: Optional[str], secrets) -> Optional[str]:
     """`text` with each secret in it replaced by the store's name for it."""
     if not text:
@@ -683,10 +686,15 @@ def _named(text: Optional[str], secrets) -> Optional[str]:
         spelled = str(row["value"] or "")
         if not spelled:
             continue
-        # A short secret — a CVV — is only taken for itself when it is the
-        # whole text. "123" inside a timestamp is not a card.
-        if out == spelled or (len(spelled) >= 6 and spelled in out):
-            out = out.replace(spelled, "{{" + row["key"] + "}}")
+        name = "{{" + row["key"] + "}}"
+        if len(spelled) >= 6:
+            out = out.replace(spelled, name)
+        else:
+            # A short secret — a CVV — only where it stands as a word of its
+            # own. "123" inside 1123 is not a card; "Type 123 into the
+            # security code field" is, and that sentence is what a scenario
+            # step becomes once the store has been filled into it.
+            out = re.sub(rf"\b{re.escape(spelled)}\b", name, out)
     return out
 
 
@@ -816,6 +824,15 @@ def run_os_counts(search: Optional[str] = None) -> Dict[str, int]:
     return counts
 
 
+def _a_page(limit: Any, most: int = 1000) -> int:
+    """A LIMIT SQLite can hold and a caller cannot turn into "everything"."""
+    try:
+        wanted = int(limit)
+    except (TypeError, ValueError):
+        return 50
+    return min(max(wanted, 1), most)
+
+
 def list_runs(
     limit: int = 50,
     tag: Optional[str] = None,
@@ -868,7 +885,11 @@ def list_runs(
     if where:
         query += " WHERE " + " AND ".join(where)
     query += " ORDER BY r.started_at DESC LIMIT ? OFFSET ?"
-    params.extend([limit, max(0, offset)])
+    # Both ends clamped. SQLite reads a negative LIMIT as "no limit", so a
+    # caller asking for -1 was handed the whole run history; and a number
+    # past what SQLite holds comes back out of the driver as an OverflowError
+    # rather than an answer.
+    params.extend([_a_page(limit), min(max(0, offset), 1_000_000)])
 
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -913,13 +934,21 @@ def start_scenario_step(
     passed run and reads as a contradiction. It is not one — a flow is judged
     where it arrives, and a step on the way that had trouble and was got past
     is worth seeing without being worth failing.
+
+    What the step says is stored with the store's secrets named rather than
+    spelled, the same way `add_step` does it. The scenario on disk says
+    `{{kart.success.numara}}`, but what arrives here has already been filled
+    in — and this row is what the run detail, the JUnit report a CI job
+    attaches, and an automatically raised bug all quote. The card number was
+    being served in clear by six endpoints through this one gap.
     """
     with _connect() as conn:
+        secrets = _secrets(conn)
         cursor = conn.execute(
             """INSERT INTO scenario_steps
                    (run_id, idx, action, expected, status, judged, created_at)
                VALUES (?, ?, ?, ?, 'running', ?, ?)""",
-            (run_id, idx, action, expected or None,
+            (run_id, idx, _named(action, secrets), _named(expected, secrets) or None,
              1 if judged else 0, time.time()),
         )
         return cursor.lastrowid
@@ -940,13 +969,14 @@ def finish_scenario_step(
     work behind it was already being done.
     """
     with _connect() as conn:
+        secrets = _secrets(conn)
         conn.execute(
             """UPDATE scenario_steps
                   SET status = ?, message = ?, actions_used = ?,
                       duration_ms = ?, healed = ?, healed_note = ?
                 WHERE id = ?""",
-            (status, message, actions_used, duration_ms,
-             1 if healed else 0, healed_note, step_row_id),
+            (status, _named(message, secrets), actions_used, duration_ms,
+             1 if healed else 0, _named(healed_note, secrets), step_row_id),
         )
 
 
@@ -1541,6 +1571,35 @@ def froze_a_moment(step: Dict[str, Any], recorded: List[Dict[str, Any]],
         for action in recorded)
 
 
+def holds_a_secret(recorded: List[Dict[str, Any]], secrets) -> bool:
+    """Is one of the store's secrets written out in this recording?
+
+    Then it must not be kept. A recording lives in `suite_cases.steps`, which
+    is read by the editor, the exporters and anything that copies a scenario
+    — so a card number in one is a card number in all of them. Measured on
+    this database: three scenarios had `assert_text "5610 5910 8101 8250"`,
+    which `named_not_spelled` had not recognised because the store holds the
+    digits unspaced and it compares what is written down.
+
+    Digits are compared on their own for that reason: a screen groups a card
+    number and a recording copies the grouping.
+    """
+    for action in recorded:
+        written = " ".join(str(action.get(field) or "")
+                           for field in ("value", "selector", "label"))
+        bare = "".join(ch for ch in written if ch.isdigit())
+        for row in secrets:
+            spelled = str(row["value"] or "")
+            if not spelled:
+                continue
+            if spelled in written:
+                return True
+            digits = "".join(ch for ch in spelled if ch.isdigit())
+            if len(digits) >= 6 and digits in bare:
+                return True
+    return False
+
+
 def named_not_spelled(recorded: List[Dict[str, Any]], step: Dict[str, Any],
                       store: Dict[str, str]) -> List[Dict[str, Any]]:
     """A recording's values written as the store's names, where they came from it.
@@ -1586,6 +1645,16 @@ def named_not_spelled(recorded: List[Dict[str, Any]], step: Dict[str, Any],
 REPEATABLE_CHECKS = {
     "assert_visible", "assert_text", "assert_absent", "assert_disabled",
     "assert_no_errors", "assert_visual",
+}
+
+# The checks that read the screen until they hold, so a wait in front of one
+# is time spent twice. The two that are not here look once and answer:
+# `assert_no_errors` peeks at the errors the page has logged so far, and
+# `assert_visual` compares a single screenshot. Dropping a wait in front of
+# either asks the question before the thing it was waiting for has arrived —
+# a page that logged its error a second later comes back clean.
+CHECKS_THAT_WAIT = {
+    "assert_visible", "assert_text", "assert_absent", "assert_disabled",
 }
 
 # What a recorded action keeps. Deliberately the minimum needed to perform it
@@ -1668,7 +1737,7 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
             kept[-1] = _longer_wait(kept[-1], step)
             continue
         following = next((a for a in actions[index + 1:] if a["action"] != "wait"), None)
-        if following is not None and following["action"] in REPEATABLE_CHECKS:
+        if following is not None and following["action"] in CHECKS_THAT_WAIT:
             continue
         kept.append(step)
 
@@ -2189,6 +2258,7 @@ def promote_recording(run_id: str, case_id: str) -> int:
                  for row in conn.execute("SELECT key, value FROM test_data")}
         moving = {name for name, value in store.items()
                   if NAMES_A_MOVING_DAY.match(value)}
+        secrets = _secrets(conn)
 
         kept = 0
         for position, step in enumerate(steps, start=1):
@@ -2199,6 +2269,12 @@ def promote_recording(run_id: str, case_id: str) -> int:
             )
             recorded = named_not_spelled(
                 clean_recorded(by_step.get(position) or []), step, store)
+            if recorded and holds_a_secret(recorded, secrets):
+                # Written down, and not ours to write down. The step costs a
+                # model call every run, which is the price of not keeping a
+                # card number in a file the whole team reads.
+                step.pop("recorded", None)
+                continue
             if recorded and froze_a_moment(step, recorded, moving):
                 # Written down, and wrong by tomorrow. Dropped rather than
                 # kept for healing to sort out: this one is not stale by
@@ -2603,12 +2679,12 @@ def trend(
 
 # --- shared test data ------------------------------------------------------ #
 
-def list_test_data(reveal: bool = False) -> List[Dict[str, Any]]:
+def list_test_data() -> List[Dict[str, Any]]:
     """Every value scenarios can reach by name, newest edit first.
 
-    A secret comes back masked unless `reveal` is asked for, so the ordinary
-    listing — the one on screen, the one a screenshot catches — never carries a
-    card number.
+    A secret comes back masked, always: the listing is the one on screen and
+    the one a screenshot catches, and it never carries a card number. Reading
+    one in full is `test_data_values`, asked for an entry at a time.
     """
     with _connect() as conn:
         rows = conn.execute(
@@ -2621,7 +2697,7 @@ def list_test_data(reveal: bool = False) -> List[Dict[str, Any]]:
         value = row["value"]
         out.append({
             "key": row["key"],
-            "value": value if (reveal or not secret) else _masked(value),
+            "value": value if not secret else _masked(value),
             "secret": secret,
             "note": row["note"],
             "updatedAt": row["updated_at"],
