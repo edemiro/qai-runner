@@ -55,6 +55,30 @@ def _comes_after(wanted: str, current: str) -> bool:
     return True
 
 
+def _holds(text: str) -> str:
+    """What kind of thing a wheel is showing: a year, a month, a plain number
+    or words.
+
+    Which wheel is which is asked of what they hold, because where they sit
+    moves. On the iPhone the month wheel was recorded as the first of three
+    and came back as the second on the next run, and the path from the root
+    moves with every container above it — so the recording pointed the month
+    at the day's wheel and the replay found nothing at all. A day is a short
+    number, a year is four digits, a month says its name.
+    """
+    kind, _ = _notch(text)
+    if kind == "number":
+        digits = "".join(ch for ch in str(text) if ch.isdigit())
+        return "year" if len(digits) == 4 else "day"
+    return kind
+
+
+def _looks_like_a_wheel(selector: str) -> bool:
+    """Does this locator address a picker wheel?"""
+    selector = selector or ""
+    return "PickerWheel" in selector or "NumberPicker" in selector
+
+
 class MobileTarget:
     kind = "mobile"
 
@@ -132,6 +156,17 @@ class MobileTarget:
     ) -> ActionResult:
         if not element_id and not selector:
             return ActionResult(False, f"Action '{kind}' needs an elementId")
+
+        # A picker wheel is found by what it holds, straight on the device —
+        # see _set_wheel. A recording cannot address one by position: the
+        # path it wrote down runs through every container above the wheel,
+        # and on the next run it reaches nothing. Three date-of-birth steps
+        # were being re-derived every single time for that.
+        if kind == "type" and _looks_like_a_wheel(selector or ""):
+            turned = await self._set_wheel(value)
+            if turned is not None:
+                ok, message = turned
+                return ActionResult(ok, message, {"xpath": selector})
 
         # A recording addresses its element by name, and the device can find a
         # name on its own. Going through a snapshot for one costs a full page
@@ -260,9 +295,16 @@ class MobileTarget:
         the caller resolves again against a screen taken now.
         """
         label = element.describe()
-        if kind == "type" and "NumberPicker" in (element.xpath or ""):
-            return await self._set_number_picker(element, value, label)
-        if kind == "type" and "XCUIElementTypePickerWheel" in (element.xpath or ""):
+        if kind == "type" and _looks_like_a_wheel(element.xpath or ""):
+            # Which wheel this is, asked of what the wheels hold. The model
+            # picked one out of the tree and can pick the wrong one: a
+            # recording promoted from a green run sent the month to the day's
+            # wheel, because that is where the model had put it.
+            turned = await self._set_wheel(value)
+            if turned is not None:
+                return turned
+            if "NumberPicker" in (element.xpath or ""):
+                return await self._set_number_picker(element, value, label)
             return await self._spin_wheel(element, value, label)
         handle = await appium.find_element_by_xpath(self.session_id, element.xpath)
 
@@ -346,8 +388,77 @@ class MobileTarget:
         await MobileGestureController.perform_key_event(self.session_id, "android", "tab")
         return True, f'Set "{label}" to "{value}"'
 
+    async def _set_wheel(self, value: Optional[str]):
+        """Set the wheel that holds this kind of value, whichever one it is.
+
+        A date picker's wheels are told apart by what they show — a day is a
+        short number, a month says its name, a year is four digits — because
+        where they sit is not dependable. Measured on the iPhone: the month
+        wheel was the first of three when the recording was made and the
+        second when it was replayed, and the full path to it runs through
+        containers that move on their own. Asked of the device, so no screen
+        is read for it either.
+
+        Returns (ok, message), or None when the wheels cannot be told apart
+        this way and the caller should address the one it was given.
+        """
+        platform = (await appium.get_platform(self.session_id, self._platform_cache)).lower()
+        wheels = await self._wheels_on_screen(platform)
+        if not wheels:
+            return None
+        wanted = " ".join(str(value or "").split())
+        matching = [wheel for wheel in wheels if _holds(wheel[1]) == _holds(wanted)]
+        if len(matching) != 1:
+            # Two wheels showing the same kind of thing, or none: nothing here
+            # says which one was meant.
+            return None
+        handle, current = matching[0]
+        name = f"the {_holds(wanted)} wheel"
+        if platform == "ios":
+            return await self._turn_wheel(handle, current, wanted, name)
+        return await self._type_into_wheel(handle, wanted, name)
+
+    async def _wheels_on_screen(self, platform: str):
+        """Every picker wheel the device can see, with what it is showing."""
+        if platform == "ios":
+            handles = await appium.find_elements(
+                self.session_id, "-ios class chain", "**/XCUIElementTypePickerWheel")
+        else:
+            handles = await appium.find_elements(
+                self.session_id, "xpath",
+                "//android.widget.NumberPicker//android.widget.EditText")
+        return [(handle, await self._wheel_value(handle) or "") for handle in handles]
+
+    async def _type_into_wheel(self, handle: str, wanted: str, name: str):
+        """The Android way: a real tap focuses the wheel's field, the value
+        goes in, and TAB is what makes the picker read it. See
+        _set_number_picker, which does the same from a snapshot's element."""
+        res = await appium.get(f"/session/{self.session_id}/element/{handle}/rect")
+        if res is None or res.status_code != 200:
+            return False, f'Could not find where {name} is'
+        box = res.json().get("value") or {}
+        cx = int(box.get("x", 0)) + int(box.get("width", 0)) // 2
+        cy = int(box.get("y", 0)) + int(box.get("height", 0)) // 2
+        await appium.post(f"/session/{self.session_id}/element/{handle}/clear")
+        if not await MobileGestureController.perform_tap(self.session_id, cx, cy):
+            return False, f"Could not focus {name}"
+        await asyncio.sleep(0.4)
+        if not await MobileGestureController.perform_type_text(self.session_id, wanted):
+            return False, f"Could not type into {name}"
+        await MobileGestureController.perform_key_event(self.session_id, "android", "tab")
+        return True, f'Set {name} to "{wanted}"'
+
     async def _spin_wheel(self, element, value: Optional[str], label: str):
-        """Turn an iOS picker wheel to `value`, one notch at a time.
+        """Turn an iOS picker wheel, addressed by the element it was found as."""
+        handle = await self._find_wheel(element)
+        if not handle:
+            return False, f'Could not find "{label}"'
+        return await self._turn_wheel(
+            handle, " ".join(str(element.text or "").split()),
+            " ".join(str(value or "").split()), label)
+
+    async def _turn_wheel(self, handle: str, current: str, wanted: str, label: str):
+        """Turn an iOS picker wheel to `wanted`, one notch at a time.
 
         Typing into an XCUIElementTypePickerWheel comes back 200 and leaves
         the wheel where it was. Measured on the passenger form's date of
@@ -358,11 +469,6 @@ class MobileTarget:
         again until it says so — a day, a month or a year knows which way
         that is; anything else is tried forwards.
         """
-        handle = await self._find_wheel(element)
-        if not handle:
-            return False, f'Could not find "{label}"'
-        wanted = " ".join(str(value or "").split())
-        current = " ".join(str(element.text or "").split())
         for _ in range(WHEEL_TURNS):
             if _same_notch(current, wanted):
                 return True, f'Turned "{label}" to "{current}"'
@@ -389,10 +495,16 @@ class MobileTarget:
         return False, f'"{label}" reads "{current}" after {WHEEL_TURNS} turns, not "{wanted}"'
 
     async def _wheel_value(self, handle: str) -> Optional[str]:
-        res = await appium.get(f"/session/{self.session_id}/element/{handle}/attribute/value")
-        if res is None or res.status_code != 200:
-            return None
-        return " ".join(str(res.json().get("value") or "").split())
+        """What a wheel is showing. An iPhone answers on `value`, an Android
+        text field on either — asked in that order, and the first that says
+        anything wins."""
+        for path in ("attribute/value", "text"):
+            res = await appium.get(f"/session/{self.session_id}/element/{handle}/{path}")
+            if res is not None and res.status_code == 200:
+                said = " ".join(str(res.json().get("value") or "").split())
+                if said:
+                    return said
+        return None
 
     async def _find_wheel(self, element) -> Optional[str]:
         """The wheel's handle, by which wheel it is rather than where it sits.

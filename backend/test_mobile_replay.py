@@ -124,19 +124,48 @@ def test_the_model_addressing_what_it_saw_goes_the_careful_way(monkeypatch):
     careful.assert_awaited()
 
 
-def test_a_wheel_is_never_typed_into_by_name(monkeypatch):
-    """A picker wheel is turned, not set — see _spin_wheel."""
-    wheel = '//*[@resource-id="numberpicker_input"]'
+def test_a_wheel_is_set_by_what_it_holds_not_by_where_it_sits(monkeypatch):
+    """A recording cannot address a wheel by position — the path it wrote
+    down runs through containers that move, and on the next run it reaches
+    nothing. The device is asked for its wheels and the one showing a year
+    is the one a year goes into."""
+    asked = {}
 
-    async def never_find(*args, **kwargs):
-        raise AssertionError("a wheel has its own way of being typed into")
+    async def platform_is(session_id, cache):
+        return "iOS"
 
-    monkeypatch.setattr(appium, "find_elements", never_find)
-    careful = AsyncMock(return_value=None)
-    with patch.object(locator, "resolve", new=careful):
-        asyncio.run(_target().act("type", None, wheel.replace("numberpicker_input",
-                                                              "NumberPicker"), "2000", None))
-    careful.assert_awaited()
+    async def find_elements(session_id, using, value, timeout=10.0):
+        asked["chain"] = (using, value)
+        return ["day", "month", "year"]
+
+    showing = {"day": "5.", "month": "October", "year": "2014"}
+
+    async def get(path, timeout=None, base_url=None):
+        parts = path.strip("/").split("/")
+        return Res(showing[parts[parts.index("element") + 1]])
+
+    async def execute(session_id, script, args=None):
+        asked.setdefault("turned", []).append(args["element"])
+        return True, None
+
+    monkeypatch.setattr(appium, "get_platform", platform_is)
+    monkeypatch.setattr(appium, "find_elements", find_elements)
+    monkeypatch.setattr(appium, "get", get)
+    monkeypatch.setattr(appium, "execute", execute)
+    monkeypatch.setattr(locator, "capture_snapshot", AsyncMock(return_value=None))
+
+    # A year: only the wheel showing four digits can be meant. It never
+    # reaches 2000 here because the fake wheel does not move, but which
+    # wheel was turned is the whole question.
+    asyncio.run(_target().act("type", None, "…/XCUIElementTypePickerWheel[1]", "2000", None))
+    assert asked["chain"] == ("-ios class chain", "**/XCUIElementTypePickerWheel")
+    assert set(asked["turned"]) == {"year"}, asked["turned"]
+
+    # And a month goes to the wheel that says a month, though the recording
+    # pointed at the first wheel both times.
+    asked["turned"] = []
+    asyncio.run(_target().act("type", None, "…/XCUIElementTypePickerWheel[1]", "January", None))
+    assert set(asked["turned"]) == {"month"}, asked["turned"]
 
 
 def test_visibility_is_asked_of_the_device(monkeypatch):

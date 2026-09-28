@@ -29,7 +29,22 @@ class PlainField(YearWheel):
     xpath = "/hierarchy[1]/android.widget.FrameLayout[1]/android.widget.EditText[1]"
 
 
+def _no_wheels_to_choose_between(monkeypatch, platform="Android"):
+    """The device says nothing about its wheels, so the driver falls back to
+    addressing the one it was given. The tests below are about that path;
+    picking a wheel by what it holds has its own, further down."""
+    async def platform_is(session_id, cache):
+        return platform
+
+    async def none(session_id, using, value, timeout=10.0):
+        return []
+
+    monkeypatch.setattr(appium, "get_platform", platform_is)
+    monkeypatch.setattr(appium, "find_elements", none)
+
+
 def _thumb(monkeypatch):
+    _no_wheels_to_choose_between(monkeypatch)
     done = []
 
     async def tap(session_id, x, y):
@@ -136,7 +151,7 @@ class IosWheel:
         return "year wheel"
 
 
-def _turning(monkeypatch, notches, start, stale=False):
+def _turning(monkeypatch, notches, start, stale=False, _ios=True):
     """A wheel that really turns: `notches` in order, `start` where it is.
     `stale` makes the first read after every turn answer with the value the
     wheel is leaving, as a wheel still settling does."""
@@ -186,6 +201,7 @@ def _turning(monkeypatch, notches, start, stale=False):
     monkeypatch.setattr(appium, "execute", execute)
     monkeypatch.setattr(appium, "get", get)
     monkeypatch.setattr(appium, "post", never)
+    _no_wheels_to_choose_between(monkeypatch, "iOS")
     return state
 
 
