@@ -177,6 +177,57 @@ def test_waits_before_an_action_become_the_longest_one():
     ]
 
 
+def test_a_phone_recording_that_gives_a_position_is_not_kept():
+    """A path through a view tree moves whenever anything above it does, and
+    the driver has nothing to fall back on when it misses: 85% of them failed
+    on Android, each costing a ten-second timeout *and* the model call after
+    it. That is a recording worse than none."""
+    tree_path = "/hierarchy[1]/android.widget.FrameLayout[1]/android.widget.Button[2]"
+    actions = [{"action": "click", "selector": '//*[@resource-id="btnSearch"]'},
+               {"action": "click", "selector": tree_path}]
+    assert storage.clean_recorded(actions, on_a_phone=True) == []
+    # The same path on a page survives: the page keeps its shape, and
+    # `_label_moved` checks what is there before trusting it.
+    assert len(storage.clean_recorded(actions, on_a_phone=False)) == 2
+
+
+def test_a_wheel_keeps_its_position_because_nothing_looks_it_up():
+    """A wheel's locator is a position on purpose — its text is the value it
+    is showing — and the driver asks the device for the wheels instead."""
+    kept = storage.clean_recorded([
+        {"action": "type",
+         "selector": "/AppiumAUT[1]/…/XCUIElementTypePickerWheel[3]", "value": "2000"},
+    ], on_a_phone=True)
+    assert len(kept) == 1
+
+
+def test_a_name_that_is_a_moment_is_not_a_name():
+    """//*[@content-desc="TK2192"] names whichever flight was first today, and
+    a content-desc carrying a time and a price names the fare beside it. Both
+    read as names and fail like positions."""
+    for moment in ('//*[@content-desc="TK2192"]',
+                   '//*[@text="Sunday, October 4, 2026, ₺ 4.500,"]',
+                   '//*[@content-desc="02:00 IST Departure Price: 1.933,63 TRY"]'):
+        assert storage.clean_recorded(
+            [{"action": "click", "selector": moment}], on_a_phone=True) == [], moment
+    # A real name is untouched.
+    assert storage.clean_recorded(
+        [{"action": "click", "selector": '//*[@content-desc="continueButton"]'}],
+        on_a_phone=True) != []
+
+
+def test_the_wordings_the_sets_actually_use_count_as_relative():
+    """Written to catch "days from" alone, this matched nine steps out of
+    1370 — while thirty-five recordings sat on scenarios saying "15 days
+    ahead", each holding a day that was right the day it was written."""
+    for words in ("select a departure date 15 days ahead",
+                  "a date 3 days later", "one month ahead", "a week out",
+                  "bugünden yaklaşık bir hafta sonra", "30 gün ileri"):
+        assert storage.RELATIVE_TO_NOW.search(words), words
+    for fixed in ("select the first flight", "type the passenger's surname"):
+        assert not storage.RELATIVE_TO_NOW.search(fixed), fixed
+
+
 def test_a_step_that_took_too_many_actions_is_not_kept():
     """A long recording is a recording of a struggle, and replaying a struggle
     reproduces it."""
@@ -851,6 +902,34 @@ def test_a_value_that_came_from_the_store_is_recorded_by_name(db, case):
     storage.promote_recording(run_id, case)
     values = [a["value"] for a in storage.get_case(case)["steps"][0]["recorded"]]
     assert values == ["{{yolcu.ad}}", "{{yolcu.ad}} {{yolcu.soyad}}", "1"]
+
+
+def test_a_run_cannot_pass_over_a_judged_step_that_did_not(db):
+    """A `done` arriving in the middle of a step settles the run before the
+    step is closed, and the step is then written as failed by the tidying up
+    after it. Ten runs in this database said passed over a red judged step,
+    and the JUnit file a CI job reads is built from the run."""
+    run_id = storage.create_run(goal="a run", kind="web")
+    row = storage.start_scenario_step(run_id, 3, "Pay", "A PNR is shown")
+    storage.finish_scenario_step(row, "failed", message="The page stayed on the form.")
+    storage.finish_run(run_id, "passed")
+
+    run = storage.get_run(run_id)
+    assert run["status"] == "failed"
+    assert "Step 3" in run["error"] and "stayed on the form" in run["error"]
+
+
+def test_a_step_the_scenario_does_not_judge_does_not_fail_the_run(db):
+    """A step on the way is carried out and not judged — that is what the
+    flag is for — and an optional one that was skipped is not a failure."""
+    run_id = storage.create_run(goal="a run", kind="web")
+    on_the_way = storage.start_scenario_step(run_id, 1, "Open", None, judged=False)
+    storage.finish_scenario_step(on_the_way, "failed", message="had trouble")
+    optional = storage.start_scenario_step(run_id, 2, "Read it back", None)
+    storage.finish_scenario_step(optional, "skipped", message="not proved")
+    storage.finish_run(run_id, "passed")
+
+    assert storage.get_run(run_id)["status"] == "passed"
 
 
 def test_a_recording_that_holds_a_secret_is_not_kept(db, case):

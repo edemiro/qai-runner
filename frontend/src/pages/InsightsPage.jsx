@@ -11,6 +11,13 @@ import './insights.css';
 /* Above this share the verdict is changing often enough to be the reason a
    case cannot be trusted rather than a run or two of noise. The rows mark it
    and the chip collects it, so both read the line from here. */
+/** A span of time as the rest of the app writes one: `9.4s`, `10m 5s`. */
+function howLong(ms) {
+  if (ms == null) return '—';
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
 const FLAKY_HIGH = 0.3;
 
 /* Twenty rows run past the fold; ten do not, and a search box over a list that
@@ -228,7 +235,10 @@ export function InsightsPage() {
             <div className="stat-card">
               <span className="stat-label">Avg duration</span>
               <span className="stat-value">
-                {totals.avgMs == null ? '—' : `${(totals.avgMs / 1000).toFixed(1)}s`}
+                {/* Minutes and seconds, the way the rest of the app writes a
+                    duration. "605.4s" is a number nobody reads as ten
+                    minutes. */}
+                {totals.avgMs == null ? '—' : howLong(totals.avgMs)}
               </span>
               <span className="stat-note">per scenario</span>
             </div>
@@ -413,8 +423,13 @@ export function InsightsPage() {
                             </span>
                           </td>
                           <td>
+                            {/* The word the rest of the app uses. This column
+                                printed the stored value, so the same verdict
+                                read "passed" here and "Passed" on Test Runs. */}
                             <span className={`badge ${row.last_status === 'passed' ? 'ok' : 'bad'}`}>
-                              {row.last_status}
+                              {row.last_status === 'passed' ? 'Passed'
+                                : row.last_status === 'failed' ? 'Failed'
+                                  : row.last_status}
                             </span>
                           </td>
                         </tr>

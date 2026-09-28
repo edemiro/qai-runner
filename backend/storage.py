@@ -548,6 +548,30 @@ def finish_run(
     blocked: bool = False,
 ) -> None:
     with _connect() as conn:
+        if status == "passed":
+            # A run is green only when every step it judged is. The verdict is
+            # worked out in the agent loop, and paths reach a pass with a
+            # judged step still red: a `done` arriving in the middle of a step
+            # settles the run before the step is closed, and the step is then
+            # written as failed by the code that tidies up after it. Ten runs
+            # in this database say passed over a judged step that failed —
+            # and the JUnit file a CI job reads is built from the run.
+            #
+            # Checked here because this is the one door every path goes
+            # through, including the second close the suite runner does.
+            red = conn.execute(
+                """SELECT idx, message FROM scenario_steps
+                    WHERE run_id = ? AND judged = 1
+                      AND status NOT IN ('passed', 'skipped')
+                    ORDER BY idx LIMIT 1""",
+                (run_id,),
+            ).fetchone()
+            if red is not None:
+                status = "failed"
+                error = error or (
+                    f"Step {red['idx']} did not pass: "
+                    f"{red['message'] or 'no reason was given'}"
+                )
         conn.execute(
             # COALESCE on the error too, not only the note: a run is finished
             # twice — the agent closes it with the reason it failed, then the
@@ -1512,9 +1536,29 @@ MAX_RECORDED_ACTIONS = 12
 # A step that describes when rather than what: "a few days from today", "a
 # week out", "yarın". Both languages, because the sets are written in both.
 RELATIVE_TO_NOW = re.compile(
-    r"bug[üu]n|toda[yi]|g[üu]n sonra|days? from|hafta sonra|next week"
-    r"|yar[ıi]n|tomorrow|within the next|ileri bir tarih|from now",
+    r"bug[üu]n|toda[yi]|yar[ıi]n|tomorrow|from now|within the next"
+    r"|ileri bir tarih"
+    # The wordings the sets actually use. Written to catch "days from" alone,
+    # this matched nine steps out of 1370 — while thirty-five recordings sat
+    # on scenarios saying "15 days ahead", "3 days later", "one month ahead",
+    # each holding a day that was right when it was written down. Three of
+    # them had already gone stale.
+    r"|\b(?:days?|weeks?|months?)\s+(?:ahead|later|out|from)"
+    r"|\b(?:g[üu]n|hafta|ay)\s+(?:sonra|ileri)"
+    r"|\bnext\s+(?:week|month|day)",
     re.IGNORECASE,
+)
+
+# What a naming locator may not be named after: something that is different
+# tomorrow. //*[@content-desc="TK2192"] names whichever flight was first in
+# today's list, and //*[@text="Sunday, October 4, 2026, ₺ 4.500,"] names a day
+# and a price. Both read as names and fail like positions — measured across
+# the sets, a third of them missed on replay against a ninth for a real name.
+A_MOMENT_NOT_A_NAME = re.compile(
+    r"\d{1,2}:\d{2}"                        # a time of day
+    r"|[₺$€£]\s?\d"                          # a price with its symbol
+    r"|\b\d{1,3}[.,]\d{3}[.,]\d{2}\b"        # a price without one
+    r"|\b[A-Z]{2}\d{2,4}\b"                  # a carrier code and a number
 )
 
 # A value that names a particular day. Deliberately loose: it only has to
@@ -1663,7 +1707,7 @@ CHECKS_THAT_WAIT = {
 _RECORDED_FIELDS = ("action", "selector", "value", "label")
 
 
-def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
+def clean_recorded(raw: Any, on_a_phone: bool = False) -> List[Dict[str, Any]]:
     """The actions a step was last carried out with, in a shape it can be
     carried out with again.
 
@@ -1714,6 +1758,8 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
         # `scroll` act on the page as a whole.
         if not selector and kind not in ACTIONS_WITHOUT_A_TARGET:
             return []
+        if selector and not _durable(selector, on_a_phone):
+            return []
         step = {
             "action": kind, "selector": selector, "value": value,
             "label": (str(entry.get("label") or "").strip())[:120] or None,
@@ -1744,6 +1790,40 @@ def clean_recorded(raw: Any) -> List[Dict[str, Any]]:
     if len(kept) > MAX_RECORDED_ACTIONS:
         return []
     return kept
+
+
+_A_NAMED_LOCATOR = re.compile(r'^//\*\[@([\w-]+)=(?:"([^"]*)"|\'([^\']*)\')\]$')
+_A_WHEEL = re.compile(r"PickerWheel|NumberPicker")
+
+
+def _durable(selector: str, on_a_phone: bool) -> bool:
+    """Will this locator still find the same element on another run?
+
+    On a phone, only a locator that names its element will. A path through
+    the view tree moves whenever anything above it does, and the driver has
+    nothing to fall back on when it misses: measured over 2787 replayed
+    actions, a tree path failed 85% of the time on Android and 43% on iOS,
+    against 11% and 6% for a name. Each failure costs a ten-second timeout
+    *and* the model call that follows — the case where a recording is worse
+    than none at all, which is why the whole step's recording goes.
+
+    On the web a position is survivable, because the page keeps its shape and
+    `agent._label_moved` checks what is at the path before trusting it: the
+    same comparison shows 4% against 1%.
+
+    A picker wheel is the exception that proves it. Its locator is a position
+    on purpose — a wheel's text is the value it is showing — and the driver
+    does not use it to find one: it asks the device for the wheels and picks
+    the one holding the kind of value being set.
+    """
+    if not on_a_phone or _A_WHEEL.search(selector):
+        return True
+    named = _A_NAMED_LOCATOR.match(selector)
+    if not named:
+        return False
+    what = named.group(2) if named.group(2) is not None else named.group(3)
+    # A name is only a name while it means the same thing tomorrow.
+    return not (A_MOMENT_NOT_A_NAME.search(what) or A_PARTICULAR_DAY.search(what))
 
 
 def _longer_wait(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
@@ -2259,6 +2339,12 @@ def promote_recording(run_id: str, case_id: str) -> int:
         moving = {name for name, value in store.items()
                   if NAMES_A_MOVING_DAY.match(value)}
         secrets = _secrets(conn)
+        # Which locators are worth keeping depends on the target: a position
+        # in a phone's view tree is gone by the next run, a position on a page
+        # usually is not. See `_durable`.
+        on_a_phone = (conn.execute(
+            "SELECT s.kind FROM suite_cases c JOIN suites s ON s.id = c.suite_id"
+            " WHERE c.id = ?", (case_id,)).fetchone() or {"kind": ""})["kind"] == "mobile"
 
         kept = 0
         for position, step in enumerate(steps, start=1):
@@ -2268,7 +2354,7 @@ def promote_recording(run_id: str, case_id: str) -> int:
                 and position not in spoiled
             )
             recorded = named_not_spelled(
-                clean_recorded(by_step.get(position) or []), step, store)
+                clean_recorded(by_step.get(position) or [], on_a_phone), step, store)
             if recorded and holds_a_secret(recorded, secrets):
                 # Written down, and not ours to write down. The step costs a
                 # model call every run, which is the price of not keeping a

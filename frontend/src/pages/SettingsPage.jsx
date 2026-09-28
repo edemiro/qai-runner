@@ -34,7 +34,7 @@ function AppiumCard({ status, logs, onStart, onStop, busy }) {
           </div>
           <div>
             <h3 className="card-title">Appium server</h3>
-            <p className="card-desc">Started as a child process with <code>--allow-cors</code>, on port 4723.</p>
+            <p className="card-desc">Runs locally on port 4723. QAi starts and stops it for you.</p>
           </div>
         </div>
         <span className={`run-status ${status === 'running' ? 'passed' : status === 'starting' ? 'running' : 'cancelled'}`}>
@@ -223,7 +223,8 @@ function ModelCard({ onSaved }) {
           <div>
             <h3 className="card-title">Model provider</h3>
             <p className="card-desc">
-              Powers the agent's reasoning. Keys are written to the backend .env, never to the browser.
+              Which model QAi uses to read a screen and decide the next action. Your key is
+              stored on the server, never in the browser.
             </p>
           </div>
         </div>

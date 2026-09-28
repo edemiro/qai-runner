@@ -1039,7 +1039,7 @@ export function SuitesPage({
                       onClick={runSuite}
                       disabled={executionCount === 0}
                     >
-                      <Play size={14} /> Run suite
+                      <Play size={14} /> Run Test Set
                     </button>
                   )}
                 </div>

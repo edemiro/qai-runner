@@ -534,25 +534,10 @@
   padding-bottom: 0;
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  flex-shrink: 0;
-}
-
-.page-title {
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.page-subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-top: 3px;
-}
+/* `.page-header`, `.page-title` and `.page-subtitle` are defined once, further
+   down this sheet with the rest of the page furniture. They used to be here
+   as well, with different weights and colours ~4,500 lines apart: the later
+   block won, this one did nothing, and anyone editing it saw no change. */
 
 .muted {
   color: var(--text-secondary);
@@ -2334,14 +2319,13 @@ optgroup { color: var(--text-tertiary); }
   text-align: right;
 }
 
+/* Shape and size come from the one badge metric further down this sheet,
+   which every other badge already used. Defined separately here, the same
+   verdict was 24px tall on Test Runs and 20px on Test Executions, Insights
+   and Bug Report — a tester moving between those four pages all day saw the
+   same word in four sizes. Only the colours and the icon gap stay. */
 .run-status {
-  display: inline-flex;
-  align-items: center;
   gap: 5px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -3160,6 +3144,10 @@ optgroup { color: var(--text-tertiary); }
   flex-direction: column;
   gap: 18px;
   min-width: 0;
+  /* The pane holds its column rather than ending partway down it. Beside a
+     list 1720px long it was 199px, with bare background under it — the thing
+     the reader came to look at, floating at the top of an empty half. */
+  min-height: calc(100vh - 210px);
 }
 
 .suite-detail > .card {
@@ -4511,7 +4499,8 @@ a.scan-row-url {
 .verdict,
 .score,
 .bug-status,
-.bug-code {
+.bug-code,
+.run-status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5087,6 +5076,10 @@ textarea,
   justify-content: space-between;
   gap: var(--gap-4);
   margin-bottom: var(--gap-5);
+  /* Wraps rather than squeezing the title. A single button held its width at
+     phone size and pushed "Test Data" onto two lines and its subtitle into a
+     column one word wide. */
+  flex-wrap: wrap;
 }
 
 /* A coloured rule under the title, so each screen opens the same way and the
@@ -6633,6 +6626,12 @@ textarea,
   align-items: start;
 }
 
+/* Same as the execution pane: it holds its column instead of sitting as a
+   145px stub beside a list seven thousand pixels long. */
+.bug-detail {
+  min-height: calc(100vh - 210px);
+}
+
 .bug-search { min-width: 260px; }
 
 .bug-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -6688,6 +6687,15 @@ textarea,
   background: var(--bg-base);
   letter-spacing: 0.02em;
   color: var(--text-secondary);
+  /* It carries a sentence now rather than an enum name, so it gives way
+     before the row does. The whole of it is on the badge's title. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  line-height: 20px;
 }
 
 .bug-code.soft { opacity: 0.6; font-style: italic; }
@@ -7210,4 +7218,103 @@ textarea,
   color: var(--text-secondary);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   A phone
+   --------------------------------------------------------------------------
+   The narrowest thing this sheet used to say anything about was 1080px, and
+   what happened below it was not a layout: at 390px the Mobile page drew its
+   device panel over its own title, three of Bug Report's six filters were off
+   the screen with nothing to scroll, Test Data's action column was painted
+   outside its card, and Test Sets' delete button sat 43px past the edge.
+   Measured, not guessed — each rule below is one of those.
+   ========================================================================== */
+
+@media (max-width: 720px) {
+  /* Two columns, never three. The mirror kept its own 372px at any width, so
+     the workspace between the rail and the phone collapsed to 60px and the
+     page title was painted under the panel's heading. */
+  .app-shell,
+  .app-shell.no-mirror {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .mirror,
+  .mirror-panel {
+    display: none;
+  }
+
+  .page,
+  .page-flush {
+    padding: 18px 14px;
+    gap: 14px;
+  }
+
+  .page-title { font-size: 19px; }
+
+  /* Every row of controls wraps instead of running off the side. None of
+     these rows had a scroll affordance, so what went past the edge was
+     simply unreachable. */
+  .filter-row,
+  .segmented,
+  .platform-tabs,
+  .row-actions,
+  .scenario-actions,
+  .web-header-actions,
+  .execution-meta,
+  .card-title-group {
+    flex-wrap: wrap;
+  }
+
+  /* One column: a two-column grid at 338px gives each side 160px, which is
+     narrower than the controls inside it. */
+  .settings-grid,
+  .suites-layout,
+  .bugs-layout,
+  .executions-layout,
+  .runs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A table keeps its width and scrolls inside its own card, rather than
+     pushing the card wider than the screen and painting its last columns on
+     the background. */
+  .card .data-table,
+  .td-table-wrap {
+    max-width: 100%;
+  }
+
+  /* A chart is read, not scanned: it may scroll sideways, but it says so. */
+  .trend-chart,
+  .chart-wrap {
+    overflow-x: auto;
+  }
+
+  /* One line for the run, one for everything about it. Five fixed columns at
+     390px left the title about 40px and the address 25px — "Bir ye…",
+     "nua…" — and hid the one column a tester scanning on a phone needs. */
+  .run-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 4px;
+  }
+
+  .run-row-title { grid-column: 1 / -1; }
+
+  .run-row-duration,
+  .run-row-when {
+    display: inline;
+  }
+
+  .run-row-steps { display: none; }
+
+  /* A scenario wraps onto as many lines as it needs. Its seven fixed tracks
+     added up to 465px inside a 362px column, so the verdict and the Details
+     button were off the screen with nothing to scroll to them. */
+  .scenario-result {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
 }

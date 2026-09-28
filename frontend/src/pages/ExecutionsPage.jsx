@@ -24,8 +24,11 @@ import { useToast } from '../hooks/useToast';
  */
 
 const VERDICT = {
-  passed: { icon: CheckCircle2, className: 'verdict-pass', label: 'Pass' },
-  failed: { icon: XCircle, className: 'verdict-fail', label: 'Fail' },
+  // The same words as Test Runs, Insights and Bug Report. A tester moves
+  // between these pages comparing the same outcome all day, and it was
+  // written as Pass here, Passed there and passed in a third place.
+  passed: { icon: CheckCircle2, className: 'verdict-pass', label: 'Passed' },
+  failed: { icon: XCircle, className: 'verdict-fail', label: 'Failed' },
   running: { icon: Loader2, className: 'verdict-running', label: 'Running' },
   // Its own state, not a failure: someone ended this run on purpose, and
   // reporting it red would have people chasing a break that never happened.

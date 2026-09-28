@@ -716,11 +716,16 @@ export function WebWorkspace({
 
         <OpenPageBar onOpen={handleOpen} busy={busy} />
 
+        {/* The first screen anybody sees. It used to say what it did not have
+            and hide the instruction behind a line describing the UI; it says
+            what to do now, and the description stays behind the fold. */}
         <div className="empty-state">
           <Globe size={34} />
-          <h3>No page open yet</h3>
-          {/* True of every page opened here and read once, so it waits behind a
-              line rather than taking a paragraph under the bar that opens one. */}
+          <h3>Open a page to start testing</h3>
+          <p className="muted small">
+            Enter a URL above and press Open. QAi loads the page, and you describe what to
+            test in plain English.
+          </p>
           <details className="web-fold">
             <summary>What the screen becomes once a page is open</summary>
             <p className="muted small web-fold-body">
