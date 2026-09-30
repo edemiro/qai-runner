@@ -311,6 +311,112 @@ class TestAnthropicWorkspace(unittest.TestCase):
         self.assertIn("credit", str(_explain(None, FakeError())).lower())
 
 
+class ARateLimitIsAWaitNotAVerdict(unittest.IsolatedAsyncioTestCase):
+    """Three hotel scenarios in parallel ran into the account's per-minute
+    limit, and sixteen runs ended on "rate limit reached" in four minutes."""
+
+    @staticmethod
+    def _limited(retry_after=None, message=None):
+        import anthropic
+        from types import SimpleNamespace
+
+        # Built without the SDK's constructor, which wants a live response.
+        exc = anthropic.RateLimitError.__new__(anthropic.RateLimitError)
+        exc.response = SimpleNamespace(
+            headers={"retry-after": retry_after} if retry_after else {})
+        if message:
+            exc.message = message
+        return exc
+
+    def _client(self, failures, retry_after=None, message=None):
+        from types import SimpleNamespace
+
+        outer = self
+
+        class Stream:
+            def __init__(self, error):
+                self.error = error
+
+            async def __aenter__(self):
+                if self.error is not None:
+                    raise self.error
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            @property
+            def text_stream(self):
+                async def texts():
+                    yield "tamam"
+                return texts()
+
+            async def get_final_message(self):
+                return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(
+                    input_tokens=1, output_tokens=1,
+                    cache_read_input_tokens=0, cache_creation_input_tokens=0))
+
+        class Messages:
+            def stream(self, **payload):
+                outer.calls += 1
+                limited = outer.calls <= failures
+                return Stream(outer._limited(retry_after, message) if limited else None)
+
+        class Client:
+            messages = Messages()
+            beta = SimpleNamespace(messages=messages)
+
+            async def close(self):
+                pass
+
+        return Client()
+
+    async def _stream(self, failures, retry_after=None, message=None):
+        from unittest.mock import AsyncMock
+        import llm.claude as claude
+
+        self.calls = 0
+        waits = AsyncMock()
+        with patch.object(claude, "_client",
+                          lambda sdk, key: self._client(failures, retry_after, message)), \
+             patch.object(claude.asyncio, "sleep", waits):
+            said = [text async for text in ClaudeProvider().stream("S", TURNS, "claude-opus-5", "k")]
+        return said, [call.args[0] for call in waits.await_args_list]
+
+    async def test_a_rate_limit_is_waited_out_and_the_reply_arrives(self):
+        import llm.claude as claude
+
+        said, waits = await self._stream(failures=2)
+        self.assertEqual(said, ["tamam"])
+        self.assertEqual(waits, list(claude.RATE_LIMIT_WAITS[:2]))
+
+    async def test_the_wait_the_api_asks_for_is_the_wait_taken(self):
+        _, waits = await self._stream(failures=1, retry_after="7")
+        self.assertEqual(waits, [7.0])
+
+    async def test_a_limit_that_does_not_lift_still_ends_the_run_named(self):
+        import llm.claude as claude
+
+        with self.assertRaises(ProviderError) as raised:
+            await self._stream(failures=99)
+        self.assertEqual(raised.exception.kind, "rate_limit")
+        self.assertEqual(self.calls, len(claude.RATE_LIMIT_WAITS) + 1)
+
+    async def test_a_spent_budget_is_said_at_once_rather_than_waited_for(self):
+        """The corporate gateway answers its spending cap with the same 429 as
+        a rate limit. The hotel re-run waited out four retries on every
+        scenario against a cap no wait would lift, and filed each as a rate
+        limit."""
+        said = ("Error code: 429 - {'error': {'message': 'Budget has been exceeded! "
+                "Current cost: 201.0402082499999, Max budget: 201.0', "
+                "'type': 'budget_exceeded', 'param': None, 'code': '429'}}")
+        with self.assertRaises(ProviderError) as raised:
+            await self._stream(failures=99, message=said)
+        self.assertEqual(raised.exception.kind, "budget")
+        self.assertEqual(self.calls, 1)
+        self.assertIn("spent 201.04 of 201.00", str(raised.exception))
+
+
 class TestStorageResilience(unittest.TestCase):
     """The database file can disappear under a running server — a cleanup
     script, a restore, a stray delete. Creating the schema only at startup

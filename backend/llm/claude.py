@@ -1,6 +1,8 @@
 """Anthropic Claude provider, on the official `anthropic` SDK."""
 
+import asyncio
 import os
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import ProviderError, Turn, add_usage, image_media_type
@@ -15,6 +17,45 @@ _FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5")
 # Opus 5, so leave real headroom even though an agent turn is only a sentence
 # plus a small JSON block.
 _MAX_TOKENS = 16000
+
+# A rate limit is a wait, not a verdict. Measured on the hotel set: three
+# scenarios in parallel ran into the account's per-minute limit, and sixteen of
+# them ended on "rate limit reached" within four minutes — an execution's
+# results thrown away for want of waiting. The SDK retries twice on its own,
+# within seconds; this waits longer, and only before anything has streamed, so
+# nothing is said twice. The API's own `retry-after` wins when it gives one.
+RATE_LIMIT_WAITS = (10.0, 20.0, 40.0, 60.0)
+
+
+def _budget_spent(exc: Any) -> Optional[str]:
+    """What the gateway said, when a 429 is its spending cap and not a rate.
+
+    A corporate gateway answers "budget_exceeded" with the same 429 as a rate
+    limit, and no wait lifts it. Read as a rate limit, the hotel re-run spent
+    two and a half minutes of retries on every scenario and then filed each one
+    as "rate limit reached" — against a cap of 201 that had been passed.
+    """
+    said = getattr(exc, "message", None) or str(exc) or ""
+    if "budget_exceeded" not in said and "budget has been exceeded" not in said.lower():
+        return None
+    spent = re.search(r"Current cost:\s*([\d.]+),\s*Max budget:\s*([\d.]+)", said)
+    if spent:
+        return f"spent {float(spent.group(1)):.2f} of {float(spent.group(2)):.2f}"
+    return "the budget is used up"
+
+
+def _retry_after(exc: Any) -> Optional[float]:
+    """How long the API asked for, when it said."""
+    headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+    for name, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        value = headers.get(name) if hasattr(headers, "get") else None
+        if not value:
+            continue
+        try:
+            return max(1.0, min(float(value) / scale, 90.0))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _import_sdk():
@@ -185,14 +226,34 @@ class ClaudeProvider:
         endpoint = client.beta.messages if use_beta else client.messages
 
         try:
-            async with endpoint.stream(**payload) as stream:
-                async for text in stream.text_stream:
-                    yield text
-                final = await stream.get_final_message()
+            for attempt in range(len(RATE_LIMIT_WAITS) + 1):
+                produced = False
+                try:
+                    async with endpoint.stream(**payload) as stream:
+                        async for text in stream.text_stream:
+                            produced = True
+                            yield text
+                        final = await stream.get_final_message()
+                    break
+                except anthropic.RateLimitError as exc:
+                    budget = _budget_spent(exc)
+                    if budget:
+                        raise ProviderError(
+                            f"The model gateway's spending budget is used up ({budget}). "
+                            "Waiting will not lift it: raise the budget or wait for it "
+                            "to reset, then run again.",
+                            kind="budget",
+                        ) from exc
+                    if produced or attempt == len(RATE_LIMIT_WAITS):
+                        raise ProviderError(
+                            "Anthropic rate limit reached. Wait and retry.", kind="rate_limit",
+                        ) from exc
+                    wait = _retry_after(exc) or RATE_LIMIT_WAITS[attempt]
+                    print(f"[claude] rate limited; trying again in {wait:.0f}s "
+                          f"({attempt + 1} of {len(RATE_LIMIT_WAITS)})")
+                    await asyncio.sleep(wait)
         except anthropic.AuthenticationError as exc:
             raise ProviderError("Anthropic rejected the API key.", kind="auth") from exc
-        except anthropic.RateLimitError as exc:
-            raise ProviderError("Anthropic rate limit reached. Wait and retry.", kind="rate_limit") from exc
         except anthropic.APIStatusError as exc:
             raise _explain(anthropic, exc) from exc
         except anthropic.APIConnectionError as exc:

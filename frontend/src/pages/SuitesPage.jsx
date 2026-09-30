@@ -20,7 +20,9 @@ import { ScenarioGenerator } from '../components/ScenarioGenerator';
 import { StepEditor } from '../components/StepEditor';
 import { api } from '../api';
 import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
-import { OS_TABS, devicesFor, matchesOs, osOf, sessionsFor } from '../lib/platforms';
+import {
+  DEFAULT_TRACK, OS_TABS, TRACK_TABS, devicesFor, matchesOs, osOf, sessionsFor, trackOf,
+} from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 // Sentinel for "a Test Set that does not exist yet" in the move-to picker.
@@ -217,6 +219,11 @@ export function SuitesPage({
 
   const [suites, setSuites] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  // Redesign or Dönüşüm — asked before web or mobile, and opened on Redesign.
+  const [track, setTrack] = useState(DEFAULT_TRACK);
+  // As newSuiteKind: null until the create form's picker is touched, meaning
+  // "the tab the page is on".
+  const [newSuiteTrack, setNewSuiteTrack] = useState(null);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
   // Which phone, once Mobile is the platform. Meaningless on Web, so it is
   // simply not shown there rather than kept in step with something.
@@ -334,11 +341,20 @@ export function SuitesPage({
     addRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const counts = {
-    web: suites.filter((item) => (item.kind || 'web') !== 'mobile').length,
-    mobile: suites.filter((item) => item.kind === 'mobile').length,
+  /* The two programmes' sets never share a list: every cut below — platform,
+     then phone — is made within the one chosen here. */
+  const trackCounts = {
+    redesign: suites.filter((item) => trackOf(item) === 'redesign').length,
+    donusum: suites.filter((item) => trackOf(item) === 'donusum').length,
   };
-  const onPlatform = suites.filter((item) => (item.kind || 'web') === platform);
+  const onTrack = suites.filter((item) => trackOf(item) === track);
+  const trackLabel = TRACK_TABS.find((item) => item.id === track)?.label || track;
+
+  const counts = {
+    web: onTrack.filter((item) => (item.kind || 'web') !== 'mobile').length,
+    mobile: onTrack.filter((item) => item.kind === 'mobile').length,
+  };
+  const onPlatform = onTrack.filter((item) => (item.kind || 'web') === platform);
 
   /* iOS and Android are the same product and not the same screen: different
      controls, different labels, different selectors. A set written on one does
@@ -360,6 +376,7 @@ export function SuitesPage({
   const newSuiteFields = newSuiteTarget === 'web'
     ? { kind: 'web', os: null }
     : { kind: 'mobile', os: newSuiteTarget };
+  const newSuiteTrackValue = newSuiteTrack || track;
 
   /* Derived rather than synced through an effect: filtering to a platform the
      selected set is not on used to leave that set open on the right while the
@@ -432,13 +449,16 @@ export function SuitesPage({
     if (!name) return;
     try {
       const created = await api.createSuite({
-        name, ...newSuiteFields, tags: [], module: newSuiteModule.trim() || null,
+        name, ...newSuiteFields, track: newSuiteTrackValue, tags: [],
+        module: newSuiteModule.trim() || null,
       });
       setNewSuiteName('');
       setNewSuiteModule('');
       setNewSuiteKind(null);
+      setNewSuiteTrack(null);
       // Follow the new set to its own tab rather than leaving it filtered out
       // of the list it was just added to.
+      setTrack(trackOf(created));
       setPlatform(newSuiteFields.kind);
       if (newSuiteFields.os) setOs(newSuiteFields.os);
       setSelectedId(created.id);
@@ -512,6 +532,25 @@ export function SuitesPage({
     }
   };
 
+  /* Move the open set to the other programme, and go with it: staying behind
+     would drop it from the list the moment it moved, with the pane beside it
+     falling through to some other set. */
+  const moveSuiteTo = async (nextTrack) => {
+    if (!suite || nextTrack === trackOf(suite)) return;
+    try {
+      const updated = await api.updateSuite(suite.id, { track: nextTrack });
+      setSuite((current) => (current?.id === updated.id ? { ...current, track: updated.track } : current));
+      setTrack(trackOf(updated));
+      setSelectedId(updated.id);
+      setPicked(new Map());
+      await loadSuites();
+      const label = TRACK_TABS.find((item) => item.id === trackOf(updated))?.label;
+      toast.success(`“${updated.name}” moved to ${label}.`);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
   const removeSuite = async () => {
     if (!suite) return;
     /* Asked before, not regretted after. The button that does this is a bare
@@ -577,7 +616,8 @@ export function SuitesPage({
           return;
         }
         const created = await api.createSuite({
-          name, kind: suite.kind, tags: [], module: moveNewModule.trim() || suite.module || null,
+          name, kind: suite.kind, os: suite.os || null, track: trackOf(suite), tags: [],
+          module: moveNewModule.trim() || suite.module || null,
         });
         targetId = created.id;
       }
@@ -829,7 +869,14 @@ export function SuitesPage({
             the open set's platform, and nothing on screen is ticked. The bar
             went on saying "1 scenario picked" over a set where no box was
             checked, beside a Run button that would have sent it at the wrong
-            target. */}
+            target. The same goes for the programme above it. */}
+        <PlatformTabs
+          options={TRACK_TABS}
+          value={track}
+          onChange={(next) => { setTrack(next); setPicked(new Map()); }}
+          counts={trackCounts}
+          label="Programme"
+        />
         <PlatformTabs
           value={platform}
           onChange={(next) => { setPlatform(next); setPicked(new Map()); }}
@@ -851,8 +898,9 @@ export function SuitesPage({
               save a run you already like from Test Runs.
             </EmptyState>
           ) : visible.length === 0 ? (
-            <EmptyState icon={Layers} title={`No ${platform} Test Sets`} compact>
-              Create one with the platform picker set to {platform}.
+            <EmptyState icon={Layers} title={`No ${platform} Test Sets in ${trackLabel}`} compact>
+              Create one below with the platform picker set to {platform}; it is
+              filed under {trackLabel}.
             </EmptyState>
           ) : (
             <ul className="suite-items">
@@ -943,6 +991,15 @@ export function SuitesPage({
                   <option value="ios">iOS</option>
                   <option value="android">Android</option>
                 </select>
+                <select
+                  value={newSuiteTrackValue}
+                  onChange={(event) => setNewSuiteTrack(event.target.value)}
+                  aria-label="Programme for the new test set"
+                >
+                  {TRACK_TABS.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </select>
                 <button className="btn btn-primary btn-sm" type="submit" disabled={!newSuiteName.trim()}>
                   <Plus size={14} /> Add
                 </button>
@@ -981,6 +1038,20 @@ export function SuitesPage({
                     <PriorityStrip cases={suite.cases} />
                   </div>
                   <div className="row-actions">
+                    {/* Every set written before the split sits under
+                        Dönüşüm, so moving one across has to be possible from
+                        the set itself. */}
+                    <select
+                      className="track-select"
+                      value={trackOf(suite)}
+                      onChange={(event) => moveSuiteTo(event.target.value)}
+                      aria-label="Programme this test set is listed under"
+                      title="Programme this test set is listed under"
+                    >
+                      {TRACK_TABS.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
                     <button className="btn btn-sm" onClick={pickAllInSet} disabled={!suite.cases.length}>
                       Select all
                     </button>
@@ -1227,18 +1298,27 @@ export function SuitesPage({
                             )}
                             {item.layer && <span className="layer-tag">{item.layer}</span>}
                             {item.scenario_type && (
-                              <span className={`type-tag t-${item.scenario_type.toLowerCase()}`}>
+                              <span className={`type-tag t-${item.scenario_type.toLowerCase().replace(/\s+/g, '-')}`}>
                                 {item.scenario_type}
                               </span>
                             )}
                             {item.dataset && <span className="pill">×{item.dataset.length}</span>}
+                            {/* A tag that just repeats the layer is noise — the layer
+                                chip already says it, so it is dropped here. */}
+                            {item.tags
+                              .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
+                              .map((tag) => (
+                                <span key={tag} className="tag">{tag}</span>
+                              ))}
 
                             {/* What the next run already knows how to do. A step
                                 with a recording is replayed rather than reasoned
                                 about, so a fully recorded scenario runs without
                                 costing a single model call — and a tester should
                                 be able to see that on the scenario rather than
-                                work it out from a bill. */}
+                                work it out from a bill. Last in the row and pushed
+                                to its right edge: it is about the scenario's runs,
+                                not one more label on what the scenario is. */}
                             {item.recordedSteps > 0 && (
                               <span
                                 className={`recorded-tag ${
@@ -1254,13 +1334,6 @@ export function SuitesPage({
                                   : `Recorded ${item.recordedSteps}/${item.stepCount}`}
                               </span>
                             )}
-                            {/* A tag that just repeats the layer is noise — the layer
-                                chip already says it, so it is dropped here. */}
-                            {item.tags
-                              .filter((tag) => tag.toLowerCase() !== (item.layer || '').toLowerCase())
-                              .map((tag) => (
-                                <span key={tag} className="tag">{tag}</span>
-                              ))}
                           </div>
                           {/* Actions stay grouped on the right so a long title or a
                               stack of chips never pushes them onto their own line. */}
@@ -1575,6 +1648,7 @@ export function SuitesPage({
 
               <ScenarioGenerator
                 suiteId={suite?.id || null}
+                track={suite ? trackOf(suite) : track}
                 kind={suite ? (suite.kind || 'web') : platform}
                 os={suite ? (suite.os || (isMobileSet ? os : null)) : (platform === 'mobile' ? os : null)}
                 onConnectDevice={onConnectDevice}

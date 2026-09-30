@@ -12,6 +12,7 @@ async def _run(cmd: List[str], timeout: float = 10.0) -> str:
     """Run a command and return stdout, or '' on any failure."""
     if shutil.which(cmd[0]) is None:
         return ""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -22,6 +23,16 @@ async def _run(cmd: List[str], timeout: float = 10.0) -> str:
         return stdout.decode("utf-8", errors="ignore")
     except Exception:
         return ""
+    finally:
+        # A timeout stops the waiting, not the command. A phone that stopped
+        # answering left an `adb shell getprop` hanging for every property of
+        # every Scan, and they piled up until adb itself was restarted.
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
 
 
 async def _android_property(udid: str, prop: str) -> str:

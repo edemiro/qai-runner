@@ -16,6 +16,17 @@ export const OS_TABS = [
   { id: 'android', label: 'Android' },
 ];
 
+/* The programme a Test Set belongs to — the cut made before web or mobile.
+   Redesign first and by default: it is where new work goes. Everything
+   written before the split is Dönüşüm, and a record that does not say is one
+   of those. */
+export const TRACK_TABS = [
+  { id: 'redesign', label: 'Redesign' },
+  { id: 'donusum', label: 'Dönüşüm' },
+];
+export const DEFAULT_TRACK = 'redesign';
+export const trackOf = (item) => item?.track || 'donusum';
+
 /** Which OS tab a record belongs on. A record that has not said shows on both,
  *  rather than being hidden by a field it predates. */
 export const matchesOs = (item, os) => !item?.os || item.os === os;

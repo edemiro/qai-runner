@@ -19,7 +19,7 @@ import shutil
 import time
 import traceback
 from datetime import date, timedelta
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 from uuid import uuid4
 
@@ -72,7 +72,9 @@ def substitute(text: Optional[str], row: Optional[Dict[str, Any]],
             return computed(str(shared[name]))
         return match.group(0)
 
-    return PLACEHOLDER.sub(resolve, text)
+    # As text, the way `storage.clean_recorded` keeps it: a recording sent
+    # straight to the API can say `"value": 2`, and that was a 500.
+    return PLACEHOLDER.sub(resolve, str(text))
 
 
 # A value that is worked out when the run starts rather than stored: `today`,
@@ -262,6 +264,21 @@ def _event(kind: str, **payload) -> str:
     return json.dumps({"event": kind, **payload}, ensure_ascii=False) + "\n"
 
 
+def _case_result(case: Dict[str, Any], run_id: Optional[str], label: str, status: str,
+                 error: Optional[str], started: float,
+                 store_keys: Iterable[str] = ()) -> Dict[str, Any]:
+    """What a case's `case_finished` says, and what the execution's totals count.
+
+    The error named as the run's record names it: it goes to the watching
+    page and into the CI report, and can quote what the store filled in.
+    """
+    return {
+        "caseId": case["id"], "runId": run_id, "label": label,
+        "status": status, "error": storage.named(error, store_keys),
+        "durationMs": int((time.time() - started) * 1000),
+    }
+
+
 class _RunControl:
     """The handle a running execution can be stopped by.
 
@@ -282,6 +299,17 @@ class _RunControl:
 
 # suite_run_id -> control. Only while the run is actually in flight.
 _RUNNING: Dict[str, _RunControl] = {}
+
+# The phones executions are using, by session id: {"suiteRunId", "name"}. A
+# mobile case runs on a throwaway agent state (see `_run_mobile_case`), so the
+# session itself looked idle for the whole execution: Run started a second
+# agent on the same phone, and Disconnect closed the session under the cases.
+_CLAIMED: Dict[str, Dict[str, Any]] = {}
+
+
+def claimed_by(session_id: str) -> Optional[Dict[str, Any]]:
+    """The execution using this device session, or None."""
+    return _CLAIMED.get(session_id)
 
 # How long a case is given to stop of its own accord before its task is cut.
 # An agent checks for cancellation between steps, and a step is mostly one
@@ -350,14 +378,21 @@ def _keep_what_worked(
     if not run_id or row:
         return
     try:
-        kept = storage.promote_recording(run_id, case["id"])
+        # The steps as they were when the case started, not as they are now:
+        # the scenario can be edited while it runs (see promote_recording).
+        kept = storage.promote_recording(run_id, case["id"], ran_steps=case.get("steps"))
         if kept:
             print(f"[suite] kept the recording for {kept} step(s) of {case['id']}")
     except Exception as exc:  # noqa: BLE001
         print(f"[suite] could not keep the recording for {case['id']}: {exc}")
 
 
-def _raise_bug_if_it_found_one(run_id: Optional[str], case: Dict[str, Any]) -> None:
+def _raise_bug_if_it_found_one(
+    run_id: Optional[str],
+    case: Dict[str, Any],
+    suite_run_id: Optional[str] = None,
+    suite_name: Optional[str] = None,
+) -> None:
     """File what a failed scenario turned out to mean, while it is still known.
 
     Only when the classifier calls it a defect of the app. A scenario that ran
@@ -393,14 +428,12 @@ def _raise_bug_if_it_found_one(run_id: Optional[str], case: Dict[str, Any]) -> N
             return
         storage.create_bug(
             title=draft["title"],
-            detail=(
-                "Raised automatically when this scenario failed. Nobody has "
-                "reviewed it yet.\n\n" + (draft.get("detail") or "")
-            ),
+            detail=bug_report.AUTO_RAISED + "\n\n" + (draft.get("detail") or ""),
             code=draft.get("code"), severity=draft.get("severity"),
-            run_id=run_id, case_id=case.get("id"), case_name=case.get("name"),
-            suite_name=case.get("suite_name"), url=draft.get("url"),
-            screenshot=draft.get("screenshot"),
+            run_id=run_id, suite_run_id=suite_run_id,
+            case_id=case.get("id"), case_name=case.get("name"),
+            suite_name=case.get("suite_name") or suite_name or draft.get("suiteName"),
+            url=draft.get("url"), screenshot=draft.get("screenshot"),
         )
         print(f"[suite] raised a bug for {case.get('name', run_id)[:60]}")
     except Exception as exc:  # noqa: BLE001
@@ -414,6 +447,10 @@ def _record_unstarted_case(
     error: Optional[str],
     row: Optional[Dict[str, Any]],
     label: str,
+    status: str = "failed",
+    # What the case was handed from the store: the reason can quote an address
+    # the store was filled into (see storage._secrets_for).
+    store_keys: Iterable[str] = (),
 ) -> str:
     """Give a case that died before the agent started a run of its own.
 
@@ -433,6 +470,7 @@ def _record_unstarted_case(
         suite_run_id=suite_run_id,
         case_id=case["id"],
         dataset_row=row,
+        store_keys=store_keys,
     )
     storage.link_run_to_suite(
         run_id, suite_run_id, case["id"],
@@ -441,9 +479,28 @@ def _record_unstarted_case(
         priority=case.get("priority"), layer=case.get("layer"),
         case_idx=case.get("idx"),
     )
-    reason = error or "The run never started and gave no reason."
-    storage.finish_run(run_id, "failed", reason, verdict_note=reason)
+    if status == "cancelled":
+        reason = error or "Stopped before the run started."
+    else:
+        status, reason = "failed", error or "The run never started and gave no reason."
+    storage.finish_run(run_id, status, reason, verdict_note=reason, store_keys=store_keys)
     return run_id
+
+
+def _stopped_or(status: str, verdict: Optional[str], control: Optional[_RunControl]) -> str:
+    """The case's status, unless Stop reached it before it had a verdict.
+
+    A stopped case is not a failed one. The agent records its own run as
+    cancelled, and the runner then closed it a second time as "failed" — its
+    starting value, and all a case cut off by Stop ever reaches — which also
+    filed an automatic bug against the app for a run the tester had stopped.
+    A verdict the case did reach stands, stop or not.
+    """
+    if status == "cancelled":
+        return status
+    if control is not None and control.stop.is_set() and verdict in (None, "cancelled"):
+        return "cancelled"
+    return status
 
 
 async def _execute_one(
@@ -467,6 +524,11 @@ async def _execute_one(
     url = apply_environment(
         substitute(case.get("url") or options.get("base_url"), row, shared),
         options.get("env_url"),
+    )
+    # What the case is handed from the store — see `storage._secrets_for`.
+    store_keys = storage.referenced_keys(
+        case.get("goal"), case.get("precondition"), case.get("steps"),
+        case.get("url") or options.get("base_url"),
     )
 
     run_id: Optional[str] = None
@@ -492,7 +554,8 @@ async def _execute_one(
         await emit.put(_event("case_finished", **result))
         return result
 
-    await emit.put(_event("case_started", case=case["id"], label=label, url=url))
+    await emit.put(_event("case_started", case=case["id"], label=label,
+                          url=storage.named(url, store_keys)))
 
     # The video directory has to be chosen before the browser starts, but the
     # run id only exists once the agent has created it — so recordings go under
@@ -503,6 +566,10 @@ async def _execute_one(
     # `case_finished` and no result row, and a suite whose other cases passed
     # was reported green while silently dropping that one.
     staging = run_artifact_dir(f"case-{case['id']}-{uuid4().hex[:8]}")
+    # The verdict the agent reached, if it reached one. Read in `finally`, so
+    # it is assigned before anything that can raise.
+    last_status = None
+    cut_off = False
 
     try:
         if not url:
@@ -534,7 +601,6 @@ async def _execute_one(
         if options.get("trace"):
             await target.start_trace()
 
-        last_status = None
         async for line in agent.run_agent(
             target, goal,
             # Left as None unless the caller asked for a ceiling: a written
@@ -548,6 +614,7 @@ async def _execute_one(
             # A case written out as steps is run step by step and judged the
             # same way; one without them keeps the open-ended behaviour.
             steps=substitute_steps(case.get("steps"), row, shared),
+            store_keys=store_keys,
         ):
             try:
                 payload = json.loads(line)
@@ -582,7 +649,10 @@ async def _execute_one(
         status = last_status or "failed"
 
         artifacts_dir = run_artifact_dir(run_id) if run_id else staging
-        events = target.drain_events()
+        # Named before anything below quotes them: the refusal and page-error
+        # lines cut the text short, and a card cut in half is no longer the
+        # card storage looks for.
+        events = storage.named_page_events(target.drain_events())
         if run_id:
             storage.add_page_events(run_id, events)
 
@@ -634,6 +704,13 @@ async def _execute_one(
                     label="Playwright trace", size_bytes=os.path.getsize(written),
                 )
 
+    except asyncio.CancelledError:
+        # Cut off: Stop's grace ran out (see `cancel`), or the server is going
+        # down. Either way nobody decided this case.
+        status = "cancelled"
+        cut_off = True
+        raise
+
     except Exception as exc:  # noqa: BLE001 — one bad case must not stop the suite
         status = "failed"
         error = f"{type(exc).__name__}: {exc}"
@@ -650,21 +727,27 @@ async def _execute_one(
             except Exception:
                 pass
         _cleanup(staging)
+        status = _stopped_or(status, last_status, control)
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error,
-                               blocked=was_blocked)
+                               blocked=was_blocked, store_keys=store_keys)
             _keep_what_worked(run_id, case, row)
-            _raise_bug_if_it_found_one(run_id, case)
+            if status != "cancelled":
+                _raise_bug_if_it_found_one(run_id, case, suite_run_id,
+                                           options.get("suite_name"))
         else:
             run_id = _record_unstarted_case(
-                case, suite_run_id, "web", error, row, label,
+                case, suite_run_id, "web", error, row, label, status=status,
+                store_keys=store_keys,
             )
+        if cut_off:
+            # Said here: nothing after this block runs for a case cut off, and
+            # it used to vanish from the execution's totals.
+            emit.put_nowait(_event("case_finished",
+                                   **_case_result(case, run_id, label, status, error, started,
+                                                  store_keys)))
 
-    result = {
-        "caseId": case["id"], "runId": run_id, "label": label,
-        "status": status, "error": error,
-        "durationMs": int((time.time() - started) * 1000),
-    }
+    result = _case_result(case, run_id, label, status, error, started, store_keys)
     await emit.put(_event("case_finished", **result))
     return result
 
@@ -693,6 +776,8 @@ async def _run_mobile_case(
         substitute(case["goal"], row, shared) or case["goal"],
         substitute(case.get("precondition"), row, shared),
     )
+    store_keys = storage.referenced_keys(
+        case.get("goal"), case.get("precondition"), case.get("steps"))
 
     run_id: Optional[str] = None
     status = "failed"
@@ -718,8 +803,9 @@ async def _run_mobile_case(
 
     await emit.put(_event("case_started", case=case["id"], label=label, url=None))
 
+    last_status = None
+    cut_off = False
     try:
-        last_status = None
         # A fresh, throwaway state per case: this call is nested inside whatever
         # is already driving `target` (a chat run invoking `run_test_set`, or a
         # plain execution). Reusing agent.get_session(target.session_id) here
@@ -738,6 +824,7 @@ async def _run_mobile_case(
             use_vision=options.get("use_vision", True),
             session_state=case_state,
             steps=substitute_steps(case.get("steps"), row, shared),
+            store_keys=store_keys,
         ):
             try:
                 payload = json.loads(line)
@@ -764,26 +851,36 @@ async def _run_mobile_case(
             elif payload.get("event") == "error":
                 error = payload.get("message")
         status = last_status or "failed"
+    except asyncio.CancelledError:
+        # Cut off — see the web path.
+        status = "cancelled"
+        cut_off = True
+        raise
     except Exception as exc:  # noqa: BLE001 — one bad case must not stop the suite
         status = "failed"
         error = f"{type(exc).__name__}: {exc}"
         print(f"[suite] {label} crashed:\n{traceback.format_exc()}")
     finally:
+        status = _stopped_or(status, last_status, control)
         if run_id:
             storage.finish_run(run_id, status, error, verdict_note=error,
-                               blocked=was_blocked)
+                               blocked=was_blocked, store_keys=store_keys)
             _keep_what_worked(run_id, case, row)
-            _raise_bug_if_it_found_one(run_id, case)
+            if status != "cancelled":
+                _raise_bug_if_it_found_one(run_id, case, suite_run_id,
+                                           options.get("suite_name"))
         else:
             run_id = _record_unstarted_case(
-                case, suite_run_id, "mobile", error, row, label,
+                case, suite_run_id, "mobile", error, row, label, status=status,
+                store_keys=store_keys,
             )
+        if cut_off:
+            # Said here — see the web path.
+            emit.put_nowait(_event("case_finished",
+                                   **_case_result(case, run_id, label, status, error, started,
+                                                  store_keys)))
 
-    result = {
-        "caseId": case["id"], "runId": run_id, "label": label,
-        "status": status, "error": error,
-        "durationMs": int((time.time() - started) * 1000),
-    }
+    result = _case_result(case, run_id, label, status, error, started, store_keys)
     await emit.put(_event("case_finished", **result))
     return result
 
@@ -853,6 +950,7 @@ async def run_suite(
     Either a whole Test Set (`suite_id`, optionally narrowed by `tags`) or an
     explicit list of `cases` picked by hand, possibly from several sets.
     """
+    whole_set = cases is None
     if cases is None:
         suite = storage.get_suite(suite_id)
         if suite is None:
@@ -866,6 +964,10 @@ async def run_suite(
         # one belongs to neither phone, and claiming one would file it — and
         # its report — under a platform half of it never touched.
         phones = {c.get("suite_os") for c in cases if c.get("suite_os")}
+        # One tab per execution, and the first scenario picked decides it: the
+        # page offers one tab's sets at a time, so a mix only happens when a
+        # selection is carried across tabs, and it is filed where it began.
+        tracks = [c.get("suite_track") for c in cases if c.get("suite_track")]
         suite = {
             "id": suite_id,
             "name": name or " + ".join(
@@ -873,6 +975,7 @@ async def run_suite(
             ),
             "kind": "mobile" if kinds == {"mobile"} else "web",
             "os": phones.pop() if len(phones) == 1 else None,
+            "track": tracks[0] if tracks else None,
         }
 
     cases = cases if cases is not None else storage.select_cases(suite_id, tags)
@@ -971,6 +1074,7 @@ async def run_suite(
         # several sets still belongs to one phone OS, and the report has to say
         # which long after the session that ran it is gone.
         os=suite.get("os"),
+        track=suite.get("track"),
     )
 
     # Carried down to each case so a watchable session can name the execution
@@ -978,7 +1082,20 @@ async def run_suite(
     execution_name = name or suite.get("name")
     control = _RunControl()
     _RUNNING[suite_run_id] = control
-    options = {**options, "execution_name": execution_name, "control": control}
+    # Stopped along with whatever asked for it: a chat run that started this
+    # execution is waiting on it, not on a case, so that run's Stop has to be
+    # passed on or it reaches nothing.
+    stop_with: Optional[asyncio.Event] = options.pop("stop_with", None)
+    follower: Optional["asyncio.Task[None]"] = None
+    if stop_with is not None:
+        async def follow() -> None:
+            await stop_with.wait()
+            await cancel(suite_run_id)
+        follower = asyncio.create_task(follow())
+    # The Test Set a bug is filed under. A case picked by hand carries its own
+    # set's name; one read out of its set does not, so the set says it here.
+    options = {**options, "execution_name": execution_name, "control": control,
+               "suite_name": suite.get("name") if whole_set else None}
 
     yield _event(
         "suite_started", suiteRunId=suite_run_id, suite=suite["name"],
@@ -989,9 +1106,24 @@ async def run_suite(
     limiter = asyncio.Semaphore(workers)
     results: List[Dict[str, Any]] = []
 
+    def never_started(execution: Dict[str, Any]) -> None:
+        # Cut off before its turn came: counted as cancelled, the way a case
+        # Stop reaches before it starts is (see `_execute_one`).
+        queue.put_nowait(_event(
+            "case_finished", caseId=execution["case"]["id"], runId=None,
+            label=execution["label"], status="cancelled", error=None, durationMs=0,
+        ))
+
     async def guarded(execution: Dict[str, Any]) -> Dict[str, Any]:
-        async with limiter:
-            return await _execute_one(execution, suite_run_id, options, queue)
+        began = False
+        try:
+            async with limiter:
+                began = True
+                return await _execute_one(execution, suite_run_id, options, queue)
+        except asyncio.CancelledError:
+            if not began:
+                never_started(execution)
+            raise
 
     if is_mobile:
         async def sequential():
@@ -1033,17 +1165,39 @@ async def run_suite(
                     str(tag).strip().lower()
                     for tag in (execution["case"].get("tags") or [])
                 }
-                if (index or wants_clean) and restart and restart[0]:
-                    app_id, platform_name, session_id, source = restart
-                    await mobile_session.restart_app(
-                        session_id, platform_name, app_id,
-                        wipe=wants_clean, source=source)
-                results.append(
-                    await _run_mobile_case(execution, device, suite_run_id, options, queue)
-                )
+                began = False
+                try:
+                    if (index or wants_clean) and restart and restart[0]:
+                        app_id, platform_name, session_id, source = restart
+                        await mobile_session.restart_app(
+                            session_id, platform_name, app_id,
+                            wipe=wants_clean, source=source)
+                    began = True
+                    results.append(
+                        await _run_mobile_case(execution, device, suite_run_id, options, queue)
+                    )
+                except asyncio.CancelledError:
+                    # Cut off after Stop. The case in hand says so itself once
+                    # it has begun (see `_run_mobile_case`); the ones still to
+                    # come never will.
+                    for waiting in executions[index + (1 if began else 0):]:
+                        never_started(waiting)
+                    raise
             return results
 
-        tasks = [asyncio.create_task(sequential())]
+        async def on_the_phone():
+            # The phone is the execution's until its cases are done, however
+            # they end. Held by the task rather than the stream: a closed tab
+            # stops reading the stream while the cases carry on.
+            session_id = device.session_id
+            _CLAIMED[session_id] = {"suiteRunId": suite_run_id, "name": execution_name}
+            try:
+                return await sequential()
+            finally:
+                if (_CLAIMED.get(session_id) or {}).get("suiteRunId") == suite_run_id:
+                    _CLAIMED.pop(session_id, None)
+
+        tasks = [asyncio.create_task(on_the_phone())]
     else:
         tasks = [asyncio.create_task(guarded(execution)) for execution in executions]
     control.tasks = tasks
@@ -1051,20 +1205,24 @@ async def run_suite(
 
     # Drain the queue while the workers run so progress is live rather than
     # arriving in one lump when the last case finishes.
+    #
+    # The totals are read off the same lines. They used to come from what the
+    # workers returned, and a case cut off after Stop returns nothing: it went
+    # missing from the totals, and on a phone — one worker for every case —
+    # so did every case that had already finished before it.
     while not gathered.done() or not queue.empty():
         try:
-            yield await asyncio.wait_for(queue.get(), timeout=0.5)
+            line = await asyncio.wait_for(queue.get(), timeout=0.5)
         except asyncio.TimeoutError:
             continue
+        payload = json.loads(line)
+        if payload.get("event") == "case_finished":
+            results.append({key: value for key, value in payload.items() if key != "event"})
+        yield line
 
-    # A web run produces one task per case; the sequential mobile run produces
-    # one task holding every case. Both shapes are flattened here so a mobile
-    # suite does not silently report nothing.
-    for outcome in await gathered:
-        if isinstance(outcome, dict):
-            results.append(outcome)
-        elif isinstance(outcome, list):
-            results.extend(item for item in outcome if isinstance(item, dict))
+    await gathered
+    if follower is not None:
+        follower.cancel()
 
     _RUNNING.pop(suite_run_id, None)
 

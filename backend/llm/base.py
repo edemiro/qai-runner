@@ -64,7 +64,7 @@ class Turn:
 class ProviderError(Exception):
     """A provider failure worth showing the user verbatim."""
     message: str
-    kind: str = "error"  # error | auth | rate_limit | refusal
+    kind: str = "error"  # error | auth | rate_limit | budget | refusal
 
     def __str__(self) -> str:
         return self.message

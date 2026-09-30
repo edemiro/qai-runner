@@ -2247,77 +2247,7 @@ optgroup { color: var(--text-tertiary); }
   opacity: 0.7;
 }
 
-.run-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.run-row {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr) 82px 96px 78px 80px;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 15px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  text-align: left;
-}
-
-.run-row:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-raised);
-}
-
-.run-row-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-
-/* Two lines rather than one with an ellipsis. These names share a long prefix
-   — "Booking - Availability | OW DOM [IST-ESB] 1 ADT ECO — " — and what tells
-   one row from the next is the clause after it, which is exactly what a single
-   truncated line cuts off. Every row read "…control that the" and stopped. */
-.run-row-title {
-  font-size: 13.5px;
-  font-weight: 570;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  line-height: 1.35;
-}
-
 .run-scope { margin: calc(var(--gap-2) * -1) 0 0; }
-
-/* The row is no longer one line tall, so the columns beside it sit at the top
-   rather than floating in the middle of a two-line title. */
-.run-row { align-items: start; }
-.run-row > .run-status,
-.run-row-priority,
-.run-row-steps,
-.run-row-duration,
-.run-row-when { margin-top: 2px; }
-
-.run-row-meta {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-row-steps,
-.run-row-duration,
-.run-row-when {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
 
 /* Shape and size come from the one badge metric further down this sheet,
    which every other badge already used. Defined separately here, the same
@@ -2777,15 +2707,6 @@ optgroup { color: var(--text-tertiary); }
   .user-card,
   .status-strip {
     justify-content: center;
-  }
-
-  .run-row {
-    grid-template-columns: 90px minmax(0, 1fr) 78px;
-  }
-
-  .run-row-duration,
-  .run-row-when {
-    display: none;
   }
 }
 
@@ -4769,6 +4690,12 @@ a.scan-row-url {
   min-width: 0;
 }
 
+/* Recorded says how the next run will go, not what the scenario is, so it
+   stands apart at the row's right edge instead of among the labels. */
+.case-card .case-meta > .recorded-tag {
+  margin-left: auto;
+}
+
 .scenario-result .scenario-title { overflow-wrap: anywhere; }
 
 .generator-source { max-width: 220px; }
@@ -5161,8 +5088,6 @@ textarea,
   color: var(--accent);
   font-weight: 600;
 }
-
-.run-row-priority { display: flex; justify-content: flex-start; min-width: 0; }
 
 /* Settings sits with the standing controls at the foot of the sidebar, so it
    gets a rule above it rather than a group heading of its own. */
@@ -5994,6 +5919,25 @@ textarea,
 .scenario-step-expected,
 .scenario-step-message { font-size: 11px; color: var(--text-tertiary); }
 
+/* The verdict, and under it where the step's time went. */
+.scenario-step-verdict-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.scenario-step-times {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------------------
    Fullscreen: the page or the device, filling the display
 
@@ -6607,8 +6551,23 @@ textarea,
 .type-tag.t-positive, .type-select.t-positive { background: var(--success-soft); color: var(--success-ink); border-color: var(--success-border); }
 .type-tag.t-negative, .type-select.t-negative { background: var(--warning-soft); color: var(--warning-ink); border-color: var(--warning-border); }
 .type-tag.t-boundary, .type-select.t-boundary { background: var(--purple-soft); color: var(--purple-ink); border-color: var(--purple-border); }
+.type-tag.t-edge-case, .type-select.t-edge-case { background: var(--info-soft); color: var(--info-ink); border-color: var(--info-border); }
 
 .type-select { cursor: pointer; min-width: 92px; }
+
+/* Which programme an open Test Set is listed under: a control at the height of
+   the buttons beside it, not a form field dropped into a toolbar. */
+.track-select {
+  height: var(--control-h-sm);
+  padding: 0 var(--control-px-sm);
+  font-size: var(--control-font-sm);
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.track-select:focus { outline: none; border-color: var(--accent); }
 .type-select:focus { outline: none; border-color: var(--accent); }
 
 /* ==========================================================================
@@ -6734,6 +6693,113 @@ textarea,
 .bug-draft textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.6; }
 .bug-draft-meta { display: flex; align-items: center; gap: 8px; }
 .bug-warn { color: var(--warning-ink); }
+
+/* Said to a screen reader, not drawn: the word a colour stands for. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Labelled facts
+   What a failure comes down to — expected, actual, the action under it, the
+   cause — each label in its own colour with what it says beside it, so the eye
+   finds "Actual" without reading "Expected" first. Shared by Bug Report and a
+   run's report, which describe the same failure and should read alike.
+   -------------------------------------------------------------------------- */
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px 14px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-base);
+}
+
+.fact { display: contents; }
+
+.fact-label {
+  align-self: start;
+  justify-self: start;
+  margin: 0;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fact-label.tone-success { background: var(--success-soft); color: var(--success-ink); border-color: var(--success-border); }
+.fact-label.tone-danger  { background: var(--danger-soft);  color: var(--danger-ink);  border-color: var(--danger-border); }
+.fact-label.tone-warning { background: var(--warning-soft); color: var(--warning-ink); border-color: var(--warning-border); }
+.fact-label.tone-purple  { background: var(--purple-soft);  color: var(--purple-ink);  border-color: var(--purple-border); }
+.fact-label.tone-info    { background: var(--info-soft);    color: var(--info-ink);    border-color: var(--info-border); }
+.fact-label.tone-accent  { background: var(--accent-soft);  color: var(--accent);      border-color: var(--accent-border); }
+
+.fact-value {
+  margin: 0;
+  padding-top: 2px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.fact-value a { color: var(--accent); }
+
+.fact-code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.fact-flag {
+  margin-left: 8px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--warning-ink);
+}
+
+/* How many scenarios one row stands for, said before which ones they are. */
+.same-count {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  margin-right: 6px;
+  padding: 0 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+/* A phone: each label over what it says. */
+@media (max-width: 560px) {
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .fact-value { margin-bottom: 6px; }
+}
 
 /* What has to be true before step 1. Above the goal, because that is the order
    it matters in — a scenario that assumes its setup fails on the setup, and
@@ -7290,23 +7356,6 @@ textarea,
   .chart-wrap {
     overflow-x: auto;
   }
-
-  /* One line for the run, one for everything about it. Five fixed columns at
-     390px left the title about 40px and the address 25px — "Bir ye…",
-     "nua…" — and hid the one column a tester scanning on a phone needs. */
-  .run-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    row-gap: 4px;
-  }
-
-  .run-row-title { grid-column: 1 / -1; }
-
-  .run-row-duration,
-  .run-row-when {
-    display: inline;
-  }
-
-  .run-row-steps { display: none; }
 
   /* A scenario wraps onto as many lines as it needs. Its seven fixed tracks
      added up to 465px inside a 362px column, so the verdict and the Details

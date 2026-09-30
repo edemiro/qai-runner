@@ -4,6 +4,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 appium.log
+# What restart.ps1 writes the running backend's output to.
+backend.log
+backend.err.log
+backend.prev.log
+backend.err.prev.log
 qai.db
 qai.db-journal
 # Traces and videos a run leaves behind — output, not source, and already 1.2GB

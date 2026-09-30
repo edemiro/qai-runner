@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import { api } from '../api';
+import { formatDuration } from '../lib/format';
 
 const ACTION_ICON = {
   click: '⊙',
@@ -135,6 +136,8 @@ export function AgentPanel({
   // on its own the moment a step fails; from there the tester takes one
   // step at a time or lets it finish.
   waitingAt = null, stepping = false, onStep = null, onStepMode = null,
+  // Stop was pressed and the run is closing itself — see useAgentRun.
+  stopping = false,
   placeholder = 'What should QAi test? e.g. “Search for headphones and verify results appear”',
   examples = DEFAULT_EXAMPLES,
   pageSummary = null,
@@ -374,18 +377,34 @@ export function AgentPanel({
                     )}
                   </div>
                   {entry.status !== 'running' && (
-                    /* Three verdicts, not two. A step the tester marked
-                       optional is carried out and not judged, and calling
-                       that "Fail" beside a green run is the contradiction
-                       the marking exists to remove. */
-                    <span
-                      className={`verdict verdict-${
-                        entry.status === 'passed' ? 'pass'
-                          : entry.status === 'skipped' ? 'other' : 'fail'}`}
-                    >
-                      {entry.status === 'passed' ? 'Pass'
-                        : entry.status === 'skipped' ? 'Skipped' : 'Fail'}
-                    </span>
+                    <div className="scenario-step-verdict-col">
+                      {/* Three verdicts, not two. A step the tester marked
+                          optional is carried out and not judged, and calling
+                          that "Fail" beside a green run is the contradiction
+                          the marking exists to remove. */}
+                      <span
+                        className={`verdict verdict-${
+                          entry.status === 'passed' ? 'pass'
+                            : entry.status === 'skipped' ? 'other' : 'fail'}`}
+                      >
+                        {entry.status === 'passed' ? 'Pass'
+                          : entry.status === 'skipped' ? 'Skipped' : 'Fail'}
+                      </span>
+                      {/* Where the step's time went: doing it, and checking
+                          that it worked — so a slow step says which half. */}
+                      {entry.durationMs != null && (
+                        <span className="scenario-step-times">
+                          <span title="Carrying the step out">
+                            Step {formatDuration(entry.durationMs - (entry.verifyMs || 0))}
+                          </span>
+                          {entry.verifyMs > 0 && (
+                            <span title="Checking that it worked">
+                              Verify {formatDuration(entry.verifyMs)}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -463,14 +482,14 @@ export function AgentPanel({
                   ? `Step ${waitingAt.index - 1} failed — holding before step ${waitingAt.index}`
                   : `Holding before step ${waitingAt.index} of ${waitingAt.total}`}
             </span>
-            <button className="btn btn-primary btn-sm" onClick={() => onStep?.(true)}>
+            <button className="btn btn-primary btn-sm" onClick={() => onStep?.(true)} disabled={stopping}>
               <SkipForward size={12} /> One step
             </button>
-            <button className="btn btn-sm" onClick={() => onStep?.(false)}>
+            <button className="btn btn-sm" onClick={() => onStep?.(false)} disabled={stopping}>
               <Play size={12} /> Run on
             </button>
-            <button className="btn btn-danger btn-sm" onClick={onStop}>
-              <Square size={12} /> Stop
+            <button className="btn btn-danger btn-sm" onClick={onStop} disabled={stopping}>
+              <Square size={12} /> {stopping ? 'Stopping…' : 'Stop'}
             </button>
           </div>
         )}
@@ -494,12 +513,18 @@ export function AgentPanel({
                 ? 'Stop holding at every step'
                 : 'Hold at every step from here'}
               aria-pressed={stepping}
+              disabled={stopping}
             >
               <PauseCircle size={12} /> Step
             </button>
-            <button className="btn btn-danger btn-sm" onClick={onStop}>
-              <Square size={12} />
-              Stop
+            <button
+              className="btn btn-danger btn-sm"
+              onClick={onStop}
+              disabled={stopping}
+              title={stopping ? 'Finishing the step in flight, then stopping' : undefined}
+            >
+              {stopping ? <Loader2 size={12} className="spin" /> : <Square size={12} />}
+              {stopping ? 'Stopping…' : 'Stop'}
             </button>
           </div>
         )}

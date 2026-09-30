@@ -11,6 +11,7 @@ Set, then run it" is one sentence and three tools, and making the person go and
 find each tool is making them do the routing.
 """
 
+import asyncio
 import re
 from typing import Any, Dict, List, Optional
 
@@ -177,6 +178,9 @@ def _failure_summary(results: list) -> str:
 
 async def run_test_set(
     *, name: str, execution_name: Optional[str] = None, workers: int = 2,
+    # Set when the chat run that asked for this is stopped; the execution is
+    # stopped with it (see suite_runner.run_suite).
+    stop: Optional[asyncio.Event] = None,
 ) -> Dict[str, Any]:
     """Create an execution for a Test Set and run it.
 
@@ -217,7 +221,7 @@ async def run_test_set(
     # the path a tester trusts without opening the report.
     summary = await suite_runner.run_suite_collect(
         suite["id"], workers=workers, name=execution_name,
-        headless=config.RUN_HEADLESS_DEFAULT,
+        headless=config.RUN_HEADLESS_DEFAULT, stop_with=stop,
     )
 
     if summary.get("status") == "error":

@@ -104,6 +104,32 @@ class PhysicalDeviceFallback(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await devices._get_ios_physical_devices(), [])
 
 
+class ACommandThatNeverAnswers(unittest.IsolatedAsyncioTestCase):
+    """A phone that stops answering hangs `adb shell getprop`. The timeout
+    stopped the waiting and left the command running, so every Scan added
+    three more hung adb processes per device."""
+
+    async def test_it_is_killed_when_its_time_runs_out(self):
+        import asyncio
+        import sys
+        import time
+
+        spawned = []
+        spawn = asyncio.create_subprocess_exec
+
+        async def keep(*args, **kwargs):
+            spawned.append(await spawn(*args, **kwargs))
+            return spawned[-1]
+
+        started = time.monotonic()
+        with patch.object(devices.asyncio, "create_subprocess_exec", keep):
+            out = await devices._run(
+                [sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5)
+        self.assertEqual(out, "")
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIsNotNone(spawned[0].returncode, "the command is still running")
+
+
 if __name__ == "__main__":
     unittest.main()
 

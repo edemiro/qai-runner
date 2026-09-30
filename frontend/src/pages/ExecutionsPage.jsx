@@ -6,7 +6,7 @@ import {
 
 import { EmptyState } from '../components/EmptyState';
 import { DEFAULT_PLATFORM, PlatformTabs } from '../components/PlatformTabs';
-import { OS_TABS, matchesOs } from '../lib/platforms';
+import { DEFAULT_TRACK, OS_TABS, TRACK_TABS, matchesOs, trackOf } from '../lib/platforms';
 import { formatTokens } from '../lib/format';
 import { api } from '../api';
 import { useToast } from '../hooks/useToast';
@@ -88,16 +88,26 @@ export function ExecutionsPage({
   const [selectedId, setSelectedId] = useState(null);
   const [execution, setExecution] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Redesign or Dönüşüm, as on Test Sets — an execution is filed under the
+  // programme of the sets it ran — and opened on Redesign.
+  const [track, setTrack] = useState(DEFAULT_TRACK);
   const [platform, setPlatform] = useState(DEFAULT_PLATFORM);
   // Which phone, once Mobile is the platform. Not shown on Web, where the
   // question does not arise.
   const [os, setOs] = useState('ios');
 
-  const counts = {
-    web: executions.filter((e) => (e.kind || 'web') !== 'mobile').length,
-    mobile: executions.filter((e) => e.kind === 'mobile').length,
+  const trackCounts = {
+    redesign: executions.filter((e) => trackOf(e) === 'redesign').length,
+    donusum: executions.filter((e) => trackOf(e) === 'donusum').length,
   };
-  const onPlatform = executions.filter((e) => (e.kind || 'web') === platform);
+  const onTrack = executions.filter((e) => trackOf(e) === track);
+  const trackLabel = TRACK_TABS.find((item) => item.id === track)?.label || track;
+
+  const counts = {
+    web: onTrack.filter((e) => (e.kind || 'web') !== 'mobile').length,
+    mobile: onTrack.filter((e) => e.kind === 'mobile').length,
+  };
+  const onPlatform = onTrack.filter((e) => (e.kind || 'web') === platform);
 
   /* Within Mobile, iOS and Android are read apart for the same reason their
      Test Sets are: they are different screens, and a pass rate that mixes them
@@ -141,33 +151,54 @@ export function ExecutionsPage({
     try {
       const data = await api.suiteRuns(null, 50);
       setExecutions(data.suiteRuns);
-      // An execution just started elsewhere wins the selection, so starting one
-      // lands on it rather than on whatever ran last.
+      // Only while nothing is picked. This runs on every poll, and taking the
+      // address's execution each time took the tester's own pick back from
+      // them — and brought its platform tab back with it.
+      const listed = (id) => Boolean(id) && data.suiteRuns.some((item) => item.id === id);
       const asked = wanted.current;
-      setSelectedId((current) => asked || current || data.suiteRuns[0]?.id || null);
-      if (asked) {
-        // …and brings its platform with it. Starting a mobile execution and
-        // landing on a page filtered to web would hide the run just started.
-        const focused = data.suiteRuns.find((item) => item.id === asked);
-        if (focused) setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
-        onFocused?.();
-      }
+      setSelectedId((current) => (listed(current) ? current : null)
+        || (listed(asked) ? asked : null) || data.suiteRuns[0]?.id || null);
     } catch (err) {
       toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }, [toast, onFocused]);
+  }, [toast]);
 
-  // An execution asked for after the list is already here — one just started,
-  // or an address typed into the bar.
+  // An execution asked for — one just started, or an address typed into the
+  // bar — is opened once, when it is asked for, together with its platform:
+  // starting a mobile execution and landing on a page filtered to web would
+  // hide the run just started. Not on every refresh of the list, which is
+  // what pulled the tab back under a tester who had switched it.
+  const applied = useRef(null);
+  // What the pane showed when an execution was opened above: its platform
+  // arrives on the next render, so until then the pane is out of date.
+  const outdated = useRef(undefined);
   useEffect(() => {
-    if (!focusId) return;
-    setSelectedId(focusId);
+    if (!focusId || applied.current === focusId) return;
     const focused = executions.find((item) => item.id === focusId);
-    if (focused) setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
+    if (!focused) return;
+    applied.current = focusId;
+    outdated.current = shownId;
+    setSelectedId(focusId);
+    setTrack(trackOf(focused));
+    setPlatform(focused.kind === 'mobile' ? 'mobile' : 'web');
+    onSelect?.(focusId, { replace: true });
     onFocused?.();
-  }, [focusId, executions, onFocused]);
+  }, [focusId, executions, shownId, onFocused, onSelect]);
+
+  // The address names what the pane shows. A platform switch, a filter or a
+  // deletion falls through to another execution, and a link copied then
+  // opened a different report from the one on screen.
+  useEffect(() => {
+    if (outdated.current !== undefined) {
+      const stillOutdated = outdated.current === shownId;
+      outdated.current = undefined;
+      if (stillOutdated) return;
+    }
+    if (loading || !shownId || shownId === focusId) return;
+    onSelect?.(shownId, { replace: true });
+  }, [loading, shownId, focusId, onSelect]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,7 +283,9 @@ export function ExecutionsPage({
         suiteRunId: draft.suiteRunId,
         caseId: draft.caseId,
         caseName: draft.caseName,
-        suiteName: execution?.suite_name || null,
+        // The scenario's own Test Set first: Bug Report groups by it, and an
+        // execution picked from several sets has no single name to give.
+        suiteName: draft.suiteName || execution?.suite_name || null,
         url: draft.url,
         screenshot: draft.screenshot || null,
       });
@@ -336,6 +369,13 @@ export function ExecutionsPage({
             the list is still loading, and a pair of hollow zeros would say the
             platforms are empty a moment before saying they are not. */}
         <PlatformTabs
+          options={TRACK_TABS}
+          value={track}
+          onChange={setTrack}
+          counts={loading ? null : trackCounts}
+          label="Programme"
+        />
+        <PlatformTabs
           value={platform}
           onChange={setPlatform}
           counts={loading ? null : counts}
@@ -406,8 +446,8 @@ export function ExecutionsPage({
                   : needle ? 'matching what you typed' : `${statusFilter}`}.
               </EmptyState>
             ) : (
-              <EmptyState icon={ClipboardList} title={`No ${platform} executions`} compact>
-                Nothing has been run on {platform} yet.
+              <EmptyState icon={ClipboardList} title={`No ${platform} executions in ${trackLabel}`} compact>
+                Nothing from {trackLabel} has been run on {platform} yet.
               </EmptyState>
             )
           ) : (

@@ -22,6 +22,8 @@ recordings never accumulated, they were earned and lost again every turn.
 Most of this file is still about the recordings that are thrown away.
 """
 
+import json
+
 import pytest
 
 import storage
@@ -582,6 +584,26 @@ def _stepwise(run_id, verdicts):
         storage.finish_scenario_step(row, status)
 
 
+def test_a_step_added_while_the_run_went_on_does_not_take_another_steps_recording(db, case):
+    """Promotion went by position. A step put in at the top while an
+    execution ran took the recording of the step the run had carried out
+    there — and the next run "verified" it without ever carrying it out."""
+    ran = [dict(step) for step in storage.get_case(case)["steps"]]
+    run_id = a_run(case)
+    _stepwise(run_id, {1: "passed", 2: "passed"})
+    did(run_id, 1, "click", element={"xpath": "#booker", "label": "Booker"})
+    did(run_id, 2, "click", element={"xpath": "#search", "label": "Search"})
+
+    storage.update_case(case, steps=[{"action": "Accept the cookies", "expected": "The banner goes"},
+                                     *ran])
+    assert storage.promote_recording(run_id, case, ran_steps=ran) == 2
+
+    steps = storage.get_case(case)["steps"]
+    assert not steps[0].get("recorded"), "the new step was never carried out"
+    assert [item["selector"] for item in steps[1]["recorded"]] == ["#booker"]
+    assert [item["selector"] for item in steps[2]["recorded"]] == ["#search"]
+
+
 def test_a_clean_step_is_kept_even_though_a_later_one_failed(db, case):
     """What a later step did has nothing to do with whether this one worked.
 
@@ -998,6 +1020,554 @@ def test_a_secret_is_named_in_the_run_log_never_spelled(db):
     # "123" inside a wait is not a card.
     assert steps[2]["value"] == "1123"
     assert steps[2]["message"] == "Waited 1123ms"
+
+
+# --- Run here and Replay fill the store in the way an execution does ------- #
+
+STEP_DONE = ('```json\n{"type":"action","action":"step_done","value":"pass",'
+             '"reason":"ok"}\n```')
+DONE = '```json\n{"type":"action","action":"done","value":"pass","reason":"ok"}\n```'
+
+
+class _Screen:
+    snapshot_id = "s"
+
+    def get_optimized_tree_for_llm(self):
+        return {"elementId": "el_1"}
+
+    def visible_text(self):
+        return ["Kart numarası"]
+
+
+class _Page:
+    """A page that keeps what it was asked to type."""
+    kind = "web"
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.typed = []
+
+    def describe(self):
+        return {"name": "t", "platform": "Web"}
+
+    def is_alive(self):
+        return True
+
+    async def snapshot(self):
+        return _Screen()
+
+    async def screenshot(self):
+        return None
+
+    async def close(self):
+        return None
+
+    async def act(self, kind, element_id, selector, value, snapshot_id):
+        from drivers import ActionResult
+        self.typed.append(value)
+        return ActionResult(True, f'Typed "{value}" into {selector}', None)
+
+
+def _streamed(page, respond):
+    """What a route streamed to the browser, with `page` as its session."""
+    import asyncio
+
+    import agent
+    import drivers
+
+    async def go():
+        response = await respond()
+        return [json.loads(line) async for line in response.body_iterator]
+
+    drivers.register(page)
+    try:
+        return asyncio.run(go())
+    finally:
+        drivers._targets.pop(page.session_id, None)
+        agent.reset(page.session_id)
+
+
+def _run_here(page, request, tokens):
+    """POST /agent/run against a model that answers `tokens`. Returns what
+    was streamed and the text of each turn the model was shown."""
+    from unittest.mock import patch
+
+    import agent
+    import main
+
+    shown = []
+
+    class Model:
+        id, label = "fake", "Fake"
+
+        async def stream(self, system_prompt, turns, *args, **kwargs):
+            shown.append(turns[-1].text)
+            for token in tokens:
+                yield token
+
+    with patch.object(agent.providers, "get", lambda *a, **k: Model()), \
+         patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+         patch.object(agent.providers, "active_model", lambda *a, **k: "m"):
+        events = _streamed(page, lambda: main.agent_run(page.session_id, request))
+    return events, shown
+
+
+def test_run_here_fills_the_store_in_and_the_secret_stays_off_the_wire(db):
+    """Run here passed the scenario through raw: the recording typed the
+    literal `{{kart.numara}}` into the card field, and the same scenario that
+    passed in an execution failed from the workspace."""
+    import main
+
+    db.set_test_data("kart.numara", "4111111111111111", "test", secret=True)
+    db.set_test_data("yolcu.ad", "Ergün")
+    page = _Page("run-here-store")
+    events, shown = _run_here(page, main.AgentRunRequest(
+        goal="{{yolcu.ad}} adına kartla öde",
+        precondition="{{yolcu.ad}} olarak giriş yapılmış",
+        useVision=False,
+        steps=[main.ScenarioStep(action="Kart numarasını yaz", recorded=[
+            {"action": "type", "selector": "#card", "value": "{{kart.numara}}"},
+        ])],
+    ), tokens=["Kart 41111111", "11111111 yazıldı.\n", STEP_DONE])
+
+    assert page.typed == ["4111111111111111"], "the recording typed the card"
+    assert ("(Scenario: Precondition (make this true before starting): "
+            "Ergün olarak giriş yapılmış\n\nErgün adına kartla öde)") in shown[0]
+
+    # Nothing the browser was sent spells the card — not the step, not what
+    # the driver said it typed, not the model's reply, which split it in two.
+    assert "4111111111111111" not in json.dumps(events, ensure_ascii=False)
+    said = "".join(e["text"] for e in events if e["event"] == "token")
+    assert "Kart {{kart.numara}} yazıldı." in said
+    assert events[-1]["event"] == "run_closed"
+
+    # And what the run keeps names it, as it always has.
+    run = storage.get_run(events[0]["runId"])
+    assert [s["value"] for s in run["steps"]] == ["{{kart.numara}}"]
+    assert "4111111111111111" not in json.dumps(run, ensure_ascii=False)
+    assert run["goal"].startswith("Precondition (make this true before starting): Ergün")
+
+
+def test_run_here_puts_the_precondition_in_front_of_a_free_goal(db):
+    """It was written down and never acted on."""
+    import main
+
+    page = _Page("run-here-precondition")
+    _, shown = _run_here(page, main.AgentRunRequest(
+        goal="Sepete ürün ekle", precondition="Giriş yapılmış olmalı", useVision=False,
+    ), tokens=[DONE])
+    assert shown[0].startswith(
+        "GOAL: Precondition (make this true before starting): Giriş yapılmış olmalı"
+        "\n\nSepete ürün ekle")
+
+
+def test_a_replay_types_the_value_the_run_named(db):
+    """A run that typed the test card is kept as having typed {{kart.numara}},
+    and replaying it typed exactly that into the card field."""
+    import main
+
+    db.set_test_data("kart.numara", "4111111111111111", "test", secret=True)
+    source = storage.create_run(goal="Kartla öde", kind="web")
+    storage.add_step(source, action="type", status="passed", value="4111111111111111",
+                     message='Typed "4111111111111111"',
+                     element={"xpath": "#card", "label": "Kart"})
+    storage.finish_run(source, "passed")
+    assert storage.get_run(source)["steps"][0]["value"] == "{{kart.numara}}"
+
+    page = _Page("replay-store")
+    events = _streamed(page, lambda: main.replay_run(
+        source, session_id=page.session_id, heal=False))
+
+    assert page.typed == ["4111111111111111"]
+    assert "4111111111111111" not in json.dumps(events, ensure_ascii=False)
+    replay = storage.get_run(events[0]["runId"])
+    assert replay["status"] == "passed"
+    assert replay["steps"][0]["value"] == "{{kart.numara}}"
+
+
+def test_a_free_run_is_shown_the_test_data_and_types_it_by_name(db):
+    """Asked to fill in "the passenger" with nothing more to go on, the model
+    made one up — TEST DENEME, a 555 number — and the booking system refused
+    that passenger, while the team's own data sat unused on the Test Data page."""
+    from unittest.mock import patch
+
+    import agent
+    import main
+
+    db.set_test_data("yolcu.adt.ad", "Ergün", "Yetişkin yolcu")
+    db.set_test_data("tarih.gidis", "today+7", "Gidiş")
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    page = _Page("free-run-test-data")
+    prompts = []
+
+    class Model:
+        id, label = "fake", "Fake"
+        replies = ['```json\n{"type":"action","action":"type","elementId":"el_1",'
+                   '"value":"{{yolcu.adt.ad}}","reason":"r"}\n```', DONE]
+
+        async def stream(self, system_prompt, turns, *args, **kwargs):
+            prompts.append(system_prompt)
+            yield self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+
+    model = Model()
+    with patch.object(agent.providers, "get", lambda *a, **k: model), \
+         patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+         patch.object(agent.providers, "active_model", lambda *a, **k: "m"):
+        events = _streamed(page, lambda: main.agent_run(page.session_id, main.AgentRunRequest(
+            goal="Yolcu bilgilerini doldur", useVision=False, maxSteps=3)))
+
+    assert "{{yolcu.adt.ad}} = Ergün (Yetişkin yolcu)" in prompts[0]
+    assert "{{tarih.gidis}} = " in prompts[0] and "today+7" not in prompts[0]
+    assert "kart.numara" not in prompts[0] and "4111" not in prompts[0]
+    assert page.typed == ["Ergün"]
+    run = storage.get_run(events[0]["runId"])
+    assert run["steps"][0]["value"] == "{{yolcu.adt.ad}}", "recorded by name, so it follows the page"
+
+
+def _three_clicks():
+    source = storage.create_run(goal="Üç tık", kind="web")
+    for i in range(3):
+        storage.add_step(source, action="click", status="passed",
+                         element={"xpath": f"#b{i}", "label": f"B{i}"})
+    storage.finish_run(source, "passed")
+    return source
+
+
+def _replaying(page, source, consume):
+    """Replay `source` on `page`, handing the streamed body to `consume`."""
+    import asyncio
+
+    import agent
+    import main
+
+    async def go():
+        response = await main.replay_run(source, session_id=page.session_id, heal=False)
+        return await consume(response.body_iterator)
+
+    main.drivers.register(page)
+    try:
+        return asyncio.run(go())
+    finally:
+        main.drivers._targets.pop(page.session_id, None)
+        agent.reset(page.session_id)
+
+
+def test_a_replay_on_the_other_kind_of_target_is_refused(db):
+    """A phone run's taps on a page — the free re-match found whatever had a
+    similar label, and called the step healed."""
+    from fastapi import HTTPException
+
+    source = storage.create_run(goal="Telefonda", platform="Android")
+    storage.finish_run(source, "passed")
+    with pytest.raises(HTTPException) as refused:
+        _replaying(_Page("replay-wrong-kind"), source, None)
+    assert refused.value.status_code == 400
+
+
+def test_a_replay_waits_its_turn_behind_a_run(db):
+    import agent
+    from fastapi import HTTPException
+
+    page = _Page("replay-behind-a-run")
+    agent.get_session(page.session_id).running = True
+    with pytest.raises(HTTPException) as refused:
+        _replaying(page, _three_clicks(), None)
+    assert refused.value.status_code == 409
+
+
+def test_stop_ends_a_replay_and_the_row_says_so(db):
+    """Stop answered that nothing was running, and the replay went on."""
+    import agent
+
+    page = _Page("replay-stopped")
+
+    async def consume(body):
+        events = []
+        async for line in body:
+            events.append(json.loads(line))
+            if events[-1]["event"] == "step_finished":
+                assert agent.cancel(page.session_id), "Stop did not reach the replay"
+        return events
+
+    events = _replaying(page, _three_clicks(), consume)
+    assert [e["event"] for e in events][-2:] == ["cancelled", "run_closed"]
+    run = storage.get_run(events[0]["runId"])
+    assert (run["status"], len(run["steps"])) == ("cancelled", 1)
+
+
+def test_a_replay_whose_stream_is_dropped_is_not_left_running(db):
+    """Starting a second replay aborts the first one's stream; its row stayed
+    "running" until the server restarted."""
+    import agent
+
+    page = _Page("replay-dropped")
+    state = agent.get_session(page.session_id)  # the one the replay claims
+
+    async def consume(body):
+        first = json.loads(await body.__anext__())
+        await body.aclose()
+        return first
+
+    first = _replaying(page, _three_clicks(), consume)
+    assert storage.get_run(first["runId"])["status"] == "cancelled"
+    assert not state.running
+
+
+def _through_the_namer(events, store_keys=()):
+    """What `_secrets_named` streams for `events` in a run handed `store_keys`."""
+    import asyncio
+
+    import main
+
+    async def source():
+        for event in events:
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    async def go():
+        secrets = storage.test_data_secrets(store_keys)
+        return [json.loads(line) async for line in main._secrets_named(source(), secrets)]
+
+    return asyncio.run(go())
+
+
+def _tokens(*texts):
+    return [{"event": "token", "text": text, "step": 1} for text in texts]
+
+
+def _said(events):
+    return "".join(e["text"] for e in events if e["event"] == "token")
+
+
+def test_a_short_secret_the_run_was_not_handed_is_just_a_number(db):
+    """A CVV of 240 turned "240 TL", `?page=240` and a proposed scenario's
+    title into `{{kart.cvv}}` in every run — and the review dialog saved the
+    scenario, address and all, that way."""
+    db.set_test_data("kart.cvv", "240", "t", secret=True)
+    proposed = {"event": "scenarios_proposed", "step": 1,
+                "readFrom": "https://site.example/fares?page=240",
+                "scenarios": [{"title": "Fiyat 240 TL", "steps": []}]}
+    out = _through_the_namer([*_tokens("Toplam 240 TL."), proposed])
+    assert _said(out) == "Toplam 240 TL."
+    assert out[-1] == proposed
+
+    run_id = storage.create_run(goal="Book 240 seats")
+    storage.finish_run(run_id, "failed", "Expected 240 TL")
+    run = storage.get_run(run_id)
+    assert (run["title"], run["error"]) == ("Book 240 seats", "Expected 240 TL")
+
+
+def test_a_short_secret_the_run_was_handed_is_named(db):
+    db.set_test_data("kart.cvv", "240", "t", secret=True)
+    out = _through_the_namer(_tokens("CVV 240", " girildi."), {"kart.cvv"})
+    assert _said(out) == "CVV {{kart.cvv}} girildi."
+
+    run_id = storage.create_run(goal="CVV 240 gir", store_keys={"kart.cvv"})
+    storage.finish_run(run_id, "failed", "240 kabul edilmedi", store_keys={"kart.cvv"})
+    run = storage.get_run(run_id)
+    assert (run["goal"], run["error"]) == ("CVV {{kart.cvv}} gir", "{{kart.cvv}} kabul edilmedi")
+
+
+def test_run_here_names_only_what_the_scenario_names(db):
+    """The same number is the secret where the scenario names it, and a
+    price where it does not."""
+    import main
+
+    db.set_test_data("kart.cvv", "240", "t", secret=True)
+    events, _ = _run_here(_Page("run-here-unnamed"), main.AgentRunRequest(
+        goal="Sepette 240 TL yazsın", useVision=False), tokens=[DONE])
+    assert events[0]["goal"] == "Sepette 240 TL yazsın"
+    assert storage.get_run(events[0]["runId"])["title"] == "Sepette 240 TL yazsın"
+
+    events, _ = _run_here(_Page("run-here-named"), main.AgentRunRequest(
+        goal="CVV olarak {{kart.cvv}} gir", useVision=False), tokens=[DONE])
+    assert "CVV olarak 240" not in json.dumps(events, ensure_ascii=False)
+    assert storage.get_run(events[0]["runId"])["goal"] == "CVV olarak {{kart.cvv}} gir"
+
+
+def test_a_reply_is_named_whole_however_the_tokens_split_it(db):
+    """A fixed width was held back and named on its own, so a number that
+    went on past the secret was rewritten at the cut: "Toplam 2400 TL"
+    reached the chat as "Toplam {{kart.cvv}}0 TL"."""
+    db.set_test_data("kart.cvv", "240", "t", secret=True)
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    keys = {"kart.cvv", "kart.numara"}
+    assert _said(_through_the_namer(_tokens("Toplam 240", "0 TL."), keys)) == "Toplam 2400 TL."
+    assert _said(_through_the_namer(
+        _tokens("Toplam 12240 TL ödenecek", "."), keys)) == "Toplam 12240 TL ödenecek."
+    # A card a character at a time is never spelled, not even in part.
+    out = _through_the_namer(_tokens("Kart ", *"4111111111111111", " yazıldı."), keys)
+    assert _said(out) == "Kart {{kart.numara}} yazıldı."
+    assert not [e for e in out if e["event"] == "token" and "41" in e["text"]]
+
+
+def test_a_complete_secret_is_not_cut_open_by_one_that_starts_where_it_ends(db):
+    """QA, round 2: the card ended in the "1" another secret started with, so
+    the cut fell inside the card, and 15 of its 16 digits went to the chat."""
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    db.set_test_data("hesap.sifre", "1Parola99", "t", secret=True)
+    keys = {"kart.numara", "hesap.sifre"}
+    parts = ("Kart ", "411", "111", "111", "111", "111", "1")
+    assert _said(_through_the_namer(_tokens(*parts, " girildi."), keys)) == "Kart {{kart.numara}} girildi."
+    assert _said(_through_the_namer(_tokens(*parts), keys)) == "Kart {{kart.numara}}"
+    # A card that overlaps itself was cut open the same way.
+    db.set_test_data("kart.numara", "4242424242424242", "t", secret=True)
+    out = _through_the_namer(_tokens("Kart ", "424", "242", "424", "242", "424", "2", " ok"), keys)
+    assert _said(out) == "Kart {{kart.numara}} ok"
+    assert not [e for e in out if "42" in e["text"]]
+
+
+def test_a_short_secret_that_ends_in_a_mark_is_named_where_it_stands_alone(db):
+    """\\b needs a word character beside a secret's edge, so "P@ss!" was named
+    only when a letter touched it — and spelled out when it stood alone."""
+    secrets = [{"key": "k.pw", "value": "P@ss!"}]
+    assert storage._named("Type P@ss! now", secrets) == "Type {{k.pw}} now"
+    assert storage._named("P@ss!x", secrets) == "P@ss!x"
+
+
+def test_the_stream_names_a_reply_as_storage_does_however_it_is_split(db):
+    """What reaches the chat is what the run's record says, token splits or
+    not. Random replies, random splits, stores shaped to catch each way the
+    hold-back has gone wrong: secrets that overlap, a secret that overlaps
+    itself, a short secret beside digits, one that ends in a mark."""
+    import asyncio
+    import random
+
+    import main
+
+    stores = [
+        [("kart.numara", "4111111111111111"), ("hesap.sifre", "1Parola99")],
+        [("kart.numara", "4242424242424242")],
+        [("kart.numara", "4111111111111111"), ("kart.cvv", "240")],
+        [("k.pw", "P@ss!"), ("kart.numara", "4111111111111111")],
+        [("k.rx", "a+b*c"), ("kart.cvv", "240")],
+    ]
+    words = ["Kart", "4111111111111111", "4242424242424242", "240", "2400", "1240",
+             "1Parola99", "P@ss!", "a+b*c", "TL", "x", "1", "42", "ödeme"]
+    rng = random.Random(20260929)
+
+    async def stream(secrets, tokens):
+        async def source():
+            for token in tokens:
+                yield json.dumps({"event": "token", "text": token, "step": 1}) + "\n"
+        return "".join([json.loads(line)["text"]
+                        async for line in main._secrets_named(source(), secrets)])
+
+    for store in stores:
+        secrets = [{"key": key, "value": value} for key, value in store]
+        for _ in range(250):
+            reply = "".join(rng.choice(words) + rng.choice(["", " ", ", ", ".", "\n"])
+                            for _ in range(rng.randint(1, 6)))
+            cuts = sorted(rng.sample(range(1, len(reply)), min(len(reply) - 1, rng.randint(0, 6))))
+            tokens = [reply[a:b] for a, b in zip([0, *cuts], [*cuts, len(reply)])]
+            assert asyncio.run(stream(secrets, tokens)) == storage._named(reply, secrets), \
+                (store, tokens)
+
+
+def test_the_page_error_note_names_the_card_before_cutting_it(db):
+    """The note quotes the first 160 characters of the page's error. Cut
+    first, a card that straddled the cut was no longer the card storage
+    looks for, and its first digits were kept."""
+    import asyncio
+
+    import main
+
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    run_id = storage.create_run(goal="Kartla öde")
+
+    class Page:
+        def drain_events(self):
+            return [{"kind": "console", "level": "error", "thirdParty": False,
+                     "text": "x" * 150 + "4111111111111111 rejected"}]
+
+    async def stream():
+        for event in ({"event": "run_started", "runId": run_id},
+                      {"event": "finished", "status": "passed"},
+                      {"event": "run_closed", "runId": run_id, "status": "passed"}):
+            yield json.dumps(event) + "\n"
+
+    async def go():
+        return [json.loads(line) async for line in main._with_page_events(stream(), Page(), [], True)]
+
+    events = asyncio.run(go())
+    run = storage.get_run(run_id)
+    assert run["status"] == "failed"
+    assert "411111" not in json.dumps(run) and "411111" not in json.dumps(events)
+
+
+def test_a_case_that_never_started_names_what_it_was_handed(db):
+    """QA, round 2: the reason an unstarted case keeps can quote the address
+    the store was filled into, and the short secret in it was kept as typed."""
+    import suite_runner
+
+    db.set_test_data("kart.pin", "1234", "t", secret=True)
+    suite_id = storage.create_suite("Pay")
+    case_id = storage.add_case(suite_id, "Pin", "g", url="https://shop.example/pay?pin={{kart.pin}}")
+    suite_run_id = storage.create_suite_run(suite_id, workers=1)
+    run_id = suite_runner._record_unstarted_case(
+        storage.get_case(case_id), suite_run_id, "web",
+        "net::ERR_NAME_NOT_RESOLVED at https://shop.example/pay?pin=1234", None, "Pin",
+        store_keys={"kart.pin"},
+    )
+    assert storage.get_run(run_id)["error"].endswith("pay?pin={{kart.pin}}")
+
+
+def test_a_long_secret_does_not_hold_the_reply_back(db):
+    """Holding back one secret's length meant a 400-character token kept the
+    whole reply off the screen until the model had finished."""
+    db.set_test_data("api.token", "x" * 400, "t", secret=True)
+    out = _through_the_namer(_tokens(*["Bu cevap kısa. "] * 30), {"api.token"})
+    assert len(out) == 30
+
+
+def test_what_the_page_said_names_the_card(db):
+    """The page's own complaints were kept word for word, so a card it logged
+    reached the report, the JUnit file and the bug draft."""
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    run_id = storage.create_run(goal="Kartla öde")
+    said = [{"kind": "console", "level": "error",
+             "text": "BIN lookup failed for 4111111111111111",
+             "url": "https://pay.example/bin?card=4111111111111111"}]
+    storage.add_page_events(run_id, said)
+    kept = storage.list_page_events(run_id)
+    assert "4111111111111111" not in json.dumps(kept)
+    assert kept[0]["text"] == "BIN lookup failed for {{kart.numara}}"
+    live = storage.named_page_events(said)
+    assert live[0]["url"] == "https://pay.example/bin?card={{kart.numara}}"
+
+
+def test_a_recorded_number_is_filled_in_as_text(db):
+    """`"value": 2` from an API client was a 500 once the store held anything."""
+    import suite_runner
+
+    steps = suite_runner.substitute_steps(
+        [{"action": "a", "recorded": [{"action": "type", "value": 2}]}], None, {"k": "v"})
+    assert steps[0]["recorded"][0]["value"] == "2"
+
+
+def test_run_here_opens_the_address_the_store_names(db):
+    """Run here opened `{{site.base}}/login` as written; an execution fills it
+    in. Not with a secret, though: the address goes back to the browser."""
+    import asyncio
+    from unittest.mock import patch
+
+    import main
+
+    db.set_test_data("site.base", "shop.example", "t")
+    db.set_test_data("kart.numara", "4111111111111111", "t", secret=True)
+    opened = []
+
+    async def launch(url, **kwargs):
+        opened.append(url)
+        raise RuntimeError("not today")
+
+    with patch.object(main.WebTarget, "launch", launch):
+        for url in ("{{site.base}}/login", "{{site.base}}/pay?c={{kart.numara}}"):
+            try:
+                asyncio.run(main.create_web_session(main.WebSessionRequest(url=url)))
+            except main.HTTPException:
+                pass
+    assert opened == ["https://shop.example/login",
+                      "https://shop.example/pay?c={{kart.numara}}"]
 
 
 def test_a_dated_step_loses_its_recording_when_the_run_is_promoted(db, case):

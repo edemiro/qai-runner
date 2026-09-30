@@ -7,8 +7,8 @@ import {
 
 import { api } from '../api';
 import { StepEditor } from './StepEditor';
-import { DEFAULT_ENV_URL, ENV_GROUPS } from '../lib/environments';
-import { forPicking, sessionsFor } from '../lib/platforms';
+import { DEFAULT_ENV_URL, ENV_GROUPS, PAGE_GROUPS } from '../lib/environments';
+import { forPicking, sessionsFor, trackOf } from '../lib/platforms';
 import { useToast } from '../hooks/useToast';
 
 /**
@@ -34,6 +34,10 @@ export function ScenarioGenerator({
   // `os` narrows that for mobile — a set that does not say which phone lands
   // on neither sub-tab, and the scenarios just written look lost.
   kind = 'web', os = null,
+  // Redesign or Dönüşüm, when the caller is on one of those tabs: a new set is
+  // filed there, and only that tab's sets are offered to save into. Absent
+  // (a chat, a workspace), a new set goes where the server puts new sets.
+  track = null,
   // How to book a phone from here. Without it the mobile side is a dead end:
   // scenarios are written by reading a screen, and the tester was sent to
   // another page to arrange one.
@@ -332,6 +336,7 @@ export function ScenarioGenerator({
         // A web set has no OS; carrying one over from a phone that happened to
         // be open would file it under a sub-tab it does not belong on.
         os: isMobile ? os : null,
+        track,
         module: newSetModule.trim() || null,
       });
       destId = created.id;
@@ -469,7 +474,8 @@ export function ScenarioGenerator({
             }}
           />
         </label>
-        {/* Every environment in the one list. Behind "Open an environment…"
+        {/* Every environment, and the listed pages, in the one list. A page is
+            read at its own address, host and path. Behind "Open an environment…"
             they were a second choice after a first that only existed to ask
             whether there would be a second — so the page offered one stack and
             looked like it had only one. */}
@@ -500,7 +506,7 @@ export function ScenarioGenerator({
             )}
             {/* There is no address to open on a phone: an app is read off a
                 device that is already running it. */}
-            {!isMobile && ENV_GROUPS.map((group) => (
+            {!isMobile && [...ENV_GROUPS, ...PAGE_GROUPS].map((group) => (
               <optgroup key={group.label} label={group.label}>
                 {group.items.map((item) => (
                   <option key={item.name} value={item.url} title={item.url}>
@@ -702,12 +708,12 @@ export function ScenarioGenerator({
                     {/* Editable: the generator reads the kind off what it wrote,
                         and the reviewer who knows the rules has the last word. */}
                     <select
-                      className={`type-select t-${(scenario.type || 'Positive').toLowerCase()}`}
+                      className={`type-select t-${(scenario.type || 'Positive').toLowerCase().replace(/\s+/g, '-')}`}
                       value={scenario.type || 'Positive'}
                       onChange={(event) => patchScenario(index, { type: event.target.value })}
                       aria-label="Scenario type"
                     >
-                      {['Positive', 'Negative', 'Boundary'].map((value) => (
+                      {['Positive', 'Negative', 'Boundary', 'Edge Case'].map((value) => (
                         <option key={value} value={value}>{value}</option>
                       ))}
                     </select>
@@ -734,7 +740,7 @@ export function ScenarioGenerator({
                 disabled={busy}
                 aria-label="Test Set to file the scenarios into"
               >
-                {suites.map((suite) => (
+                {(track ? suites.filter((suite) => trackOf(suite) === track) : suites).map((suite) => (
                   <option key={suite.id} value={suite.id}>{suite.name}</option>
                 ))}
                 <option value={NEW_SET}>＋ New Test Set…</option>

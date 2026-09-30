@@ -73,6 +73,28 @@ export const ENV_GROUPS = [
 ];
 
 /**
+ * Pages opened as they are: a product whose own entry point sits under a path
+ * on one stack.
+ *
+ * Kept apart from the environments because picking one means something else.
+ * An environment swaps the host and keeps the path; a page is the whole
+ * address. So these are offered where a page is opened or read, and not where
+ * an execution is pointed at an environment — that only ever takes the host,
+ * and would quietly drop the path the page was picked for.
+ */
+export const PAGE_GROUPS = [
+  {
+    label: 'Standalone',
+    items: [
+      {
+        name: 'Standalone - Hotel',
+        url: 'https://nuat2-coreservices.turkishairlines.com/tr-int/additional-services/hotel-standalone',
+      },
+    ],
+  },
+];
+
+/**
  * Point an address at the chosen environment, keeping the path it carries.
  *
  * Mirrors `apply_environment` in the runner, which is what an execution goes
@@ -100,6 +122,24 @@ export function applyEnvironment(url, envUrl) {
   } catch {
     return url;
   }
+}
+
+/** The listed page this address is, if it is one. A query, a hash or a
+    trailing slash does not make it another page. */
+export function matchPage(url) {
+  let here;
+  try {
+    here = new URL(url);
+  } catch {
+    return null;
+  }
+  const bare = (address) => address.origin + address.pathname.replace(/\/+$/, '');
+  for (const group of PAGE_GROUPS) {
+    for (const item of group.items) {
+      if (bare(new URL(item.url)) === bare(here)) return item;
+    }
+  }
+  return null;
 }
 
 /** The environment whose host the address currently points at, if any. */

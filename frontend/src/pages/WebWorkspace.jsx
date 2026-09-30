@@ -15,7 +15,9 @@ import { useFullscreen } from '../hooks/useFullscreen';
 import { useScreenStream } from '../hooks/useScreenStream';
 import { useToast } from '../hooks/useToast';
 import { parseBounds, roleColor } from '../lib/elements';
-import { applyEnvironment, DEFAULT_ENV_URL, ENV_GROUPS, matchEnv } from '../lib/environments';
+import {
+  applyEnvironment, DEFAULT_ENV_URL, ENV_GROUPS, matchEnv, matchPage, PAGE_GROUPS,
+} from '../lib/environments';
 import './web-workspace.css';
 
 const VIEWPORTS = [
@@ -40,21 +42,25 @@ const DRAG_PX = 6;
  * Choosing from the list swaps the host and keeps whatever path the address
  * already carries — the same swap the runner makes when a set is pointed at an
  * environment, so a page reached by hand and the same page reached by a run
- * land in the same place. Typing over it still works.
+ * land in the same place. A listed page is the one exception: it is a whole
+ * address, so picking it opens that page. Typing over it still works.
  */
 function EnvSelect({ url, onPick, disabled }) {
-  const current = matchEnv(url);
+  const current = matchPage(url) || matchEnv(url);
+  const pick = (picked) => {
+    if (picked) onPick(matchPage(picked) ? picked : applyEnvironment(url, picked));
+  };
   return (
     <select
       className="env-select"
       value={current?.url || ''}
-      onChange={(event) => event.target.value && onPick(applyEnvironment(url, event.target.value))}
+      onChange={(event) => pick(event.target.value)}
       disabled={disabled}
-      aria-label="Environment"
-      title="TK web environments"
+      aria-label="Environment or page"
+      title="TK web environments and pages"
     >
       {!current && <option value="">Custom</option>}
-      {ENV_GROUPS.map((group) => (
+      {[...ENV_GROUPS, ...PAGE_GROUPS].map((group) => (
         <optgroup key={group.label} label={group.label}>
           {group.items.map((item) => (
             <option key={item.name} value={item.url} title={item.url}>{item.name}</option>
@@ -831,6 +837,7 @@ export function WebWorkspace({
               timeline={agent.timeline}
               waitingAt={agent.waitingAt}
               stepping={agent.stepping}
+              stopping={agent.stopping}
               onStep={agent.step}
               onStepMode={agent.setStepMode}
               status={agent.status}

@@ -5,7 +5,7 @@ import { AgentPanel } from './components/AgentPanel';
 import { DeviceMirror } from './components/DeviceMirror';
 import { Inspector } from './components/Inspector';
 import { ScenarioReviewModal } from './components/ScenarioReviewModal';
-import { Sidebar, TABS } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
 import { useAgentRun } from './hooks/useAgentRun';
 import { useScreenStream } from './hooks/useScreenStream';
 import { useTheme } from './hooks/useTheme';
@@ -14,6 +14,7 @@ import { useToast } from './hooks/useToast';
 import { parseBounds, roleColor } from './lib/elements';
 import { applyEnvironment } from './lib/environments';
 import { osOf } from './lib/platforms';
+import { TABS } from './lib/tabs';
 import { BugsPage } from './pages/BugsPage';
 import { ExecutionsPage } from './pages/ExecutionsPage';
 import { InsightsPage } from './pages/InsightsPage';
@@ -137,6 +138,17 @@ export default function App() {
     () => mobileSessions.find((session) => session.sessionId === activeSessionId) || mobileSessions[0] || null,
     [mobileSessions, activeSessionId],
   );
+
+  // A phone an execution is on is held until the execution lets it go, and
+  // only the backend knows when that is — so the list is re-read meanwhile.
+  const phoneBusy = Boolean(mobileSession?.busyWith);
+  useEffect(() => {
+    if (!phoneBusy) return undefined;
+    const timer = setInterval(() => {
+      api.sessions().then((data) => setSessions(data.sessions || [])).catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [phoneBusy]);
 
   // The web workspace renders its own full-width viewer and drives its own
   // stream; only the mobile workspace uses the phone mirror.
@@ -374,8 +386,18 @@ export default function App() {
     async (sessionId) => {
       try {
         await api.deleteSession(sessionId);
-      } catch {
-        /* the session is going away locally regardless */
+      } catch (err) {
+        // An execution is using the phone. Closing the session would pull it
+        // out from under the scenario running on it, so that is asked first.
+        if (err.status === 409) {
+          if (!window.confirm(`${err.message}\n\nStop the execution and disconnect anyway?`)) return;
+          try {
+            await api.deleteSession(sessionId, { force: true });
+          } catch {
+            /* going away locally regardless */
+          }
+        }
+        /* otherwise the session is going away locally regardless */
       }
       setSessions((current) => {
         const remaining = current.filter((session) => session.sessionId !== sessionId);
@@ -459,17 +481,36 @@ export default function App() {
       // The workspace is where the run can actually be watched.
       setActiveTab(kind === 'web' ? 'web' : 'mobile');
       setAgentSubTab('chat');
-      startAgent(item.goal, { steps: item.steps || null, on: sessionId });
+      // The precondition goes as it is written, and {{placeholders}} are
+      // filled in on the server, the way an execution fills them — so the
+      // store's secrets never have to come to the browser.
+      startAgent(item.goal, {
+        steps: item.steps || null, precondition: item.precondition || null, on: sessionId,
+      });
     },
     [activeSessionId, activeSession, openWebPage, setActiveTab, startAgent, toast],
   );
 
   // ----------------------------------------------------------------- replay -
+  // A run is replayed on its own kind of target. On the other kind the free
+  // re-match taps whatever there has a similar label — the phone's "Search"
+  // for the page's — and reports the step as healed.
+  const replaySessionFor = useCallback((run) => {
+    const platform = (run.platform || '').toLowerCase();
+    const kind = run.kind || (platform === 'web' ? 'web' : platform ? 'mobile' : null);
+    if (kind === 'web') return webSession;
+    if (kind === 'mobile') return mobileSession;
+    return activeSession;
+  }, [webSession, mobileSession, activeSession]);
+
   const replayAbort = useRef(null);
   const replayRun = useCallback(
     async (run) => {
-      if (!activeSessionId) {
-        toast.warning('Connect a device before replaying a run.');
+      const session = replaySessionFor(run);
+      if (!session) {
+        toast.warning(run.kind === 'web' || (run.platform || '').toLowerCase() === 'web'
+          ? 'Open a page in Web before replaying this run.'
+          : 'Connect a device before replaying this run.');
         return;
       }
       replayAbort.current?.abort();
@@ -481,7 +522,7 @@ export default function App() {
       try {
         await api.replayRun(
           run.id,
-          activeSessionId,
+          session.sessionId,
           (event) => {
             if (event.event === 'step_finished' && event.status === 'failed') {
               failed = true;
@@ -490,6 +531,8 @@ export default function App() {
             if (event.event === 'finished') {
               if (!failed) toast.success('Replay passed.');
             }
+            if (event.event === 'cancelled') toast.info('Replay stopped.');
+            if (event.event === 'error') toast.error(event.message);
           },
           controller.signal,
         );
@@ -499,7 +542,7 @@ export default function App() {
         replayAbort.current = null;
       }
     },
-    [activeSessionId, toast],
+    [replaySessionFor, toast],
   );
 
   useEffect(() => () => replayAbort.current?.abort(), []);
@@ -607,10 +650,11 @@ export default function App() {
     if (activeTab === 'runs') {
       return (
         <RunsPage
-          activeSessionId={activeSessionId}
+          replaySessionFor={replaySessionFor}
           onReplay={replayRun}
           selectedRunId={selectedRunId}
           onSelectRun={setSelectedRunId}
+          onOpenExecution={openExecution}
         />
       );
     }
@@ -632,7 +676,7 @@ export default function App() {
           }}
           focusId={focusExecutionId || (activeTab === 'executions' ? address.id : null)}
           onFocused={clearExecutionFocus}
-          onSelect={(id) => goTo('executions', id)}
+          onSelect={(id, options) => goTo('executions', id, options)}
         />
       );
     }
@@ -750,6 +794,7 @@ export default function App() {
             timeline={agent.timeline}
             waitingAt={agent.waitingAt}
             stepping={agent.stepping}
+            stopping={agent.stopping}
             onStep={agent.step}
             onStepMode={agent.setStepMode}
             status={agent.status}
@@ -764,6 +809,10 @@ export default function App() {
             examples={deviceSuggestions}
             pageSummary={devicePage}
             suggestionsLoading={suggestionsLoading}
+            cannotRun={mobileSession?.busyWith
+              ? `This phone is running the execution “${mobileSession.busyWith.name || 'an execution'}”.`
+                + ' Stop it in Test Executions, or wait for it to finish.'
+              : null}
           />
         ) : (
           <Inspector

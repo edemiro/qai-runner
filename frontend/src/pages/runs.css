@@ -47,6 +47,370 @@
   margin: 2px 0 10px;
 }
 
+/* Priority as one control that says what it is set to, at the height of the
+   chips beside it, and marked when it is doing any narrowing. */
+.runs-toolbar .runs-priority {
+  width: auto;
+  flex: none;
+  height: var(--control-h-sm);
+  padding: 0 28px 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.runs-toolbar .runs-priority.active {
+  border-color: var(--accent-border);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* --- one group per execution ---------------------------------------------- */
+
+/* Fifty runs in one column read as fifty unrelated things. Most of them are a
+   handful of executions, and "how did the last one go" is the question the
+   page is opened with — so each execution is a line that says it, and opens
+   into its runs. */
+.runs-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.runs-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.runs-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 6px 12px 6px 4px;
+}
+
+.runs-group.open .runs-group-head {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.runs-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.runs-group-toggle:hover { background: var(--bg-hover); }
+.runs-group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.runs-group-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.runs-group.open .runs-group-chevron { transform: rotate(90deg); }
+
+.runs-group-name {
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runs-group-when {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.runs-group-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  flex-wrap: wrap;
+}
+
+/* The execution's verdicts as proportions before they are read as numbers. */
+.runs-tally-bar {
+  display: flex;
+  width: 72px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-active);
+}
+
+.runs-tally-bar .seg { flex-basis: 0; min-width: 3px; }
+.runs-tally-bar .seg.passed { background: var(--success); }
+.runs-tally-bar .seg.failed { background: var(--danger); }
+.runs-tally-bar .seg.cancelled { background: var(--neutral); }
+.runs-tally-bar .seg.running { background: var(--accent); }
+
+.runs-group-tally {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.runs-group-tally .t-passed { color: var(--success-ink); }
+.runs-group-tally .t-failed { color: var(--danger-ink); }
+.runs-group-tally .t-stopped { color: var(--text-tertiary); }
+.runs-group-tally .t-running { color: var(--accent); }
+
+.runs-group-count {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.runs-group-open { flex: none; }
+
+.runs-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+}
+
+/* --- one run ---------------------------------------------------------------- */
+
+/* A line, not a card: the execution is the card. What the scenario is leads,
+   why it failed sits under it, and the figures keep to columns of their own so
+   a list can be read down them. */
+.run-line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 74px 44px 64px 72px;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-line:hover { background: var(--bg-hover); border-color: var(--border); }
+.run-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.run-icon {
+  display: inline-flex;
+  padding-top: 2px;
+}
+
+.run-icon.passed { color: var(--success); }
+.run-icon.failed { color: var(--danger); }
+.run-icon.cancelled { color: var(--text-tertiary); }
+.run-icon.running { color: var(--accent); }
+
+.run-line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* One line: the number, the name and — while there is room — what the
+   scenario controls. The name comes first because it is what tells two rows
+   of one set apart; the whole title is on hover. */
+.run-line-title {
+  display: block;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-line-idx {
+  margin-right: 6px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-line-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.run-line-name.soft { color: var(--text-secondary); }
+
+.run-line-detail {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+
+.run-line-detail::before { content: '— '; }
+
+.run-line-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.run-line-area {
+  flex: none;
+  max-width: 45%;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Why it did not pass, in the words the bug raised from it uses. Red when it
+   is the app's, grey when it was the run's own trouble — a rate limit, a stop. */
+.run-line-why {
+  min-width: 0;
+  color: var(--danger-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-line-why.soft { color: var(--text-tertiary); }
+
+.run-line-step {
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.run-line-priority {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.run-line-steps,
+.run-line-duration,
+.run-line-when {
+  padding-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.run-line-chevron {
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.run-line-same.open .run-line-chevron { transform: rotate(90deg); }
+
+/* The runs under a same-failure row, set in under it. */
+.run-line-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px 20px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border);
+  list-style: none;
+}
+
+/* --- the report's head -------------------------------------------------------- */
+
+.run-head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.run-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.run-crumb-execution {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+}
+
+button.run-crumb-execution { cursor: pointer; }
+button.run-crumb-execution:hover { color: var(--accent); text-decoration: underline; }
+
+.run-crumb-idx { font-variant-numeric: tabular-nums; }
+
+.run-detail .run-detail-sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* The precondition inside its fold: no longer pulled up under the title. */
+.run-goal-fold .run-detail-goal { margin-top: 0; }
+
+/* What failed, before anything else is read. */
+.run-failure {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.run-failure-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--danger-ink);
+}
+
+.run-failure-title svg { align-self: center; }
+
+.run-failure-headline {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* ------------------------------------------------------------ the report -- */
 
 /* Seven tiles at the shared padding is a band deep enough to push the steps —
@@ -222,6 +586,198 @@
   margin-top: var(--gap-3);
 }
 
+/* ------------------------------------------------------------ the player -- */
+
+/* The recording on the left, the steps on the right. The recording stays in
+   view while the steps scroll past it, because reading one against the other
+   is the point. */
+.run-player {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: var(--gap-4, 16px);
+  align-items: start;
+}
+
+.player-media {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.player-switch {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.player-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.player-switch button.active {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.player-switch button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* A phone's recording is tall: held to the viewport, not the column. */
+.player-video,
+.player-shot {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+.player-shot { cursor: zoom-in; }
+
+.player-still { display: flex; flex-direction: column; gap: 8px; }
+
+.player-still-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.player-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.player-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.player-step {
+  display: grid;
+  grid-template-columns: 26px 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.player-step:hover { background: var(--bg-surface); }
+
+.player-step.active {
+  background: var(--bg-surface);
+  border-color: var(--border-strong, var(--border));
+}
+
+.player-step-idx {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-top: 2px;
+}
+
+.player-step-icon { padding-top: 1px; }
+.player-step.passed .player-step-icon { color: var(--success); }
+.player-step.failed .player-step-icon { color: var(--danger); }
+
+.player-step-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.player-step-what {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  background: none;
+  padding: 0;
+}
+
+.player-step-result {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.player-step.failed .player-step-result { color: var(--danger); }
+
+.player-step-reason {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.player-step-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.player-step-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.player-step-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.player-chip {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.player-at,
+.player-off {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.player-at { color: var(--text-tertiary); }
+.player-off { color: var(--warning, #d97706); }
+
 /* -------------------------------------------------------------- narrower -- */
 
 @media (max-width: 720px) {
@@ -235,4 +791,41 @@
   .runs-toolbar .run-search {
     flex-basis: 100%;
   }
+
+  /* A run on two lines: what it is, then its figures under it — five fixed
+     columns at phone width left the name a word wide. */
+  .run-line {
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    row-gap: 4px;
+  }
+
+  .run-line-main { grid-column: 2 / -1; }
+  .run-line-priority { grid-column: 2; grid-row: 2; }
+  .run-line-steps { display: none; }
+  /* Placed, not left to flow: unplaced, the duration took the first free cell
+     of the second row — the icon's column — and sat on the priority tag. */
+  .run-line-duration { grid-column: 3; grid-row: 2; }
+  .run-line-when { grid-column: 4; grid-row: 2; }
+
+  /* Back, export, replay and delete no longer fit one line beside each
+     other; Delete ran off the right edge of the screen. */
+  .run-detail-header { flex-wrap: wrap; }
+  .run-detail-actions { flex-wrap: wrap; }
+  .run-line-title { white-space: normal; }
+  /* Shrinks to the line and ends in an ellipsis, rather than running a list
+     of scenario numbers off the edge of the screen. */
+  .run-line-area { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  .run-line-sub { flex-wrap: wrap; }
+  .run-line-why { white-space: normal; }
+
+  .runs-group-summary { padding-left: 12px; }
+}
+
+/* One column: the recording above its steps, and no longer pinned — pinned,
+   it would cover the steps it is meant to be read with. */
+@media (max-width: 960px) {
+  .run-player { grid-template-columns: minmax(0, 1fr); }
+  .player-media { position: static; }
+  .player-video,
+  .player-shot { max-height: 60vh; }
 }

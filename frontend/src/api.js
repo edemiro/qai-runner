@@ -188,7 +188,9 @@ export const api = {
   setViewport: (sessionId, width, height) =>
     request(`/api/web/session/${sessionId}/viewport`, { method: 'POST', body: { width, height } }),
 
-  deleteSession: (sessionId) => request(`/api/session/${sessionId}`, { method: 'DELETE' }),
+  // `force` stops an execution using the phone first; without it that is a 409.
+  deleteSession: (sessionId, { force = false } = {}) =>
+    request(`/api/session/${sessionId}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
   sessions: () => request('/api/sessions'),
 
   screenshot: (sessionId) => request(`/api/session/${sessionId}/screenshot`),

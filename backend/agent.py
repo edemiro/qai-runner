@@ -7,21 +7,28 @@ event stream it receives.
 """
 
 import asyncio
+import traceback
 import base64
 import json
+import math
+import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
 import authoring
+import config
+import recording
 import storage
+import suite_runner
 import locator
 import text_match
 from mobile_dom import is_wheel
 import visual
 from config import MAX_AGENT_STEPS
 from drivers import ActionResult, Snapshot, UITarget
+from drivers.web import run_artifact_dir
 from llm import ProviderError, Turn
 from llm import registry as providers
 
@@ -183,7 +190,12 @@ TARGET_PROFILES = {
             "- Dismiss cookie banners and modal overlays before trying to reach the\n"
             "  content behind them; they intercept clicks.\n"
             "- Only the top of the page is in the tree. If what you need is not there,\n"
-            "  scroll and read the next screen rather than guessing an elementId."
+            "  scroll and read the next screen rather than guessing an elementId.\n"
+            "- A node marked `offscreen` is inside a panel or list that scrolls on its\n"
+            "  own, past the part of it now showing — the second room of a guests\n"
+            "  panel, the rest of a dropdown. Act on it directly: the backend scrolls\n"
+            "  that panel to it. `scroll` with no elementId scrolls an open panel if\n"
+            "  one is open, and the page otherwise."
         ),
     },
 }
@@ -259,6 +271,50 @@ def build_system_prompt(kind: str, stepwise: bool = False) -> str:
     for name, value in profile.items():
         prompt = prompt.replace("{" + name + "}", value)
     return prompt
+
+
+def _test_data_brief() -> str:
+    """The Test Data page, as the model is shown it: values it can type by name.
+
+    A step that needs a passenger and does not say which — "fill in the
+    passenger" — had the model make one up: "TEST DENEME", a 555 number. The
+    booking system refused that passenger, and the team's own data sat unused
+    on a page built for exactly this. Offered by name, so what the run types
+    and records is `{{yolcu.adt.ad}}`, filled in as the action runs (see
+    `_filled`), and a recording keeps following the page.
+
+    Not the secrets. A scenario that needs a card names it, and it is named
+    back in everything the run streams because of that (storage._secrets_for);
+    one the model reached for on its own would not be.
+    """
+    try:
+        entries = [entry for entry in storage.list_test_data() if not entry["secret"]]
+    except Exception:  # noqa: BLE001 — the page is help, not a reason to stop
+        return ""
+    if not entries:
+        return ""
+    lines = [
+        f"- {{{{{entry['key']}}}}} = {suite_runner.computed(str(entry['value']))}"
+        + (f" ({entry['note']})" if entry.get("note") else "")
+        for entry in entries
+    ]
+    return (
+        "TEST DATA — the values this team keeps for its scenarios. When a step needs"
+        " something it does not spell out — a passenger's title, name, surname, date of"
+        " birth, e-mail or phone number, a date — use these rather than inventing one."
+        " Type the {{name}} exactly as it is written here, braces included; the value is"
+        " filled in as the action runs.\n" + "\n".join(lines)
+    )
+
+
+def _filled(action: Dict[str, Any]) -> Dict[str, Any]:
+    """`action` with the Test Data names in its value filled in, for carrying
+    out. The action itself keeps the names: that is what the run records, and
+    what a recording replays against whatever the page says next time."""
+    value = action.get("value")
+    if not isinstance(value, str) or "{{" not in value:
+        return action
+    return {**action, "value": suite_runner.substitute(value, None, storage.test_data_values())}
 
 
 ACTION_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
@@ -957,6 +1013,10 @@ async def _run_authoring_action(
     snapshot: Optional[Snapshot],
     screenshot: Optional[str],
     goal: str,
+    # The chat run's own Stop. A Test Set it started runs inside this call,
+    # where the run's Stop never reached it: the button did nothing until the
+    # workspace gave up waiting and cut the stream.
+    stop: Optional[asyncio.Event] = None,
 ) -> Dict[str, Any]:
     """Write scenarios, or run a Test Set, from inside a chat run.
 
@@ -991,7 +1051,8 @@ async def _run_authoring_action(
         )
     else:
         execution_name = (action.get("execution") or "").strip() or None
-        outcome = await authoring.run_test_set(name=name, execution_name=execution_name)
+        outcome = await authoring.run_test_set(name=name, execution_name=execution_name,
+                                               stop=stop)
 
     result: Dict[str, Any] = {"ok": outcome["ok"], "message": outcome["message"], "element": None}
     if outcome.get("proposed"):
@@ -1222,6 +1283,15 @@ async def _keep_trying(attempt, seconds: Optional[float] = None) -> Dict[str, An
 ACTIONS_PER_STEP = 24
 FUTILE_ACTIONS = 4
 
+# What an unattended scenario tells the model when one of its checks comes back
+# red: that the scenario is not over, and the two honest ways on from here.
+UNATTENDED_FAILED_CHECK = (
+    " — this step's check failed. If that is what the screen really shows, close"
+    " the step as failed (step_done with value fail, saying what you saw) and go"
+    " on to the next step: the scenario carries on either way. If the check was"
+    " aimed at the wrong thing, check again."
+)
+
 # The whole run's allowance is every step's, so no step can starve the ones
 # behind it by spending its own — which is what the old, smaller per-step
 # number was really protecting, and what raising it would have quietly traded
@@ -1282,10 +1352,18 @@ def _refusal(target: UITarget) -> Optional[str]:
     return None
 
 
-async def _wait_for_a_screen(target: UITarget) -> tuple:
-    """Wait until there is something to look at. Returns (ready, why not)."""
+async def _wait_for_a_screen(target: UITarget,
+                             cancel: Optional[asyncio.Event] = None) -> tuple:
+    """Wait until there is something to look at. Returns (ready, why not).
+
+    Stop is honoured here too. This can take the whole FIRST_SCREEN_SECONDS,
+    and a tester who stopped a run on a page that never painted was made to
+    sit all of it out. A stopped wait returns not ready with nothing to say.
+    """
     deadline = time.monotonic() + FIRST_SCREEN_SECONDS
     while True:
+        if cancel is not None and cancel.is_set():
+            return False, ""
         if not target.is_alive():
             return False, (
                 "The page closed before the run could read it, so nothing ran."
@@ -1299,7 +1377,14 @@ async def _wait_for_a_screen(target: UITarget) -> tuple:
                 "so the run was not started and no model calls were spent on it. "
                 "The page may still be loading, or it may have opened blank."
             )
-        await asyncio.sleep(1.0)
+        if cancel is None:
+            await asyncio.sleep(1.0)
+            continue
+        # Waited on the stop rather than slept through, so it lands at once.
+        try:
+            await asyncio.wait_for(cancel.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _assert_text(target: UITarget, needle: str, element_id: Optional[str],
@@ -1546,6 +1631,36 @@ async def _judge_on_screen(
     }
 
 
+# The number at the front of a wait: 2, "2s", "2.5 seconds", "1,5", "1e3" —
+# and whether it was given in milliseconds, "2500ms".
+_LEADING_NUMBER = re.compile(
+    r"^\s*([+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)(?:e[+-]?\d+)?)\s*(ms\b)?", re.IGNORECASE)
+
+
+def _wait_seconds(value: Any) -> Optional[float]:
+    """How long a `wait` asks for, capped at ten — or None if it names no
+    number. Models write "2s" as often as 2, and float() raising on it ended
+    the whole run rather than failing the one action."""
+    if not value:
+        return 1.0
+    if isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+        except OverflowError:
+            # An integer no float can hold: no more a length of time than "inf".
+            return None
+    else:
+        found = _LEADING_NUMBER.match(str(value))
+        if found is None:
+            return None
+        seconds = float(found.group(1).replace(",", "."))
+        if found.group(2):
+            seconds /= 1000
+    if not math.isfinite(seconds):
+        return None
+    return min(max(seconds, 0.0), 10.0)
+
+
 async def _execute_action(
     target: UITarget,
     action: Dict[str, Any],
@@ -1576,7 +1691,10 @@ async def _execute_action(
         return as_dict(await navigate(value or ""))
 
     if kind == "wait":
-        seconds = min(float(value or 1), 10.0)
+        seconds = _wait_seconds(value)
+        if seconds is None:
+            return {"ok": False, "element": None,
+                    "message": f'wait needs a number of seconds, not "{value}"'}
         await asyncio.sleep(seconds)
         return {"ok": True, "message": f"Waited {seconds:g}s", "element": None}
 
@@ -1768,6 +1886,10 @@ async def run_agent(
     # the run only when they are: a suite running overnight has nobody to press
     # the button, and a hold there is a hang, not a pause.
     attended: bool = False,
+    # The store keys the goal and steps named before they were filled in. A
+    # short secret among them is named in the run's record, and only there —
+    # see storage._secrets_for.
+    store_keys: Iterable[str] = (),
 ) -> AsyncGenerator[str, None]:
     """Drive `target` toward `goal`, yielding NDJSON events as it goes.
 
@@ -1833,6 +1955,10 @@ async def run_agent(
     scenario_steps = planned_steps
     stepwise = bool(scenario_steps)
     system_prompt = build_system_prompt(target.kind, stepwise=stepwise)
+    # Read once per run, so a value edited on the page counts from the next one.
+    brief = _test_data_brief()
+    if brief:
+        system_prompt += "\n\n" + brief
 
     # Anything raised outside the loop's try block escapes the generator and
     # kills the HTTP stream, which the browser can only report as a network
@@ -1847,6 +1973,7 @@ async def run_agent(
             # Recorded as "provider/model" so an old run's report says which
             # engine produced it, even after you switch providers.
             model=f"{provider.id}/{model}",
+            store_keys=store_keys,
         )
     except Exception as exc:
         yield _event("error", message=f"Could not start the run: {exc}")
@@ -1861,30 +1988,30 @@ async def run_agent(
     state.waiting_at = None
     state.history = []
 
-    yield _event("run_started", runId=run_id, goal=goal, maxSteps=ceiling)
-
-    # Wait for the screen before spending anything on it. A page that is still
-    # loading looks to the model like a page with nothing on it, and it answers
-    # the only way it can — by trying something, failing, and being asked
-    # again. Every one of those is a model call against a screen that was about
-    # to arrive on its own.
-    ready, why = await _wait_for_a_screen(target)
-    if not ready:
-        # Closed by hand rather than through the loop's teardown, which has not
-        # been entered yet — and the run is still recorded, because pressing Run
-        # and getting nothing is a thing the tester needs to find in the history.
-        storage.finish_run(run_id, "failed", error=why)
-        state.running = False
-        state.cancel.clear()
-        state.stepping = False
-        state.waiting_at = None
-        state.go.set()
-        yield _event("error", message=why)
-        yield _event("run_closed", runId=run_id, status="failed", steps=0)
-        return
-
+    # Nothing awaits or yields between marking the session running and the
+    # `try` below, so every way out of the run goes through its `finally`. The
+    # first-screen wait used to sit outside it: a tester who pressed Stop or
+    # closed the tab during those 25 seconds left the session marked running
+    # for good, and every later Run on it was refused as already in progress.
     final_status = "passed"
     final_error: Optional[str] = None
+    # Whether the loop reached a verdict of its own — a `finished` event.
+    # Until it has, "passed" above is only where final_status starts, and a
+    # run that ends before then was stopped or broke; it did not pass.
+    verdict_reached = False
+    # Set while the generator is being cancelled or closed. Starlette cancels
+    # the stream when the browser goes away, and nothing may be yielded then.
+    closing = False
+    # What an exception ended the run with, said from `finally` rather than
+    # from the handler: a yield in the handler is one more place the stream
+    # can be closed from, and `finally` would then yield into a closed stream.
+    crashed: Optional[str] = None
+    # A failed assertion the run is holding on for the tester. If the run ends
+    # there — the tab closed — that failure is its verdict, as it is on Stop.
+    held_failure: Optional[str] = None
+    # Whether the site's bot protection refused the session, kept apart from
+    # the status the way the suite runner keeps it.
+    blocked = False
     step_no = 0
     executed_assertion = False
     # Whether this run's job was authoring rather than testing — writing
@@ -1913,6 +2040,10 @@ async def run_agent(
     step_actions = 0
     step_asserted = False
     step_started = time.monotonic()
+    # How much of the step's time went on checking it rather than doing it.
+    # Reported beside the step's verdict, so a slow step says which half was
+    # slow.
+    step_verify_ms = 0
     failed_steps = 0
     # What the screen said when the current step opened, so a check that was
     # already satisfied before the step ran can be recognised as proving
@@ -1971,9 +2102,10 @@ async def run_agent(
 
     def open_step(index: int):
         nonlocal step_closed, replay_queue, replayed_actions, screen_at_step_open
-        nonlocal healed_here, heal_note
+        nonlocal healed_here, heal_note, step_verify_ms
         entry = scenario_steps[index]
         step_closed = False
+        step_verify_ms = 0
         replay_queue = [dict(item) for item in (entry.get("recorded") or [])]
         replayed_actions = 0
         answered_here.clear()
@@ -1990,19 +2122,68 @@ async def run_agent(
             judged=not (entry.get("judged") is False or entry.get("optional")),
         )
 
-    if stepwise:
-        scenario_row_id = open_step(0)
-        yield _event(
-            "scenario_step_started", index=1, total=len(scenario_steps),
-            action=scenario_steps[0]["action"],
-            expected=scenario_steps[0].get("expected") or None,
-        )
+    def stopped():
+        """The event Stop ends the run with, its status set to match.
 
+        Cancelled — unless a judged step has already failed. Nothing after it
+        can make the run pass, so that is its verdict, stopped or not, as it
+        is at the hold after a failed assertion. Stopped at the hold after a
+        failed step, the run said cancelled, and a real failure dropped out
+        of the pass rate.
+        """
+        nonlocal final_status, verdict_reached
+        if failed_steps:
+            final_status, verdict_reached = "failed", True
+            return _event("finished", status="failed", summary=final_error or (
+                f"{failed_steps} of {len(scenario_steps)} steps failed."))
+        final_status = "cancelled"
+        return _event("cancelled", message="Run stopped by the user.")
+
+    recorder: Optional[recording.RunRecorder] = None
     try:
-        while step_no < ceiling:
+        # A video of the run, for its report (recording.py). Begun before the
+        # first line goes out, so it covers everything the report lists.
+        if config.RECORD_RUNS:
+            try:
+                recorder = await recording.RunRecorder.start(
+                    target, os.path.join(run_artifact_dir(run_id), "run.webm"),
+                    poll=lambda: get_live_frame(session_id),
+                )
+            except Exception:
+                print(f"[agent] run {run_id} is not being recorded:\n{traceback.format_exc()}")
+        yield _event("run_started", runId=run_id, goal=goal, maxSteps=ceiling)
+
+        # Wait for the screen before spending anything on it. A page that is
+        # still loading looks to the model like a page with nothing on it, and
+        # it answers the only way it can — by trying something, failing, and
+        # being asked again. Every one of those is a model call against a
+        # screen that was about to arrive on its own.
+        ready, why = await _wait_for_a_screen(target, state.cancel)
+        if not ready:
             if state.cancel.is_set():
                 final_status = "cancelled"
                 yield _event("cancelled", message="Run stopped by the user.")
+            else:
+                # Still recorded, because pressing Run and getting nothing is
+                # a thing the tester needs to find in the history.
+                final_status, final_error = "failed", why
+                yield _event("error", message=why)
+            return
+
+        if stepwise:
+            scenario_row_id = open_step(0)
+            # From here, not from before the wait for the first screen: that
+            # wait is the page loading, not step 1 being carried out.
+            step_started = time.monotonic()
+            yield _event(
+                "scenario_step_started", index=1, total=len(scenario_steps),
+                action=scenario_steps[0]["action"],
+                expected=scenario_steps[0].get("expected") or None,
+            )
+
+        while step_no < ceiling:
+            if state.cancel.is_set():
+                yield stopped()
                 break
 
             step_no += 1
@@ -2029,10 +2210,11 @@ async def run_agent(
                 # and whether it reads back is somebody else's scenario.
                 optional = bool(scenario_steps[step_index].get("optional"))
                 unjudged = scenario_steps[step_index].get("judged") is False
+                took = int((time.monotonic() - step_started) * 1000)
                 storage.finish_scenario_step(
                     scenario_row_id, "skipped" if optional else "failed",
                     message=stalled, actions_used=step_actions,
-                    duration_ms=int((time.monotonic() - step_started) * 1000),
+                    duration_ms=took,
                     healed=healed_here, healed_note=heal_note,
                 )
                 step_closed = True
@@ -2041,6 +2223,7 @@ async def run_agent(
                     total=len(scenario_steps),
                     status="skipped" if optional else "failed", message=stalled,
                     judged=not (optional or unjudged),
+                    durationMs=took, verifyMs=step_verify_ms,
                 )
                 if not optional and not unjudged:
                     failed_steps += 1
@@ -2049,6 +2232,7 @@ async def run_agent(
                 step_index += 1
                 if step_index >= len(scenario_steps):
                     final_status = "failed" if failed_steps else "passed"
+                    verdict_reached = True
                     yield _event(
                         "finished", status=final_status,
                         summary=final_error or f"All {len(scenario_steps)} steps passed.",
@@ -2086,10 +2270,15 @@ async def run_agent(
             # had that call refused had the fare call refused as well and the
             # button never enabled. The refusal is of the session, not of the
             # endpoint, and the chart is only what happens to load first.
+            #
+            # Failed and marked blocked, which is how the suite runner files a
+            # refusal too. Returning here used to leave the run at "passed".
             refused = _refusal(target)
             if refused:
+                final_status, final_error, blocked = "failed", refused, True
+                verdict_reached = True
                 yield _event("error", message=refused)
-                return
+                break
 
             # A replayed action is not going to the model, so the picture taken
             # for the model is paid for and never looked at. On a phone that is
@@ -2335,6 +2524,14 @@ async def run_agent(
                     if action is not None:
                         reply = retry
 
+            # Stopped while the model was answering. What it answered is not
+            # carried out: after Stop, nothing more touches the screen. The
+            # stream used to be aborted on Stop, which hid this; it is now left
+            # to close, so the run can record that it was stopped.
+            if state.cancel.is_set():
+                yield stopped()
+                break
+
             if action is None:
                 # The tokens are already on screen; re-emitting them as a
                 # message would print the same paragraph twice.
@@ -2353,6 +2550,7 @@ async def run_agent(
                 final_status, final_error = _verdict_without_assertion(
                     executed_assertion, reply.strip(), did_authoring,
                 )
+                verdict_reached = True
                 yield _event("finished", status=final_status, summary=(final_error or reply.strip())[:400])
                 break
 
@@ -2389,10 +2587,11 @@ async def run_agent(
                     status = "skipped"
                 else:
                     status = "failed"
+                took = int((time.monotonic() - step_started) * 1000)
                 storage.finish_scenario_step(
                     scenario_row_id, status,
                     message=reason or None, actions_used=step_actions,
-                    duration_ms=int((time.monotonic() - step_started) * 1000),
+                    duration_ms=took,
                     healed=healed_here, healed_note=heal_note,
                 )
                 step_closed = True
@@ -2400,6 +2599,9 @@ async def run_agent(
                     "scenario_step_finished", index=step_index + 1,
                     total=len(scenario_steps), status=status, message=reason,
                     judged=not (optional or unjudged),
+                    # The step's whole time, and the part of it spent on
+                    # checks; what is left is the doing.
+                    durationMs=took, verifyMs=step_verify_ms,
                 )
                 if not passed and not optional and not unjudged:
                     failed_steps += 1
@@ -2418,6 +2620,7 @@ async def run_agent(
                         f"All {len(scenario_steps)} steps passed."
                         if not failed_steps else final_error
                     )
+                    verdict_reached = True
                     yield _event("finished", status=final_status, summary=summary)
                     break
 
@@ -2465,6 +2668,7 @@ async def run_agent(
                     reason=reason, message=final_error or reason,
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
+                verdict_reached = True
                 yield _event("finished", status=final_status, summary=final_error or reason)
                 break
 
@@ -2482,30 +2686,44 @@ async def run_agent(
             if action.get("elementId") and kind not in ASSERTION_ACTIONS:
                 before_shot = await _fast_screenshot(target)
 
-            if kind in AUTHORING_ACTIONS:
-                # These need the screen as material, not as a place to click,
-                # so they are handled here where the snapshot is still in hand.
-                did_authoring = True
-                result = await _run_authoring_action(
-                    kind, action, target, snapshot, screenshot, goal,
-                )
-            elif (kind in ASSERTION_ACTIONS and not replaying
-                  and _question(action) in answered_here):
-                # Asked and answered on this very screen. Nothing has changed
-                # since — no tap, no wait — so the answer is the same and the
-                # round trip proves nothing. Measured on the cookie step: the
-                # same two absences checked three times over, six actions and
-                # six model calls for one fact, all of it recorded.
-                result = {
-                    "ok": True, "element": None, "proves_nothing": True,
-                    "message": (
-                        "Already checked on this screen, and nothing has changed"
-                        " since — asking again proves nothing new. Act on the"
-                        " screen, or close the step."
-                    ),
-                }
-            else:
-                result = await _execute_action(target, action, snapshot)
+            # One action that raises is that action's failure, handed back to
+            # the model like any other. It used to escape to the loop's own
+            # handler and end the run: one odd reply in step 3 of 12, and
+            # steps 4 to 12 never ran.
+            try:
+                if kind in AUTHORING_ACTIONS:
+                    # These need the screen as material, not as a place to
+                    # click, so they are handled here where the snapshot is
+                    # still in hand.
+                    did_authoring = True
+                    result = await _run_authoring_action(
+                        kind, action, target, snapshot, screenshot, goal,
+                        stop=state.cancel,
+                    )
+                elif (kind in ASSERTION_ACTIONS and not replaying
+                      and _question(action) in answered_here):
+                    # Asked and answered on this very screen. Nothing has
+                    # changed since — no tap, no wait — so the answer is the
+                    # same and the round trip proves nothing. Measured on the
+                    # cookie step: the same two absences checked three times
+                    # over, six actions and six model calls for one fact, all
+                    # of it recorded.
+                    result = {
+                        "ok": True, "element": None, "proves_nothing": True,
+                        "message": (
+                            "Already checked on this screen, and nothing has changed"
+                            " since — asking again proves nothing new. Act on the"
+                            " screen, or close the step."
+                        ),
+                    }
+                else:
+                    result = await _execute_action(target, _filled(action), snapshot)
+            except Exception as exc:  # noqa: BLE001
+                # Logged in full: to the model a bug in QAi's own code looks
+                # like any other failed action, and it is not one.
+                print(f"[agent] {kind} raised:\n{traceback.format_exc()}")
+                result = {"ok": False, "element": None,
+                          "message": f"{kind} could not be carried out: {exc}"}
             if kind in ASSERTION_ACTIONS:
                 if result.get("ok"):
                     answered_here.add(_question(action))
@@ -2523,6 +2741,8 @@ async def run_agent(
                 after_shot = await _fast_screenshot(target)
                 publish_live_frame(target.session_id, after_shot)
             duration_ms = int((time.monotonic() - started) * 1000)
+            if kind in ASSERTION_ACTIONS:
+                step_verify_ms += duration_ms
 
             # The screen gets the last word. A check that failed on the text
             # while the tester is looking at the thing it asked for is the
@@ -2638,8 +2858,8 @@ async def run_agent(
                 # opens them for review, and saving is their call.
                 yield _event("scenarios_proposed", step=step_no, **result["proposed"])
 
-            # A failed assertion ends the run; a failed interaction is reported
-            # back to the model so it can try a different route.
+            # A failed assertion ends a free run; a failed interaction is
+            # reported back to the model so it can try a different route.
             #
             # Not when it was replayed, though. A recorded assertion that no
             # longer holds says the recording is stale, which is exactly the
@@ -2652,8 +2872,10 @@ async def run_agent(
                 # hands the failure back to the model like a failed
                 # interaction, so the step can still be rescued; Stop cancels
                 # and the run ends as it always did.
+                held_failure = result["message"]
                 async for held in hold(None, "assertion"):
                     yield held
+                held_failure = None
                 # Attended, `hold` always holds here — it turns stepping on
                 # itself — so reaching this uncancelled means the tester let it
                 # go, whether by one step or by Run on.
@@ -2661,8 +2883,20 @@ async def run_agent(
                     result = dict(result, message=(
                         result["message"] + " — released by the tester, carrying on."
                     ))
+                elif stepwise and not state.cancel.is_set():
+                    # A written scenario nobody is watching goes on past a red
+                    # check, the way it goes on past a step that ran out of
+                    # actions. Ending here stopped whole scenarios at step 2 on
+                    # a label the UAT site had no text for yet
+                    # ("portcitylookup.IST") — a content gap, while everything
+                    # after it worked. The failure goes back to the model, which
+                    # closes the step as failed with what it saw, or checks
+                    # again if the check was aimed at the wrong thing; either
+                    # way the next step runs, and the report shows each.
+                    result = dict(result, message=result["message"] + UNATTENDED_FAILED_CHECK)
                 else:
                     final_status, final_error = "failed", result["message"]
+                    verdict_reached = True
                     yield _event("finished", status="failed", summary=result["message"])
                     break
 
@@ -2689,35 +2923,103 @@ async def run_agent(
         else:
             final_status = "failed"
             final_error = f"Reached the {ceiling} step ceiling without finishing."
+            verdict_reached = True
             yield _event("finished", status="failed", summary=final_error)
 
+    except (asyncio.CancelledError, GeneratorExit):
+        # The stream was cut: the browser went away (Starlette cancels the
+        # stream when it does), or a suite cut off a case that would not stop.
+        # Re-raised, never swallowed, and the verdict is settled below.
+        closing = True
+        raise
     except Exception as exc:
         final_status, final_error = "failed", str(exc)
-        yield _event("error", message=str(exc))
+        crashed = str(exc)
     finally:
-        # A scenario step is opened before its work and closed after it, so a
-        # run that ends in between — cancelled, out of budget, a provider that
-        # stopped answering — leaves one sitting at "running" for ever. The
-        # report then shows a step that never resolved, which reads as the
-        # product hanging rather than the run ending.
-        if stepwise and scenario_row_id is not None and not step_closed:
-            storage.finish_scenario_step(
-                scenario_row_id,
-                "cancelled" if final_status == "cancelled" else "failed",
-                message=final_error or "The run ended before this step closed.",
-                actions_used=step_actions,
-                duration_ms=int((time.monotonic() - step_started) * 1000),
-                healed=healed_here, healed_note=heal_note,
-            )
-        storage.finish_run(run_id, final_status, final_error)
-        # Written here rather than per step: the total is what a run costs, and
-        # a run that failed or was stopped still spent what it spent.
-        storage.record_run_usage(run_id, run_usage)
-        state.running = False
-        state.cancel.clear()
-        # Left flowing, or the next run on this session would hold at its
-        # first step for a reason nobody had asked for.
-        state.stepping = False
-        state.waiting_at = None
-        state.go.set()
-        yield _event("run_closed", runId=run_id, status=final_status, steps=step_no)
+        # Nothing decided this run, so nothing may be claimed for it. A free
+        # run stopped mid model call was stored as passed — even over a failed
+        # assertion it was holding on — and a stopped scenario as failed.
+        if not verdict_reached and final_status != "cancelled":
+            if held_failure is not None:
+                final_status, final_error = "failed", held_failure
+            elif failed_steps:
+                # Closed while held after a failed step — see `stopped`.
+                final_status = "failed"
+            elif closing or state.cancel.is_set():
+                final_status = "cancelled"
+                final_error = final_error or "Run stopped before it finished."
+            elif final_status == "passed":
+                final_status = "failed"
+                final_error = final_error or "The run ended without reaching a verdict."
+        # Each write on its own: one that fails — a database locked by a
+        # suite's workers — must not take the others with it, and the session
+        # is let go below whatever happened here. It used to be skipped, and
+        # every later Run on the session said one was already in progress.
+        def not_recorded(what):
+            print(f"[agent] could not record {what} of run {run_id}:\n"
+                  f"{traceback.format_exc()}")
+
+        try:
+            # A scenario step is opened before its work and closed after it, so
+            # a run that ends in between — cancelled, out of budget, a provider
+            # that stopped answering — leaves one sitting at "running" for ever.
+            # The report then shows a step that never resolved, which reads as
+            # the product hanging rather than the run ending.
+            if stepwise and scenario_row_id is not None and not step_closed:
+                # Stopped part way, a step has no verdict of its own, whatever
+                # the run's is. Closed "failed", it quoted the error of the
+                # step that had failed before it.
+                cut_off = closing or state.cancel.is_set()
+                try:
+                    storage.finish_scenario_step(
+                        scenario_row_id,
+                        "cancelled" if cut_off or final_status == "cancelled" else "failed",
+                        message=("Run stopped before this step closed." if cut_off
+                                 else final_error or "The run ended before this step closed."),
+                        actions_used=step_actions,
+                        duration_ms=int((time.monotonic() - step_started) * 1000),
+                        healed=healed_here, healed_note=heal_note,
+                    )
+                except Exception:
+                    not_recorded("the open step")
+            try:
+                storage.finish_run(run_id, final_status, final_error, blocked=blocked,
+                                   store_keys=store_keys)
+            except Exception as exc:
+                not_recorded("the verdict")
+                # Said, because the run's row still reads "running".
+                crashed = crashed or f"Could not record the end of the run: {exc}"
+            try:
+                # Written here rather than per step: the total is what a run
+                # costs, and a run that failed or was stopped still spent what
+                # it spent. Only logged if it fails: the verdict stands without it.
+                storage.record_run_usage(run_id, run_usage)
+            except Exception:
+                not_recorded("the cost")
+            try:
+                # Last: of everything a run keeps, the video is what it can
+                # most easily do without.
+                video = await recorder.stop() if recorder is not None else None
+                if video:
+                    storage.add_artifact(
+                        run_id, "video", os.path.basename(video["path"]),
+                        label="Run recording", size_bytes=video["sizeBytes"],
+                        started_at=video["startedAt"],
+                    )
+            except Exception:
+                not_recorded("the video")
+        finally:
+            state.running = False
+            state.cancel.clear()
+            # Left flowing, or the next run on this session would hold at its
+            # first step for a reason nobody had asked for.
+            state.stepping = False
+            state.waiting_at = None
+            state.go.set()
+        # Only to a stream that is still there. A yield here while the stream
+        # is being cancelled swallowed the cancellation, and one while it is
+        # being closed raises.
+        if not closing:
+            if crashed is not None:
+                yield _event("error", message=crashed)
+            yield _event("run_closed", runId=run_id, status=final_status, steps=step_no)

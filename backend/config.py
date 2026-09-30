@@ -25,7 +25,10 @@ for _directory in (DATA_DIR, ARTIFACT_DIR, AUTH_DIR, BASELINE_DIR):
 
 load_dotenv(ENV_PATH)
 
-APPIUM_HOST = os.environ.get("APPIUM_HOST", "http://localhost:4723")
+# The address Appium is started on (see process_manager), spelled as one.
+# "localhost" can resolve to ::1 first, and Appium listens on IPv4 only, so
+# every new connection would try IPv6 and fall back.
+APPIUM_HOST = os.environ.get("APPIUM_HOST", "http://127.0.0.1:4723")
 
 # Driving a real iPhone means WebDriverAgent has to be signed, and a free Apple
 # account cannot register the stock 'com.facebook.WebDriverAgentRunner' id
@@ -110,6 +113,10 @@ SCENARIO_TIMEOUT_S = int(os.environ.get("SCENARIO_TIMEOUT_S", "300"))
 # faster and needs no display.
 RUN_HEADLESS_DEFAULT = os.environ.get("RUN_HEADLESS_DEFAULT", "false").strip().lower() == "true"
 
+# Whether every run records a video of itself for its report (recording.py).
+# A few megabytes a run; "false" keeps only the screenshots.
+RECORD_RUNS = os.environ.get("RECORD_RUNS", "true").strip().lower() == "true"
+
 # Only the local Vite dev server needs access. A wildcard here would let any
 # website in the browser drive the connected phone.
 ALLOWED_ORIGINS = [
@@ -119,6 +126,14 @@ ALLOWED_ORIGINS = [
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173",
     ).split(",")
     if origin.strip()
+]
+
+# The names this server answers to. CORS cannot stop a page on another name
+# that has been pointed at this machine (DNS rebinding): to the browser it is
+# the same origin as the backend, so it could read the store's secrets and
+# drive the phone. Add a name here only if QAi is reached through one.
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"] + [
+    host.strip() for host in os.environ.get("ALLOWED_HOSTS", "").split(",") if host.strip()
 ]
 
 

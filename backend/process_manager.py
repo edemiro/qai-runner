@@ -47,8 +47,16 @@ def is_process_alive() -> bool:
     return _process is not None and _process.poll() is None
 
 
+# Where Appium listens: this machine only. Its default is every interface, so
+# anyone on the LAN could start a session on the phone or read its screen. And
+# no --allow-cors: the backend talks to Appium server to server, the browser
+# never does, so all CORS bought was letting any website the tester visited do
+# the same from their own browser.
+APPIUM_ADDRESS = "127.0.0.1"
+
+
 def start() -> tuple[bool, str]:
-    """Spawn `appium --allow-cors`. Returns (ok, message)."""
+    """Spawn Appium on the loopback address. Returns (ok, message)."""
     global _process, _log_handle
 
     if is_process_alive():
@@ -87,7 +95,7 @@ def start() -> tuple[bool, str]:
         else:
             kwargs["start_new_session"] = True
 
-        _process = subprocess.Popen([executable, "--allow-cors"], **kwargs)
+        _process = subprocess.Popen([executable, "--address", APPIUM_ADDRESS], **kwargs)
         return True, "Appium server process started."
     except Exception as exc:
         _process = None

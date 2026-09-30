@@ -702,6 +702,30 @@ class ARefusalWearingASuccessCode(unittest.IsolatedAsyncioTestCase):
         self.assertTrue([e for e in sink if e["kind"] == "httperror"])
 
 
+class EveryRunOfASessionHearsThePage(unittest.IsolatedAsyncioTestCase):
+    """The listeners write into the list the session was opened with.
+
+    drain_events used to swap that list for a new one, which left the listeners
+    writing into the list it had just handed over. A session's first run got
+    its page events; every run after it got none — no refusal, nothing for
+    assert_no_errors. A 38-step NUAT run recorded zero.
+    """
+
+    async def test_a_second_run_still_hears_the_page(self):
+        page = ARefusalWearingASuccessCode.Page()
+        events = []
+        web_driver.attach_page_listeners(page, events)
+        target = WebTarget("web-1", None, None, None, page, config={}, events=events)
+
+        page.handlers["pageerror"]("the first run's error")
+        self.assertEqual([e["text"] for e in target.drain_events()], ["the first run's error"])
+
+        page.handlers["pageerror"]("the second run's error")
+        self.assertEqual([e["text"] for e in target.peek_events()], ["the second run's error"])
+        self.assertEqual([e["text"] for e in target.drain_events()], ["the second run's error"])
+        self.assertEqual(target.peek_events(), [])
+
+
 class TellingNamesakesApart(unittest.TestCase):
     """Two controls with one name between them.
 
@@ -1091,6 +1115,7 @@ class NavigateActionTests(unittest.TestCase):
         target.page = Page()
         target.config = {}
         target._snapshots = ["a stale snapshot"]
+        target._events = []
         return target
 
     def test_only_one_navigate_survives_on_the_class(self):
@@ -1152,10 +1177,12 @@ class NavigateActionTests(unittest.TestCase):
         target.page = DeadPage()
         target.config = {}
         target._snapshots = []
+        target._events = []
 
         result = asyncio.run(target.navigate("https://nowhere.test/"))
         self.assertFalse(result.ok)
         self.assertIn("nowhere.test", result.message)
+        self.assertIn("ERR_NAME_NOT_RESOLVED", result.message)
 
     def test_the_element_cache_is_dropped_on_arrival(self):
         """Every bound in it belongs to the page that just left; acting on one
@@ -1218,6 +1245,62 @@ class NavigateActionTests(unittest.TestCase):
             asyncio.run(goto_with_retry(page, "https://x.test/", attempts=2))
         self.assertIn("fell back", str(caught.exception))
         self.assertEqual(page.calls, 2)
+
+    class FirstVisitTurnedAway:
+        """The hotel standalone page on nuat2-coreservices, as measured: the
+        first GET, with no cookies, answers 404 and sets them; the same GET
+        carrying them answers 200."""
+
+        def __init__(self, second=200):
+            self.url = "about:blank"
+            self.visits = []
+            self.second = second
+
+        async def goto(self, url, **_kwargs):
+            self.url = url
+            self.visits.append("goto")
+            return type("Response", (), {"status": 404})()
+
+        async def reload(self, **_kwargs):
+            self.visits.append("reload")
+            return type("Response", (), {"status": self.second})()
+
+        async def wait_for_load_state(self, *_a, **_k):
+            return None
+
+    def test_a_page_that_turns_the_first_visit_away_is_refreshed_once(self):
+        from drivers.web import goto_with_retry
+
+        page = self.FirstVisitTurnedAway()
+        events = [{"kind": "httperror", "level": "warning", "text": "HTTP 404 Not Found",
+                   "status": 404, "resourceType": "document"}]
+        note = asyncio.run(goto_with_retry(page, "https://x.test/hotel-standalone", events=events))
+        self.assertEqual(page.visits, ["goto", "reload"])
+        self.assertIn("one refresh loaded it", note)
+        # Kept, because it is what the site did; said to be got past, so the
+        # report does not read as a page that never opened.
+        self.assertIn("a refresh loaded the page", events[0]["text"])
+        self.assertEqual(events[0]["level"], "warning")
+
+    def test_a_page_that_is_really_missing_is_refreshed_once_and_left_on_screen(self):
+        """A second 404 is the site's answer: no loop, no error, and the
+        scenario sees the page it was given, as it always did."""
+        from drivers.web import goto_with_retry
+
+        page = self.FirstVisitTurnedAway(second=404)
+        events = [{"kind": "httperror", "text": "HTTP 404 Not Found", "status": 404,
+                   "resourceType": "document"}]
+        note = asyncio.run(goto_with_retry(page, "https://x.test/missing", events=events))
+        self.assertEqual(page.visits, ["goto", "reload"])
+        self.assertIsNone(note)
+        self.assertEqual(events[0]["text"], "HTTP 404 Not Found")
+
+    def test_a_scenario_step_says_when_it_had_to_refresh(self):
+        target = self.target()
+        target.page = self.FirstVisitTurnedAway()
+        result = asyncio.run(target.navigate("https://x.test/hotel-standalone"))
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("one refresh loaded it", result.message)
 
 
 class PointerTests(unittest.TestCase):
@@ -1486,3 +1569,378 @@ class WhenTheBrowserDoesNotStart(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Exception):
             await web_driver._launch_browser(launcher, headless=True)
         self.assertEqual(launcher.attempts, 1)
+
+
+class SeveralViewersOfOnePage(unittest.IsolatedAsyncioTestCase):
+    """The screencast had one frame slot. A second viewer — another tab, the
+    workspace mounted again after a trip to Test Runs, React's StrictMode
+    mounting it twice — took it from the first, and when the first one's
+    socket noticed it was gone it stopped the cast and detached CDP under the
+    second. The mirror said "live" and never moved again."""
+
+    class FakeCDP:
+        def __init__(self):
+            self.handlers, self.sent, self.detached = {}, [], False
+
+        def on(self, event, handler):
+            self.handlers[event] = handler
+
+        async def send(self, method, params=None):
+            self.sent.append(method)
+
+        async def detach(self):
+            self.detached = True
+
+        def paint(self, n):
+            if not self.detached and "Page.screencastFrame" in self.handlers:
+                self.handlers["Page.screencastFrame"]({"sessionId": n, "data": f"frame{n}"})
+
+    class FakeContext:
+        def __init__(self):
+            self.sessions = []
+
+        async def new_cdp_session(self, page):
+            self.sessions.append(SeveralViewersOfOnePage.FakeCDP())
+            return self.sessions[-1]
+
+    def _target(self, session_id="web-viewers"):
+        self.context = self.FakeContext()
+        return WebTarget(session_id, None, None, self.context, page=object(),
+                         config={"width": 800, "height": 600})
+
+    async def test_every_viewer_gets_every_frame_until_the_last_one_leaves(self):
+        target = self._target()
+        first, second = asyncio.Queue(maxsize=2), asyncio.Queue(maxsize=2)
+        self.assertTrue(await target.start_screencast(first))
+        self.assertTrue(await target.start_screencast(second))
+        cdp = self.context.sessions[0]
+        self.assertEqual(len(self.context.sessions), 1, "one cast for both")
+
+        cdp.paint(1)
+        await asyncio.sleep(0)
+        self.assertEqual((first.get_nowait(), second.get_nowait()), ("frame1", "frame1"))
+
+        await target.stop_screencast(first)
+        cdp.paint(2)
+        await asyncio.sleep(0)
+        self.assertEqual(second.get_nowait(), "frame2",
+                         "the viewer still watching still gets frames")
+        self.assertTrue(first.empty())
+        self.assertFalse(cdp.detached)
+        self.assertNotIn("Page.stopScreencast", cdp.sent)
+
+        await target.stop_screencast(second)
+        self.assertIn("Page.stopScreencast", cdp.sent)
+        self.assertTrue(cdp.detached)
+
+    async def test_closing_the_page_stops_the_cast_for_everyone(self):
+        target = self._target()
+        await target.start_screencast(asyncio.Queue(maxsize=2))
+        await target.start_screencast(asyncio.Queue(maxsize=2))
+        await target.stop_screencast()
+        self.assertTrue(self.context.sessions[0].detached)
+
+    async def test_a_cdp_call_that_never_answers_holds_nobody(self):
+        """They are made under the screencast lock, so one that hung held
+        every later viewer, and the page's own close, behind it."""
+        from unittest.mock import patch
+
+        target = self._target()
+        await target.start_screencast(queue := asyncio.Queue(maxsize=2))
+        cdp = self.context.sessions[0]
+
+        async def never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        cdp.send = never
+        with patch.object(web_driver, "CDP_TIMEOUT_S", 0.05):
+            await asyncio.wait_for(target.stop_screencast(queue), timeout=1.0)
+            # The lock was let go: the next viewer gets a cast of its own.
+            self.assertTrue(await asyncio.wait_for(
+                target.start_screencast(asyncio.Queue(maxsize=2)), timeout=1.0))
+        self.assertEqual(len(self.context.sessions), 2)
+
+    async def test_a_viewer_cancelled_while_the_cast_starts_is_not_left_behind(self):
+        """Left in, it was a viewer nobody would take off, and the cast never
+        stopped after the last real one left."""
+        target = self._target()
+        started = asyncio.Event()
+
+        async def slow_session(page):
+            started.set()
+            await asyncio.Event().wait()
+
+        self.context.new_cdp_session = slow_session
+        starting = asyncio.create_task(target.start_screencast(asyncio.Queue(maxsize=2)))
+        await started.wait()
+        starting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await starting
+        self.assertEqual(target._frames, set())
+
+    async def test_a_viewer_that_leaves_lets_go_at_once(self):
+        """On a still page nothing is sent for seconds, and the socket's
+        handler only found out its client had gone on its next send — up to
+        five seconds of holding the cast for nobody."""
+        import main
+        from fastapi import WebSocketDisconnect
+
+        class Socket:
+            headers = {}  # no Origin: not a page in a browser
+
+            def __init__(self):
+                self.sent, self.leave = [], asyncio.Event()
+
+            async def accept(self):
+                pass
+
+            async def send_text(self, text):
+                self.sent.append(text)
+
+            async def receive_text(self):
+                await self.leave.wait()
+                raise WebSocketDisconnect()
+
+        target = self._target("web-viewer-leaves")
+        web_driver_registry = main.drivers
+        web_driver_registry.register(target)
+        try:
+            socket = Socket()
+            task = asyncio.create_task(main.stream_screen(socket, target.session_id))
+            await asyncio.sleep(0.05)
+            cdp = self.context.sessions[0]
+            self.assertEqual(cdp.sent, ["Page.startScreencast"])
+
+            socket.leave.set()
+            await asyncio.wait_for(task, timeout=1.0)
+            self.assertTrue(cdp.detached)
+        finally:
+            web_driver_registry._targets.pop(target.session_id, None)
+
+
+PANEL_FIXTURE = """<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>Misafir ve Oda</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .page { height: 3000px; padding: 20px; }
+  #panel { position: absolute; top: 80px; left: 40px; z-index: 10; width: 320px;
+           background: #fff; border: 1px solid #888; }
+  #panel-scroll { max-height: 220px; overflow-y: auto; }
+  .room { padding: 8px; }
+  .spacer { height: 260px; }
+  .far { margin-top: 2000px; }
+  #clipped { position: absolute; top: 80px; left: 460px; width: 200px; height: 120px; overflow: hidden; }
+  #clipped .inner { margin-top: 300px; }
+</style></head>
+<body>
+  <div class="page">
+    <h1>Otel Rezervasyonu</h1>
+    <div id="panel" role="dialog" aria-label="Misafir ve Oda Seçimi">
+      <div id="panel-scroll">
+        <div class="room"><span>Oda 1</span> <button id="room1-plus" aria-label="Oda 1 yetişkin artır">+</button></div>
+        <div class="spacer"></div>
+        <div class="room"><span>Oda 2</span> <button id="room2-plus" aria-label="Oda 2 yetişkin artır">+</button></div>
+        <div class="far"><button id="room9-far">Çok aşağıdaki oda</button></div>
+      </div>
+    </div>
+    <div id="clipped"><div class="inner"><button id="clipped-hidden">Kırpılmış düğme</button></div></div>
+  </div>
+</body></html>
+"""
+
+
+class APanelThatScrollsOnItsOwn(unittest.IsolatedAsyncioTestCase):
+    """The hotel page's guests panel scrolls inside itself. "Oda 2" sat below
+    its visible part and was never in the tree, and a scroll with no target
+    moved the page behind the panel — eleven times, and the step failed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        with open(os.path.join(cls.tmpdir, "panel.html"), "w", encoding="utf-8") as f:
+            f.write(PANEL_FIXTURE)
+        cls.server = _serve(cls.tmpdir)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/panel.html"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    async def asyncSetUp(self):
+        self.target = await WebTarget.launch(
+            self.url, viewport="desktop", headless=True, accept_consent=False,
+        )
+
+    async def asyncTearDown(self):
+        await self.target.close()
+
+    async def _read(self):
+        snapshot = await self.target.snapshot()
+        return snapshot, {e.resource_id: e for e in snapshot.get_all_elements()}
+
+    async def _positions(self):
+        return await self.target.page.evaluate(
+            "[scrollY, document.getElementById('panel-scroll').scrollTop]")
+
+    async def test_a_control_below_the_panels_visible_part_is_offered_and_marked(self):
+        _, by_id = await self._read()
+        self.assertIn("room2-plus", by_id)
+        self.assertTrue(by_id["room2-plus"].offscreen)
+        self.assertFalse(by_id["room1-plus"].offscreen)
+        self.assertTrue(by_id["room2-plus"].to_llm_dict(False).get("offscreen"),
+                        "the model is told, so it acts rather than scrolls the page")
+
+    async def test_far_down_the_panel_and_behind_a_clip_that_does_not_scroll_stay_out(self):
+        """One panel-length of lookahead, as the page gets one screen; and a
+        box that cannot scroll cannot bring anything back."""
+        _, by_id = await self._read()
+        self.assertNotIn("room9-far", by_id)
+        self.assertNotIn("clipped-hidden", by_id)
+
+    async def test_acting_on_it_scrolls_the_panel_and_not_the_page(self):
+        snapshot, by_id = await self._read()
+        result = await self.target.act(
+            "click", by_id["room2-plus"].element_id, None, None, snapshot.snapshot_id)
+        self.assertTrue(result.ok, result.message)
+        page_y, panel_y = await self._positions()
+        self.assertEqual(page_y, 0)
+        self.assertGreater(panel_y, 0)
+
+    async def test_a_scroll_with_no_target_scrolls_the_open_panel(self):
+        result = await self.target.scroll("down")
+        self.assertTrue(result.ok, result.message)
+        self.assertIn("panel", result.message)
+        page_y, panel_y = await self._positions()
+        self.assertEqual(page_y, 0, "the page behind the panel stays where it is")
+        self.assertGreater(panel_y, 0)
+
+    async def test_with_no_panel_open_the_page_scrolls(self):
+        await self.target.page.evaluate("document.getElementById('panel').remove()")
+        await self.target.page.mouse.move(700, 450)
+        result = await self.target.scroll("down")
+        self.assertTrue(result.ok, result.message)
+        self.assertGreater(await self.target.page.evaluate("scrollY"), 0)
+
+
+class ANewTabIsWhereTheRunGoes(unittest.IsolatedAsyncioTestCase):
+    """"Otel Bul" opens Booking.com in a new tab and leaves the hotel page as it
+    was. The run stayed on the hotel page, saw nothing change, and judged the
+    search broken."""
+
+    class Tab:
+        def __init__(self, url):
+            self.url, self.handlers, self.closed, self.timeout = url, {}, False, None
+
+        def on(self, name, handler):
+            self.handlers.setdefault(name, []).append(handler)
+
+        def set_default_timeout(self, ms):
+            self.timeout = ms
+
+        def is_closed(self):
+            return self.closed
+
+        def open(self, url):
+            """What the page does when a link or a script opens a tab."""
+            tab = ANewTabIsWhereTheRunGoes.Tab(url)
+            for handler in self.handlers.get("popup", []):
+                handler(tab)
+            return tab
+
+        def close(self):
+            self.closed = True
+            for handler in self.handlers.get("close", []):
+                handler(self)
+
+    def _target(self, context=None):
+        hotel = self.Tab("https://hotel.test/")
+        target = WebTarget("web-tabs", None, None, context, hotel, config={"headless": True})
+        target._follow_new_tabs(hotel)
+        return target, hotel
+
+    async def _settled(self, target):
+        while target._tab_tasks:
+            await asyncio.gather(*list(target._tab_tasks))
+
+    async def test_the_run_moves_to_the_tab_the_page_opens(self):
+        target, hotel = self._target()
+        target._snapshots.append("a snapshot of the hotel page")
+        booking = hotel.open("https://booking.test/searchresults")
+        await self._settled(target)
+        self.assertIs(target.page, booking)
+        self.assertEqual(target._snapshots, [], "bounds on the hotel page mean nothing here")
+        self.assertEqual(booking.timeout, 15000)
+
+    async def test_what_the_new_tab_complains_about_is_this_runs(self):
+        target, hotel = self._target()
+        booking = hotel.open("https://booking.test/")
+        booking.handlers["pageerror"][0]("boom on booking")
+        await self._settled(target)
+        self.assertEqual([e["text"] for e in target.peek_events()], ["boom on booking"])
+
+    async def test_closing_the_tab_goes_back_to_the_one_that_opened_it(self):
+        target, hotel = self._target()
+        booking = hotel.open("https://booking.test/")
+        await self._settled(target)
+        booking.close()
+        await self._settled(target)
+        self.assertIs(target.page, hotel)
+
+    async def test_a_tab_opened_from_a_tab_is_left_one_at_a_time(self):
+        target, hotel = self._target()
+        booking = hotel.open("https://booking.test/")
+        payment = booking.open("https://pay.test/")
+        await self._settled(target)
+        self.assertIs(target.page, payment)
+        payment.close()
+        await self._settled(target)
+        self.assertIs(target.page, booking)
+        booking.close()
+        await self._settled(target)
+        self.assertIs(target.page, hotel)
+
+    async def test_a_tab_closing_behind_the_one_in_use_moves_nothing(self):
+        target, hotel = self._target()
+        first = hotel.open("https://one.test/")
+        second = hotel.open("https://two.test/")
+        await self._settled(target)
+        first.close()
+        await self._settled(target)
+        self.assertIs(target.page, second)
+        second.close()
+        await self._settled(target)
+        self.assertIs(target.page, hotel, "a tab already closed is not gone back to")
+
+    async def test_the_mirror_and_the_recording_follow_the_tab(self):
+        context = SeveralViewersOfOnePage.FakeContext()
+        cast_on = []
+        make_session = context.new_cdp_session
+
+        async def session_for(page):
+            cast_on.append(page)
+            return await make_session(page)
+
+        context.new_cdp_session = session_for
+        target, hotel = self._target(context)
+        viewer = asyncio.Queue(maxsize=2)
+        self.assertTrue(await target.start_screencast(viewer))
+        booking = hotel.open("https://booking.test/")
+        await self._settled(target)
+
+        self.assertEqual(cast_on, [hotel, booking])
+        left, followed = context.sessions
+        self.assertIn("Page.stopScreencast", left.sent)
+        self.assertTrue(left.detached)
+        self.assertIn("Page.startScreencast", followed.sent)
+        followed.paint(1)
+        await asyncio.sleep(0)
+        self.assertEqual(viewer.get_nowait(), "frame1", "the same viewer, now watching the new tab")
+
+    async def test_tabs_closing_with_the_browser_are_not_gone_back_from(self):
+        target, hotel = self._target()
+        booking = hotel.open("https://booking.test/")
+        await self._settled(target)
+        target._closing = True
+        booking.close()
+        await self._settled(target)
+        self.assertIs(target.page, booking)

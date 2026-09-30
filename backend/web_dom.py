@@ -100,6 +100,11 @@ EXTRACT_JS = r"""
     return r.width >= 2 && r.height >= 2 && !hiddenByAncestor(el);
   }
 
+  // Asked only of an element a clip seems to hide, so the element itself, or
+  // something inside it, has to be what the point lands on. An ancestor there
+  // is the page showing through where the clipped element would have been:
+  // counting it let a button inside an `overflow: hidden` box through
+  // whenever the page's own wrapper sat behind it.
   function reallyOnScreen(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return false;
@@ -107,7 +112,7 @@ EXTRACT_JS = r"""
     const cy = r.top + r.height / 2;
     if (cx < 0 || cx > vw || cy < 0 || cy > vh) return false;
     const hit = document.elementFromPoint(cx, cy);
-    return !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+    return !!hit && (hit === el || el.contains(hit));
   }
 
   // Two ways an ancestor hides a child without the child's own computed style
@@ -126,26 +131,53 @@ EXTRACT_JS = r"""
     return false;
   }
 
+  // Can scrolling this box bring something lying outside it into view? Only
+  // in a direction it actually scrolls, and only one box-length away — the
+  // same lookahead the page gets, so a long list does not flood the tree.
+  function scrollsToward(node, style, own, box) {
+    const y = /(auto|scroll|overlay)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+    const x = /(auto|scroll|overlay)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+    if (own.top >= box.bottom) return y && own.top - box.bottom <= box.height;
+    if (own.bottom <= box.top) return y && box.top - own.bottom <= box.height;
+    if (own.left >= box.right) return x && own.left - box.right <= box.width;
+    if (own.right <= box.left) return x && box.left - own.right <= box.width;
+    return true;
+  }
+
+  // Whether an ancestor's clip keeps this element off the screen: 'hidden'
+  // when nothing will bring it back, 'scroll' when scrolling a box will, and
+  // null when no clip is in the way.
+  //
   // A zero-sized clipping ancestor — the collapsed-drawer pattern — leaves the
   // child's own box intact, so the child looks fine and is not on the screen.
+  // A scrolling box is the other case, and it used to be treated the same:
+  // the guests panel on the hotel page scrolls inside itself, "Oda 2" sat
+  // below its visible part, and the model was never told the room existed —
+  // it scrolled the page behind the panel instead, eleven times, and failed
+  // the step. Once a box can bring the element in, what the outer ancestors
+  // have to show is that box, not the element.
   //
-  // Usually. A `position: fixed` child escapes the clip entirely, which is
-  // what this gets wrong and why the verdict is checked against the browser
-  // before it is acted on.
+  // A `position: fixed` child escapes the clip entirely, which this gets
+  // wrong and why a 'hidden' verdict is checked against the browser before
+  // it is acted on.
   function clippedByAncestor(el) {
-    const own = el.getBoundingClientRect();
+    let own = el.getBoundingClientRect();
+    let verdict = null;
     let node = el.parentElement;
     for (let depth = 0; node && node !== document.documentElement && depth < 20; depth++, node = node.parentElement) {
       const style = getComputedStyle(node);
       const clips = !(style.overflow === 'visible' && style.overflowX === 'visible' && style.overflowY === 'visible');
-      if (clips) {
-        const box = node.getBoundingClientRect();
-        if (box.width < 2 || box.height < 2) return true;
-        if (own.right <= box.left || own.left >= box.right ||
-            own.bottom <= box.top || own.top >= box.bottom) return true;
-      }
+      if (!clips) continue;
+      const box = node.getBoundingClientRect();
+      if (box.width < 2 || box.height < 2) return 'hidden';
+      const outside = own.right <= box.left || own.left >= box.right ||
+                      own.bottom <= box.top || own.top >= box.bottom;
+      if (!outside) continue;
+      if (!scrollsToward(node, style, own, box)) return 'hidden';
+      verdict = 'scroll';
+      own = box;
     }
-    return false;
+    return verdict;
   }
 
   function onlyOne(selector) {
@@ -228,7 +260,8 @@ EXTRACT_JS = r"""
     // disagrees with the browser about something inside the viewport, the
     // browser wins. Only this verdict — a hit test cannot see transparency or
     // aria-hidden, so those stay final above.
-    if (clippedByAncestor(el) && !reallyOnScreen(el)) continue;
+    const clip = clippedByAncestor(el);
+    if (clip === 'hidden' && !reallyOnScreen(el)) continue;
 
     let role = roleOf(el, style);
     if (role === null) continue;
@@ -293,6 +326,9 @@ EXTRACT_JS = r"""
       enabled: !el.disabled,
       checked,
       href: el.tagName === 'A' ? (el.getAttribute('href') || null) : null,
+      // Inside a box that scrolls, beyond the part of it showing. Reachable:
+      // acting on it scrolls the box to it first.
+      offscreen: clip === 'scroll',
       parentIndex,
     });
   } while ((el = walker.nextNode()));
@@ -366,6 +402,8 @@ class WebElement:
         self.options: Optional[List[str]] = raw.get("options") or None
         self.enabled: bool = bool(raw.get("enabled", True))
         self.checked: Optional[bool] = raw.get("checked")
+        # Inside a scrolling box, past the part of it showing (see the JS).
+        self.offscreen: bool = bool(raw.get("offscreen"))
         self.displayed = True
         self.visible = True
         self.clickable = self.role in INTERACTIVE_ROLES
@@ -467,6 +505,10 @@ class WebElement:
             res["options"] = self.options
         if not self.enabled:
             res["enabled"] = False
+        if self.offscreen:
+            # Said, so the model acts on it rather than scrolling the page to
+            # look for it: acting scrolls the box it is in.
+            res["offscreen"] = True
         return res
 
     def to_dict(self, include_children: bool = True) -> Dict[str, Any]:

@@ -28,7 +28,7 @@ LAYERS = ("E2E", "Component")
 # What kind of check a scenario is. A suite made only of happy paths proves the
 # feature works when used correctly and nothing about what happens when it is
 # not — which is where most defects live.
-TYPES = ("Positive", "Negative", "Boundary")
+TYPES = ("Positive", "Negative", "Boundary", "Edge Case")
 PRIORITIES = ("Critical", "High", "Medium", "Low")
 
 # "Module - Submodule | <data & precondition> - <action & expected>".
@@ -115,7 +115,7 @@ OTHERWISE — reply with one JSON array and nothing else:
 [
   {"title": "<the one-line scenario, English, in the format above>",
    "layer": "E2E" | "Component",
-   "type": "Positive" | "Negative" | "Boundary",
+   "type": "Positive" | "Negative" | "Boundary" | "Edge Case",
    "precondition": "<the state this scenario needs before step 1, or \"\" if none>",
    "requiredData": [{"key": "<short_key>", "label": "<what to ask the tester for>",
                      "example": "<a plausible value, or \"\">"}],
@@ -131,7 +131,7 @@ OTHERWISE — reply with one JSON array and nothing else:
 `goal` is what the team reads as the summary; `steps` is what QAi executes, one
 step at a time, and each step is reported pass or fail on its own.
 
-COVER ALL THREE KINDS OF SCENARIO. A set that is only happy paths proves the
+COVER ALL FOUR KINDS OF SCENARIO. A set that is only happy paths proves the
 feature works when it is used correctly and nothing about what happens when it
 is not, and that is where defects actually live. For any screen worth testing,
 write:
@@ -143,6 +143,11 @@ write:
   the minimum and maximum passenger count, a field at its length limit, zero and
   one and the maximum of anything countable. Write the value just inside and the
   value just outside the limit as separate scenarios — the pair is the point.
+- Edge Case — the legal but unusual: a choice changed after it was made, a
+  panel closed half-filled and reopened, the same control pressed twice, input
+  in unexpected case or with Turkish characters, a result opened and then
+  come back from. Nothing is broken on purpose; the path is just not the one
+  the screen was designed around.
 
 Do not write a Negative or a Boundary scenario where the screen has no such
 rule to break; a search box with no validation has no Negative case worth a
@@ -324,6 +329,8 @@ def _clean_type(value: Any) -> str:
         return "Negative"
     if candidate.startswith("bound") or "sınır" in candidate or "limit" in candidate:
         return "Boundary"
+    if candidate.startswith("edge") or "uç durum" in candidate:
+        return "Edge Case"
     return "Positive"
 
 

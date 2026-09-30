@@ -44,6 +44,42 @@ def _isolated_database():
             pass
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_data_dirs(tmp_path_factory):
+    """Artifacts, sign-ins and baselines in a throwaway folder too.
+
+    Only the database was pointed away, so a test that ran a suite case left
+    a folder in the real backend/data/artifacts — which is under version
+    control, next to the recordings of real runs. The folders are imported by
+    value, so each module that holds one is pointed at the same place.
+    """
+    import config
+    import main
+    import visual
+    from drivers import web
+
+    root = tmp_path_factory.mktemp("qai-data")
+    places = {name: root / name.split("_")[0].lower()
+              for name in ("ARTIFACT_DIR", "AUTH_DIR", "BASELINE_DIR")}
+    for path in places.values():
+        path.mkdir()
+    holders = [(config, "ARTIFACT_DIR"), (web, "ARTIFACT_DIR"), (main, "ARTIFACT_DIR"),
+               (config, "AUTH_DIR"), (web, "AUTH_DIR"),
+               (config, "BASELINE_DIR"), (visual, "BASELINE_DIR")]
+    originals = [(module, name, getattr(module, name)) for module, name in holders]
+    for module, name in holders:
+        setattr(module, name, str(places[name]))
+    # Not a video of every fake run either: ffmpeg per test, for nothing.
+    recording_was = config.RECORD_RUNS
+    config.RECORD_RUNS = False
+    try:
+        yield root
+    finally:
+        for module, name, value in originals:
+            setattr(module, name, value)
+        config.RECORD_RUNS = recording_was
+
+
 @pytest.fixture(autouse=True)
 def _assertions_do_not_wait():
     """One reading of the screen per assertion, unless a test asks otherwise.

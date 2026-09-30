@@ -1,9 +1,12 @@
+import asyncio
+import contextlib
 import unittest
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import agent
 import locator
+import storage
 from drivers import ActionResult
 from mobile_dom import MobileDOMManager
 from web_dom import WebSnapshot
@@ -196,6 +199,28 @@ class TestExecuteAction(unittest.IsolatedAsyncioTestCase):
             result = await agent._execute_action(self.target, {"action": "wait", "value": "600"}, self.snapshot)
         self.assertTrue(result["ok"])
         sleep.assert_awaited_once_with(10.0)
+
+    async def test_a_wait_written_with_its_unit_is_still_a_wait(self):
+        """float("2s") raised, and the exception ended the whole run."""
+        for value, seconds in (("2s", 2.0), ("2.5 seconds", 2.5), ("1,5 sn", 1.5),
+                               (3, 3.0), ("-4", 0.0), (None, 1.0),
+                               # Read as 2500 seconds and 1 second, before.
+                               ("2500ms", 2.5), ("1e3", 10.0)):
+            with patch("asyncio.sleep", new=AsyncMock()) as sleep:
+                result = await agent._execute_action(
+                    self.target, {"action": "wait", "value": value}, self.snapshot)
+            self.assertTrue(result["ok"], value)
+            sleep.assert_awaited_once_with(seconds)
+
+    async def test_a_wait_that_names_no_number_fails_only_itself(self):
+        # 10**400 is a JSON integer no float can hold; it raised OverflowError.
+        for value in ("abc", "a while", float("nan"), float("inf"), 10**400):
+            with patch("asyncio.sleep", new=AsyncMock()) as sleep:
+                result = await agent._execute_action(
+                    self.target, {"action": "wait", "value": value}, self.snapshot)
+            self.assertFalse(result["ok"], value)
+            self.assertIn("number of seconds", result["message"])
+            sleep.assert_not_awaited()
 
     async def test_assert_text_passes_when_the_text_is_on_screen(self):
         with patch("asyncio.sleep", new=AsyncMock()):
@@ -457,7 +482,9 @@ class AuthoringActionDispatch(unittest.IsolatedAsyncioTestCase):
                 {"action": "run_test_set", "value": "Booking", "execution": "Regresyon"},
                 self._target(), None, None, goal="ignored",
             )
-        rts.assert_awaited_once_with(name="Booking", execution_name="Regresyon")
+        # `stop` is the chat run's Stop, passed on so it reaches the execution
+        # it started; none was given here.
+        rts.assert_awaited_once_with(name="Booking", execution_name="Regresyon", stop=None)
 
     async def test_a_blank_execution_name_is_omitted_not_passed_as_empty_string(self):
         with patch.object(agent.authoring, "run_test_set",
@@ -466,7 +493,7 @@ class AuthoringActionDispatch(unittest.IsolatedAsyncioTestCase):
                 "run_test_set", {"action": "run_test_set", "value": "Booking"},
                 self._target(), None, None, goal="ignored",
             )
-        rts.assert_awaited_once_with(name="Booking", execution_name=None)
+        rts.assert_awaited_once_with(name="Booking", execution_name=None, stop=None)
 
 
 class WrittenScenarioSteps(unittest.IsolatedAsyncioTestCase):
@@ -2176,6 +2203,9 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
     async def _run(self, script, steps, state, driver=None, attended=True,
                    execute=None):
         self_outer = self
+        # Everything the model was sent, flattened, so a test can ask what it
+        # was told.
+        self.asked = []
 
         class Provider:
             id, label = "fake", "Fake"
@@ -2184,6 +2214,7 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
                 self.i = 0
 
             async def stream(self, *a, **k):
+                self_outer.asked.append(repr(a) + repr(k))
                 reply = (script[self.i] if self.i < len(script)
                          else self_outer._close("pass"))
                 self.i += 1
@@ -2323,7 +2354,11 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
              self.ASSERT, self._close("pass")],
             self.TWO, state, watch,
         )
-        self.assertTrue(self._kinds(events, "cancelled"), "the run ended")
+        # Ended, and failed rather than cancelled: the step it was holding
+        # after had already failed, and that is the run's verdict.
+        self.assertEqual([e["status"] for e in self._kinds(events, "finished")],
+                         ["failed"], "the run ended")
+        self.assertEqual(self._kinds(events, "cancelled"), [])
         self.assertEqual(
             [e["index"] for e in self._kinds(events, "scenario_step_started")], [1],
             "it did not open the step it was holding before",
@@ -2380,20 +2415,53 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
             "and carried on once released, instead of the run ending there",
         )
 
-    async def test_an_unattended_failed_assertion_still_ends_the_run(self):
-        """The old contract, unchanged where nobody is watching."""
+    async def test_an_unattended_failed_check_fails_its_step_and_the_scenario_goes_on(self):
+        """It used to end the run on the spot. On the hotel page that stopped
+        scenario after scenario at step 2, on a destination the UAT site
+        showed as "portcitylookup.IST" for want of its text — while every step
+        after it worked. Now the step is failed and the next one runs."""
         state = agent.AgentSession()
+        verdicts = iter([False, True])
 
         async def execute(*a, **k):
-            return {"ok": False, "message": "yok", "element": None}
+            ok = next(verdicts, True)
+            return {"ok": ok, "message": "ok" if ok else "İstanbul yok", "element": None}
 
         events = await self._run(
-            [self.ASSERT, self._close("pass")], self.TWO, state,
-            attended=False, execute=execute,
+            [self.ASSERT, self._close("fail", "içerik girilmemiş"),
+             self.ASSERT, self._close("pass")],
+            self.TWO, state, attended=False, execute=execute,
         )
-        self.assertEqual(self._kinds(events, "waiting"), [])
+        self.assertEqual(self._kinds(events, "waiting"), [], "nobody to wait for")
+        self.assertEqual(
+            [(e["index"], e["status"]) for e in self._kinds(events, "scenario_step_finished")],
+            [(1, "failed"), (2, "passed")],
+        )
+        self.assertTrue(any("carries on" in prompt for prompt in self.asked),
+                        "the model is told the scenario is not over")
         finished = self._kinds(events, "finished")
-        self.assertEqual(finished[-1]["status"], "failed")
+        self.assertEqual(finished[-1]["status"], "failed", "a failed step still fails the run")
+
+    async def test_an_unattended_check_aimed_wrong_can_be_made_again(self):
+        """The model sometimes checks the wrong control first. Handed the
+        failure, it can check again, and a step that is fine is not failed
+        for the model's slip."""
+        state = agent.AgentSession()
+        verdicts = iter([False, True, True])
+
+        async def execute(*a, **k):
+            ok = next(verdicts, True)
+            return {"ok": ok, "message": "ok" if ok else "hâlâ etkin", "element": None}
+
+        events = await self._run(
+            [self.ASSERT, self.ASSERT, self._close("pass"), self.ASSERT, self._close("pass")],
+            self.TWO, state, attended=False, execute=execute,
+        )
+        self.assertEqual(
+            [(e["index"], e["status"]) for e in self._kinds(events, "scenario_step_finished")],
+            [(1, "passed"), (2, "passed")],
+        )
+        self.assertEqual(self._kinds(events, "finished")[-1]["status"], "passed")
 
     async def test_the_session_is_left_flowing_for_the_next_run(self):
         state = agent.AgentSession()
@@ -2410,3 +2478,482 @@ class HoldingAtAStepThatWentWrong(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(state.stepping)
         self.assertTrue(state.go.is_set())
+
+
+class OneOddActionDoesNotEndTheRun(unittest.IsolatedAsyncioTestCase):
+    """A malformed value, or a driver that raises, used to escape the action
+    and reach the loop's own handler, which ends the run. One reply of
+    `wait "2s"` in step 3 of 12 and steps 4 to 12 never ran."""
+
+    @staticmethod
+    def _reply(action, value=None, element_id=None):
+        body = {"type": "action", "action": action, "reason": "r"}
+        if value is not None:
+            body["value"] = value
+        if element_id:
+            body["elementId"] = element_id
+        return "```json\n" + json.dumps(body) + "\n```"
+
+    async def _run(self, target, script):
+        class Provider:
+            id, label = "fake", "Fake"
+
+            def __init__(self):
+                self.i = 0
+
+            async def stream(self, *a, **k):
+                self.i += 1
+                yield script[self.i - 1]
+
+        events = []
+        with patch.object(agent.providers, "get", lambda *a, **k: Provider()), \
+             patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+             patch.object(agent.providers, "active_model", lambda *a, **k: "m"):
+            async for line in agent.run_agent(target, "senaryo", use_vision=False,
+                                              session_state=agent.AgentSession()):
+                events.append(json.loads(line))
+        run_id = next(e["runId"] for e in events if e["event"] == "run_started")
+        return storage.get_run(run_id)
+
+    async def test_a_wait_the_model_wrote_badly_fails_only_the_wait(self):
+        run = await self._run(FakeTarget(_manager()), [
+            self._reply("wait", "abc"),
+            self._reply("assert_text", "Welcome back"),
+            self._reply("done", "pass"),
+        ])
+        self.assertEqual(run["status"], "passed")
+        self.assertEqual([(s["action"], s["status"]) for s in run["steps"]],
+                         [("wait", "failed"), ("assert_text", "passed"),
+                          ("done", "passed")])
+
+    async def test_a_driver_that_raises_is_told_to_the_model(self):
+        target = FakeTarget(_manager())
+        target.act = AsyncMock(side_effect=RuntimeError("the element detached"))
+        run = await self._run(target, [
+            self._reply("click", element_id="el_1"),
+            self._reply("assert_text", "Welcome back"),
+            self._reply("done", "pass"),
+        ])
+        self.assertEqual(run["status"], "passed")
+        click = run["steps"][0]
+        self.assertEqual((click["action"], click["status"]), ("click", "failed"))
+        self.assertIn("the element detached", click["message"])
+
+
+class _Blank:
+    """A page still painting: alive, with nothing on it yet."""
+    snapshot_id = "s"
+
+    def get_optimized_tree_for_llm(self):
+        return {}
+
+    def visible_text(self):
+        return []
+
+
+class _Model:
+    """A provider for runs that are stopped part way.
+
+    `hang` answers nothing, ever — a model call in flight when the browser
+    goes away. Otherwise it answers `reply`, once `gate` is open.
+    """
+    id, label = "fake", "Fake"
+
+    def __init__(self, reply="", hang=False):
+        self.reply, self.hang = reply, hang
+        self.gate = asyncio.Event()
+        self.gate.set()
+        self.asked = 0
+
+    async def stream(self, *a, **k):
+        self.asked += 1
+        if self.hang:
+            await asyncio.Event().wait()
+        await self.gate.wait()
+        yield self.reply
+
+
+class _Replies:
+    """A provider that answers each call with the next reply, then the last."""
+    id, label = "fake", "Fake"
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+
+    async def stream(self, *a, **k):
+        yield self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+
+
+class _Stopping:
+    """What the tests of a run that is stopped part way share."""
+
+    def tearDown(self):
+        for session_id in list(agent._sessions):
+            if session_id.startswith("stopped-"):
+                agent.reset(session_id)
+
+    @staticmethod
+    def _model(provider):
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(agent.providers, "get", lambda *a, **k: provider))
+        stack.enter_context(patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"))
+        stack.enter_context(patch.object(agent.providers, "active_model", lambda *a, **k: "m"))
+        return stack
+
+    @staticmethod
+    def _target(session_id, screen=None):
+        target = FakeTarget(screen if screen is not None else _manager())
+        target.session_id = session_id
+        return target
+
+    @staticmethod
+    def _start(target, events, **kwargs):
+        async def consume():
+            async for line in agent.run_agent(target, "senaryo", **kwargs):
+                events.append(json.loads(line))
+        return asyncio.create_task(consume())
+
+    async def _until(self, events, kind, timeout=3.0):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not any(e["event"] == kind for e in events):
+            if loop.time() > deadline:
+                self.fail(f"never said {kind}: {[e['event'] for e in events]}")
+            await asyncio.sleep(0.01)
+
+    async def _disconnect(self, task):
+        """What the browser going away does to the stream."""
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # The run must not swallow it: a yield in its `finally` used to hand
+        # the consumer one more line instead of letting the cancel through.
+        self.assertTrue(task.cancelled(), "the cancellation was swallowed")
+
+    @staticmethod
+    def _run_id(events):
+        return next(e["runId"] for e in events if e["event"] == "run_started")
+
+
+class AStoppedRunIsRecordedAsStopped(_Stopping, unittest.IsolatedAsyncioTestCase):
+    """A run that ends before it reaches a verdict did not pass.
+
+    The stream is cancelled when the browser goes away — Starlette does that
+    on a disconnect, and Stop used to do it on purpose by aborting the fetch —
+    and the run was then closed with whatever its status happened to hold:
+    "passed" for a free run, even over a failed assertion it was holding on,
+    and "failed" for a scenario. All of it landed in Test Runs, Insights and
+    the JUnit report.
+    """
+
+    ASSERT_TEXT = ('```json\n{"type":"action","action":"assert_text",'
+                   '"value":"Order confirmed","reason":"r"}\n```')
+    CLICK = ('```json\n{"type":"action","action":"click",'
+             '"elementId":"el_1","reason":"r"}\n```')
+
+    async def test_a_free_run_cut_off_mid_model_call_is_cancelled_not_passed(self):
+        state, events = agent.AgentSession(), []
+        with self._model(_Model(hang=True)):
+            task = self._start(self._target("stopped-free"), events,
+                               session_state=state, attended=True)
+            await self._until(events, "thinking")
+            await self._disconnect(task)
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "cancelled")
+        self.assertFalse(state.running)
+
+    async def test_a_scenario_cut_off_mid_model_call_is_cancelled_not_failed(self):
+        """It was stored as "Step 1 did not pass: The run ended before this
+        step closed" — which the classifier then called a defect of the app."""
+        state, events = agent.AgentSession(), []
+        with self._model(_Model(hang=True)):
+            task = self._start(
+                self._target("stopped-scenario"), events, session_state=state,
+                steps=[{"action": "Adim 1", "expected": "Beklenen 1"}],
+            )
+            await self._until(events, "thinking")
+            await self._disconnect(task)
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "cancelled")
+        self.assertEqual([s["status"] for s in run["scenarioSteps"]], ["cancelled"])
+
+    async def test_a_held_failed_assertion_is_not_passed_when_the_tab_closes(self):
+        """The tester closed the tab on a run holding at a failed check. Stop
+        at the same moment ends it failed; closing the tab stored it passed."""
+        state, events = agent.AgentSession(), []
+        failing = AsyncMock(return_value={
+            "ok": False, "message": '"Order confirmed" is not there', "element": None})
+        with self._model(_Model(reply=self.ASSERT_TEXT)), \
+             patch.object(agent, "_execute_action", failing):
+            task = self._start(self._target("stopped-held"), events,
+                               session_state=state, attended=True, use_vision=False)
+            await self._until(events, "waiting")
+            await self._disconnect(task)
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("Order confirmed", run["error"])
+        self.assertEqual([(s["action"], s["status"]) for s in run["steps"]],
+                         [("assert_text", "failed")])
+
+    async def test_stop_closes_the_run_itself_and_acts_on_nothing_more(self):
+        """The workspace no longer aborts the stream on Stop; it waits for the
+        run to say it has stopped. So what the model answers after Stop must
+        not be carried out, and the run must close on its own."""
+        model = _Model(reply=self.CLICK)
+        model.gate.clear()
+        acted = AsyncMock(return_value={"ok": True, "message": "ok", "element": None})
+        events = []
+        with self._model(model), patch.object(agent, "_execute_action", acted):
+            task = self._start(self._target("stopped-by-stop"), events)
+            await self._until(events, "thinking")
+            self.assertTrue(agent.cancel("stopped-by-stop"))
+            model.gate.set()
+            await asyncio.wait_for(task, timeout=3.0)
+        acted.assert_not_awaited()
+        self.assertTrue([e for e in events if e["event"] == "cancelled"])
+        self.assertEqual(events[-1]["event"], "run_closed")
+        self.assertEqual(events[-1]["status"], "cancelled")
+        self.assertEqual(storage.get_run(self._run_id(events))["status"], "cancelled")
+        self.assertFalse(agent.is_running("stopped-by-stop"))
+
+    async def test_a_refused_session_is_failed_and_marked_blocked(self):
+        """The early return on a refusal left the run at "passed"."""
+        target = self._target("stopped-refused")
+        target.peek_events = lambda: [{
+            "kind": "blocked", "level": "error", "thirdParty": False,
+            "text": "answered with a web page", "url": "https://x/api/fares",
+        }]
+        model = _Model(reply=self.CLICK)
+        events = []
+        with self._model(model):
+            async for line in agent.run_agent(target, "senaryo",
+                                              session_state=agent.AgentSession()):
+                events.append(json.loads(line))
+        self.assertEqual(model.asked, 0, "the model was never asked")
+        self.assertEqual(events[-1]["event"], "run_closed")
+        self.assertEqual(events[-1]["status"], "failed")
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["blocked"], 1)
+
+
+class AStopWhileWaitingForTheFirstScreen(_Stopping, unittest.IsolatedAsyncioTestCase):
+    """The first-screen wait sat outside the run's try/finally, and did not
+    listen for Stop. Stopping, reloading or leaving during its 25 seconds left
+    the session marked running until the server restarted: every later Run
+    was refused as "already in progress", and a phone's mirror froze on the
+    last frame the dead run had published."""
+
+    SESSION = "stopped-first-screen"
+
+    async def test_a_disconnect_during_the_wait_does_not_wedge_the_session(self):
+        target = self._target(self.SESSION, _Blank())
+        events = []
+        with patch.object(agent, "FIRST_SCREEN_SECONDS", 30.0), \
+             self._model(_Model(reply="")):
+            task = self._start(target, events)
+            await self._until(events, "run_started")
+            await asyncio.sleep(0.2)
+            await self._disconnect(task)
+
+            self.assertFalse(agent.is_running(self.SESSION))
+            self.assertEqual(storage.get_run(self._run_id(events))["status"], "cancelled")
+
+            # And the next Run on the same session starts. Closed right after,
+            # which is the other way a stream ends early.
+            again = agent.run_agent(target, "senaryo")
+            first = json.loads(await again.__anext__())
+            await again.aclose()
+        self.assertEqual(first["event"], "run_started")
+        self.assertFalse(agent.is_running(self.SESSION))
+        self.assertEqual(storage.get_run(first["runId"])["status"], "cancelled")
+
+    async def test_stop_during_the_wait_ends_the_run_at_once(self):
+        target = self._target(self.SESSION, _Blank())
+        events = []
+        loop = asyncio.get_running_loop()
+        with patch.object(agent, "FIRST_SCREEN_SECONDS", 30.0), \
+             self._model(_Model(reply="")):
+            task = self._start(target, events)
+            await self._until(events, "run_started")
+            asked = loop.time()
+            self.assertTrue(agent.cancel(self.SESSION))
+            await asyncio.wait_for(task, timeout=3.0)
+            took = loop.time() - asked
+        self.assertLess(took, 1.5, "Stop sat out the wait")
+        self.assertTrue([e for e in events if e["event"] == "cancelled"])
+        self.assertEqual(events[-1]["status"], "cancelled")
+        self.assertEqual(storage.get_run(self._run_id(events))["status"], "cancelled")
+        self.assertFalse(agent.is_running(self.SESSION))
+
+
+class AFailedStepStandsWhenTheRunIsStopped(_Stopping, unittest.IsolatedAsyncioTestCase):
+    """Held after a failed step, a stopped scenario said cancelled, and a real
+    failure dropped out of the pass rate. Nothing after a failed judged step
+    can make the run pass, so that is its verdict — as it is at the hold
+    after a failed assertion."""
+
+    STEP_FAILED = ('```json\n{"type":"action","action":"step_done",'
+                   '"value":"fail","reason":"nope"}\n```')
+    STEPS = [{"action": "Adim 1"}, {"action": "Adim 2"}]
+
+    def _held(self, session_id, events, **kwargs):
+        task = self._start(self._target(session_id), events, attended=True,
+                           use_vision=False, steps=self.STEPS, **kwargs)
+        return task
+
+    async def test_closing_the_tab_there_leaves_it_failed(self):
+        state, events = agent.AgentSession(), []
+        with self._model(_Model(reply=self.STEP_FAILED)):
+            task = self._held("stopped-step-tab", events, session_state=state)
+            await self._until(events, "waiting")
+            await self._disconnect(task)
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("nope", run["error"])
+        self.assertEqual([s["status"] for s in run["scenarioSteps"]], ["failed"])
+        self.assertFalse(state.running)
+
+    async def test_stop_there_leaves_it_failed(self):
+        events = []
+        with self._model(_Model(reply=self.STEP_FAILED)):
+            task = self._held("stopped-step-stop", events)
+            await self._until(events, "waiting")
+            self.assertTrue(agent.cancel("stopped-step-stop"))
+            await asyncio.wait_for(task, timeout=3.0)
+        self.assertEqual(events[-1]["event"], "run_closed")
+        self.assertEqual(events[-1]["status"], "failed")
+        self.assertEqual(storage.get_run(self._run_id(events))["status"], "failed")
+        self.assertFalse(agent.is_running("stopped-step-stop"))
+
+    async def test_the_step_it_was_stopped_in_is_cancelled_not_failed(self):
+        """QA, round 2: step 2 was stored failed, quoting step 1's error,
+        though Stop cut it off before it reached a verdict."""
+
+        class SecondTurnWaits:
+            id, label = "fake", "Fake"
+
+            def __init__(self, reply):
+                self.reply, self.asked, self.gate = reply, 0, asyncio.Event()
+
+            async def stream(self, *a, **k):
+                self.asked += 1
+                if self.asked > 1:
+                    await self.gate.wait()
+                yield self.reply
+
+        model = SecondTurnWaits(self.STEP_FAILED)
+        events = []
+        with self._model(model):
+            # Unattended, so the failed step 1 is not held and step 2 opens.
+            task = self._start(self._target("stopped-mid-step"), events,
+                               use_vision=False, steps=self.STEPS)
+            while model.asked < 2:
+                await asyncio.sleep(0.01)
+            self.assertTrue(agent.cancel("stopped-mid-step"))
+            model.gate.set()
+            await asyncio.wait_for(task, timeout=3.0)
+        run = storage.get_run(self._run_id(events))
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual([(s["idx"], s["status"]) for s in run["scenarioSteps"]],
+                         [(1, "failed"), (2, "cancelled")])
+        self.assertEqual(run["scenarioSteps"][1]["message"], "Run stopped before this step closed.")
+
+    async def test_stop_before_anything_failed_is_still_cancelled(self):
+        model = _Model(reply=self.STEP_FAILED)
+        model.gate.clear()
+        events = []
+        with self._model(model):
+            task = self._held("stopped-step-early", events)
+            await self._until(events, "thinking")
+            self.assertTrue(agent.cancel("stopped-step-early"))
+            model.gate.set()
+            await asyncio.wait_for(task, timeout=3.0)
+        self.assertEqual(events[-1]["status"], "cancelled")
+
+
+class AStorageErrorAtTheEndDoesNotWedgeTheSession(_Stopping, unittest.IsolatedAsyncioTestCase):
+    """The session was let go only after the run had been written down, so a
+    database locked by a suite's workers skipped it — and every later Run on
+    the session was refused as already in progress."""
+
+    CHECK = ('```json\n{"type":"action","action":"assert_text",'
+             '"value":"Welcome back","reason":"r"}\n```')
+    DONE = '```json\n{"type":"action","action":"done","value":"pass","reason":"ok"}\n```'
+
+    async def test_the_next_run_starts(self):
+        import sqlite3
+
+        real, calls = storage.finish_run, []
+
+        def locked_once(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return real(*args, **kwargs)
+
+        target = self._target("stopped-db-locked")
+        events = []
+        with self._model(_Replies(self.CHECK, self.DONE)), \
+             patch.object(storage, "finish_run", locked_once), \
+             patch("builtins.print"):
+            async for line in agent.run_agent(target, "senaryo", use_vision=False):
+                events.append(json.loads(line))
+        self.assertEqual(len(calls), 1, "the run was written down once, and that failed")
+        self.assertFalse(agent.is_running("stopped-db-locked"))
+        said = [e["message"] for e in events if e["event"] == "error"]
+        self.assertTrue(said and "database is locked" in said[0], said)
+        self.assertEqual(events[-1]["event"], "run_closed")
+
+        with self._model(_Replies(self.DONE)):
+            again = agent.run_agent(target, "senaryo")
+            first = json.loads(await again.__anext__())
+            await again.aclose()
+        self.assertEqual(first["event"], "run_started")
+
+    async def test_a_step_that_cannot_be_closed_does_not_keep_the_verdict_unwritten(self):
+        """The three end-of-run writes shared one try: the open step failing
+        to close skipped the verdict, and the run read "running" until the
+        next restart."""
+        import sqlite3
+
+        state, events = agent.AgentSession(), []
+        locked = sqlite3.OperationalError("database is locked")
+        with self._model(_Model(hang=True)), \
+             patch.object(storage, "finish_scenario_step", side_effect=locked), \
+             patch("builtins.print"):
+            task = self._start(self._target("stopped-step-locked"), events,
+                               session_state=state, steps=[{"action": "Adim 1"}])
+            await self._until(events, "thinking")
+            await self._disconnect(task)
+        self.assertEqual(storage.get_run(self._run_id(events))["status"], "cancelled")
+        self.assertFalse(state.running)
+
+
+class AStepSaysWhereItsTimeWent(_Stopping, unittest.IsolatedAsyncioTestCase):
+    """Beside a step's verdict the tester reads its time in two parts:
+    carrying it out, and checking that it worked."""
+
+    CHECK = ('```json\n{"type":"action","action":"assert_text",'
+             '"value":"Welcome back","reason":"r"}\n```')
+    CLOSE = ('```json\n{"type":"action","action":"step_done",'
+             '"value":"pass","reason":"ok"}\n```')
+
+    async def test_the_check_is_timed_apart_from_the_step(self):
+        async def slow_check(target, action, snapshot):
+            await asyncio.sleep(0.1)
+            return {"ok": True, "message": "there", "element": None}
+
+        events = []
+        with self._model(_Replies(self.CHECK, self.CLOSE)), \
+             patch.object(agent, "_execute_action", slow_check):
+            async for line in agent.run_agent(self._target("stopped-timed"), "senaryo",
+                                              use_vision=False, steps=[{"action": "Adim 1"}]):
+                events.append(json.loads(line))
+        closed = [e for e in events if e["event"] == "scenario_step_finished"]
+        self.assertEqual([e["status"] for e in closed], ["passed"])
+        # Windows wakes a sleeper up to a clock tick (15.6ms) early.
+        self.assertGreaterEqual(closed[0]["verifyMs"], 70)
+        self.assertGreaterEqual(closed[0]["durationMs"], closed[0]["verifyMs"])

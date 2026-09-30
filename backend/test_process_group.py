@@ -102,3 +102,34 @@ def test_appium_is_started_outside_the_job(monkeypatch, tmp_path):
     flags = spawned["kwargs"]["creationflags"]
     assert flags & process_group.CREATE_BREAKAWAY_FROM_JOB
     assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def test_appium_listens_on_this_machine_only_and_without_cors(monkeypatch, tmp_path):
+    """Started with --allow-cors on every interface, Appium answered any page
+    the tester had open — `fetch('http://localhost:4723/appium/sessions')`,
+    then the session's screenshot — and any host on the LAN without a browser
+    at all. The backend is its only client, so neither bought anything."""
+    import process_manager
+
+    spawned = {}
+
+    class FakeProcess:
+        pid = 1234
+
+        def poll(self):
+            return None
+
+    def fake_popen(argv, **kwargs):
+        spawned["argv"] = argv
+        return FakeProcess()
+
+    monkeypatch.setattr(process_manager, "_process", None)
+    monkeypatch.setattr(process_manager, "_resolve_executable", lambda: "appium.cmd")
+    monkeypatch.setattr(process_manager, "LOG_FILE_PATH", str(tmp_path / "appium.log"))
+    monkeypatch.setattr(process_manager.subprocess, "Popen", fake_popen)
+
+    ok, _ = process_manager.start()
+    assert ok
+    argv = spawned["argv"]
+    assert "--allow-cors" not in argv
+    assert argv[argv.index("--address") + 1] == "127.0.0.1"

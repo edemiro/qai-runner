@@ -42,7 +42,8 @@ function write(tab, id, replace) {
  * @param fallback which page an address with nothing in it means.
  * @param known the pages there are. Anything else in the address is not one.
  * @returns [{tab, id}, go] — `go(tab, id)` moves, and the browser's own
- *   Back and Forward move it too.
+ *   Back and Forward move it too. `go(tab, id, { replace: true })` corrects
+ *   the address to what the page already shows, without an entry for Back.
  */
 export function useAddressBar(fallback, known) {
   const [where, setWhere] = useState(() => readAddress(fallback, known));
@@ -63,10 +64,10 @@ export function useAddressBar(fallback, known) {
     return () => window.removeEventListener('popstate', onPop);
   }, [fallback, known]);
 
-  const go = useCallback((tab, id = null) => {
+  const go = useCallback((tab, id = null, { replace = false } = {}) => {
     setWhere((current) => {
       if (current.tab === tab && current.id === id) return current;
-      write(tab, id, false);
+      write(tab, id, replace);
       return { tab, id };
     });
   }, []);

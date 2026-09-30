@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 
+// How long Stop waits for the run to close itself before cutting the stream.
+// A run stops between actions, and what is in flight is usually one model
+// call — seconds, not this.
+const STOP_FALLBACK_MS = 20000;
+
 /**
  * Drives one agent run and turns its NDJSON event stream into a timeline.
  *
@@ -24,6 +29,10 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   // Scenarios the agent wrote from a chat request, waiting for the tester to
   // review before anything is saved: {scenarios, suggestedName, readFrom, kind}.
   const [proposed, setProposed] = useState(null);
+  // Stop was pressed and the run has not closed yet. It closes itself, after
+  // the model call in flight returns, and that can take a few seconds in
+  // which the button said nothing and invited a second press.
+  const [stopAsked, setStopAsked] = useState(false);
   const abortRef = useRef(null);
   // Held in a ref so a changing callback identity never restarts a live run.
   const finishedRef = useRef(onFinished);
@@ -59,6 +68,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
     setCurrentStep(0);
     setScenarioProgress(null);
     setProposed(null);
+    setStopAsked(false);
   }, []);
 
   const clearProposed = useCallback(() => setProposed(null), []);
@@ -74,6 +84,9 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
       // Hold from the first step — debug mode asked for before the run,
       // rather than arrived at by a failure.
       stepFromTheStart = false,
+      // A saved scenario's required starting state; the server puts it in
+      // front of the goal, as an execution does.
+      precondition = null,
     } = {}) => {
       const session = on || sessionId;
       if (!session || status === 'running') return;
@@ -83,6 +96,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
 
       setTimeline([{ key: 'goal', type: 'goal', text: goal }]);
       setStatus('running');
+      setStopAsked(false);
       setWaitingAt(null);
       setStepping(Boolean(stepFromTheStart));
       setCurrentStep(0);
@@ -104,6 +118,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
             ...(stepFromTheStart ? { stepping: true } : {}),
+            ...(precondition ? { precondition } : {}),
           },
           (event) => {
             switch (event.event) {
@@ -145,6 +160,8 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
                     ...updated[at],
                     status: event.status,
                     message: event.message,
+                    durationMs: event.durationMs,
+                    verifyMs: event.verifyMs,
                   };
                   return updated;
                 });
@@ -240,14 +257,28 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
 
   const stop = useCallback(async () => {
     if (!sessionId) return;
+    setStopAsked(true);
+    const stream = abortRef.current;
+    let heard = false;
     try {
-      await api.stopAgent(sessionId);
+      heard = Boolean((await api.stopAgent(sessionId))?.stopped);
     } catch {
-      // The stream abort below still ends the run from this client's side.
+      // No telling whether it heard, so the stream is cut below.
     }
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setStatus((current) => (current === 'running' ? 'cancelled' : current));
+    if (!stream) return;
+    // The server closes the run itself — `cancelled`, then `run_closed` — and
+    // the stream ends with it. Aborting straight away was what cut runs off
+    // mid model call, and the server then filed whatever verdict it had to
+    // hand: "passed", for a run the tester had just stopped. The abort stays,
+    // for a server that did not hear or never finishes closing.
+    const cut = () => {
+      if (abortRef.current !== stream) return;
+      stream.abort();
+      abortRef.current = null;
+      setStatus((current) => (current === 'running' ? 'cancelled' : current));
+    };
+    if (heard) setTimeout(cut, STOP_FALLBACK_MS);
+    else cut();
   }, [sessionId]);
 
   /** One more step, or the rest of the way. */
@@ -276,5 +307,7 @@ export function useAgentRun(sessionId, { onFinished } = {}) {
   return {
     timeline, status, runId, currentStep, maxSteps, scenarioProgress, start, stop, reset,
     proposed, clearProposed, waitingAt, stepping, step, setStepMode,
+    // Only while the run is still going: every way it ends clears this.
+    stopping: stopAsked && status === 'running',
   };
 }

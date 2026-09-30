@@ -603,8 +603,11 @@ def test_a_mobile_suite_runs_one_case_at_a_time():
         peak = max(peak, concurrent)
         await asyncio.sleep(0)
         concurrent -= 1
-        return {"caseId": execution["case"]["id"], "runId": None,
-                "label": "l", "status": "passed", "error": None, "durationMs": 1}
+        result = {"caseId": execution["case"]["id"], "runId": None,
+                  "label": "l", "status": "passed", "error": None, "durationMs": 1}
+        # As the real one does: the totals are read off this line.
+        await emit.put(runner._event("case_finished", **result))
+        return result
 
     async def collect():
         with patch.object(runner.storage, "get_suite", lambda i: {**suite, "cases": cases}), \
@@ -619,10 +622,276 @@ def test_a_mobile_suite_runs_one_case_at_a_time():
     assert peak == 1, f"cases overlapped on one device (peak {peak})"
 
     finished = next(e for e in events if e["event"] == "suite_finished")
-    # The sequential task returns a list of results where the web path returns
-    # one dict each; if that is not flattened the suite reports nothing at all.
     assert finished["total"] == 3
     assert finished["passed"] == 3
+
+
+def _phone_execution_stopped_after_the_first_case(stop, **options):
+    """Three cases on one phone; the second will not stop and is cut off.
+    `stop` is awaited once the first case has finished. Returns the stream."""
+    import asyncio
+
+    suite = {"id": "m", "name": "Phone", "kind": "mobile"}
+    cases = [
+        {"id": f"c{i}", "idx": i, "name": f"n{i}", "goal": "g", "enabled": True,
+         "tags": [], "dataset": None, "url": None}
+        for i in (1, 2, 3)
+    ]
+
+    async def case_two_will_not_stop(execution, target, suite_run_id, options, emit):
+        case_id = execution["case"]["id"]
+        if case_id == "c2":
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # What the real one says when it is cut off.
+                emit.put_nowait(runner._event(
+                    "case_finished", caseId=case_id, runId="r2", label="l",
+                    status="cancelled", error=None, durationMs=1))
+                raise
+        result = {"caseId": case_id, "runId": f"r-{case_id}", "label": "l",
+                  "status": "passed", "error": None, "durationMs": 1}
+        await emit.put(runner._event("case_finished", **result))
+        return result
+
+    async def collect():
+        events = []
+        with patch.object(runner.storage, "get_suite", lambda i: {**suite, "cases": cases}), \
+             patch.object(runner.storage, "select_cases", lambda i, t=None: cases), \
+             patch.object(runner.storage, "create_suite_run", lambda *a, **k: "sr-cut"), \
+             patch.object(runner.storage, "finish_suite_run", lambda *a, **k: None), \
+             patch.object(runner, "_connected_device", lambda: _phone()), \
+             patch.object(runner, "_run_mobile_case", case_two_will_not_stop), \
+             patch.object(runner, "STOP_GRACE_S", 0.05):
+            async for line in runner.run_suite("m", **options):
+                events.append(json.loads(line))
+                if events[-1]["event"] == "case_finished" and events[-1]["caseId"] == "c1":
+                    await stop()
+        return events
+
+    return asyncio.run(collect())
+
+
+def test_a_phone_execution_cut_off_after_stop_still_counts_every_case():
+    """The totals came from what the one phone worker returned, and a worker
+    cut off after Stop returns nothing: the case it was on, the ones before it
+    and the ones after all went missing from the execution's result."""
+    async def stop():
+        assert await runner.cancel("sr-cut")
+
+    events = _phone_execution_stopped_after_the_first_case(stop)
+    finished = next(e for e in events if e["event"] == "suite_finished")
+    assert (finished["total"], finished["passed"], finished["cancelled"]) == (3, 1, 2)
+    assert [e["caseId"] for e in events if e["event"] == "case_finished"] == ["c1", "c2", "c3"]
+
+
+def test_what_a_case_puts_on_the_stream_names_the_store():
+    """The watching page and the CI report read the case's error off the
+    stream, and it can quote what the store filled in."""
+    import time
+
+    storage.set_test_data("qa.kart", "5105105105105100", "t", secret=True)
+    try:
+        said = runner._case_result({"id": "c"}, None, "l", "failed",
+                                   "Card 5105105105105100 was declined", time.time())
+        assert said["error"] == "Card {{qa.kart}} was declined"
+    finally:
+        storage.delete_test_data("qa.kart")
+
+
+def test_a_phone_is_held_by_the_execution_on_it_until_it_ends():
+    """A mobile case runs on a throwaway agent state, so the phone looked idle
+    for the whole execution: Run started a second agent on it, and Disconnect
+    closed the session under the cases."""
+    import asyncio
+
+    suite = {"id": "m", "name": "Phone", "kind": "mobile"}
+    cases = [{"id": "c1", "idx": 1, "name": "n1", "goal": "g", "enabled": True,
+              "tags": [], "dataset": None, "url": None}]
+    held = []
+
+    async def a_case(execution, target, suite_run_id, options, emit):
+        held.append(runner.claimed_by(target.session_id))
+        result = {"caseId": "c1", "runId": None, "label": "l", "status": "passed",
+                  "error": None, "durationMs": 1}
+        await emit.put(runner._event("case_finished", **result))
+        return result
+
+    async def collect():
+        with patch.object(runner.storage, "get_suite", lambda i: {**suite, "cases": cases}), \
+             patch.object(runner.storage, "select_cases", lambda i, t=None: cases), \
+             patch.object(runner.storage, "create_suite_run", lambda *a, **k: "sr-held"), \
+             patch.object(runner.storage, "finish_suite_run", lambda *a, **k: None), \
+             patch.object(runner, "_connected_device", lambda: _phone()), \
+             patch.object(runner, "_run_mobile_case", a_case):
+            return [json.loads(line) async for line in runner.run_suite("m", name="Gece")]
+
+    asyncio.run(collect())
+    assert held == [{"suiteRunId": "sr-held", "name": "Gece"}]
+    assert runner.claimed_by(_phone.session_id) is None, "let go when it ended"
+
+
+def test_a_run_or_a_disconnect_on_a_held_phone_is_refused():
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    import main
+    from fastapi import HTTPException
+
+    class Phone:
+        session_id, kind = "held-phone", "mobile"
+
+    main.drivers.register(Phone())
+    runner._CLAIMED["held-phone"] = {"suiteRunId": "sr-x", "name": "Gece"}
+    try:
+        with pytest.raises(HTTPException) as refused:
+            asyncio.run(main.agent_run("held-phone", main.AgentRunRequest(goal="g")))
+        assert refused.value.status_code == 409
+        assert "Gece" in refused.value.detail
+
+        with pytest.raises(HTTPException) as refused:
+            asyncio.run(main.delete_session("held-phone"))
+        assert refused.value.status_code == 409
+
+        # Asked for anyway: the execution is stopped first, then the session goes.
+        stopped = []
+
+        async def cancel(suite_run_id):
+            stopped.append(suite_run_id)
+            return True
+
+        with patch.object(runner, "cancel", cancel), \
+             patch.object(main.drivers, "close", AsyncMock()) as closed:
+            asyncio.run(main.delete_session("held-phone", force=True))
+        assert stopped == ["sr-x"]
+        closed.assert_awaited_once_with("held-phone")
+    finally:
+        runner._CLAIMED.pop("held-phone", None)
+        main.drivers._targets.pop("held-phone", None)
+
+
+def test_a_chat_runs_stop_reaches_the_execution_it_started():
+    """A chat run waits on the Test Set it started, not on a case, so its Stop
+    reached nothing until the workspace gave up and cut the stream."""
+    import asyncio
+
+    stopped = asyncio.Event()
+
+    async def stop():
+        stopped.set()
+
+    events = _phone_execution_stopped_after_the_first_case(stop, stop_with=stopped)
+    finished = next(e for e in events if e["event"] == "suite_finished")
+    assert finished["status"] == "cancelled"
+    assert (finished["passed"], finished["cancelled"]) == (1, 2)
+
+
+def _stopped_case(provider, said=None):
+    """Run one mobile case, press Stop on it, and cut it off when it will not
+    stop — what `cancel()` does once STOP_GRACE_S runs out. Returns its run;
+    what the case put on the execution's stream goes into `said`."""
+    import asyncio
+    import agent
+
+    suite_id = storage.create_suite("Phone", kind="mobile", os="ios")
+    case_id = storage.add_case(
+        suite_id, "Ödeme", "kartla öde",
+        steps=[{"action": "Kartla öde", "expected": "Sipariş onaylandı"}],
+    )
+    case = next(c for c in storage.get_suite(suite_id)["cases"] if c["id"] == case_id)
+    suite_run_id = storage.create_suite_run(suite_id, workers=1, kind="mobile")
+
+    class Screen:
+        snapshot_id = "s"
+        def get_optimized_tree_for_llm(self): return {"elementId": "el_1"}
+        def visible_text(self): return ["Ödeme"]
+
+    class Phone(_phone):
+        kind = "mobile"
+        def is_alive(self): return True
+        async def snapshot(self): return Screen()
+        async def screenshot(self): return None
+
+    async def go():
+        control = runner._RunControl()
+        emit = asyncio.Queue()
+        task = asyncio.create_task(runner._run_mobile_case(
+            {"case": case, "row": None, "label": "Ödeme"}, Phone(),
+            suite_run_id, {"control": control}, emit))
+        while not (control.states and control.states[0].run_id):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+        control.stop.set()
+        for state in control.states:
+            state.cancel.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        while not emit.empty():
+            if said is not None:
+                said.append(json.loads(emit.get_nowait()))
+            else:
+                emit.get_nowait()
+        return control.states[0].run_id
+
+    with patch.object(agent.providers, "get", lambda *a, **k: provider), \
+         patch.object(agent.providers, "api_key_for", lambda *a, **k: "k"), \
+         patch.object(agent.providers, "active_model", lambda *a, **k: "m"):
+        run_id = asyncio.run(go())
+    return storage.get_run(run_id)
+
+
+def test_a_case_cut_off_by_stop_is_cancelled_and_raises_no_bug():
+    """Stop gives a case STOP_GRACE_S to wind down and then cuts it off, which
+    is easy to reach with one long model call. The runner closed the run a
+    second time as "failed" over the agent's own "cancelled", the classifier
+    read the open step as an unmet expectation, and a bug was filed against
+    the app for a run the tester had stopped."""
+    import asyncio
+
+    class Hangs:
+        id, label = "fake", "Fake"
+        async def stream(self, *a, **k):
+            await asyncio.Event().wait()
+            yield ""
+
+    run = _stopped_case(Hangs())
+    assert run["status"] == "cancelled"
+    assert [s["status"] for s in run["scenarioSteps"]] == ["cancelled"]
+    # This run's, not the whole database's: another test's bug is not this one.
+    assert storage.bug_for_run(run["id"]) is None
+
+
+def test_a_case_cut_off_still_says_it_finished():
+    """Nothing after a case's `finally` runs once it is cut off, so it said
+    nothing on the execution's stream, and the totals went on without it."""
+    import asyncio
+
+    class Hangs:
+        id, label = "fake", "Fake"
+        async def stream(self, *a, **k):
+            await asyncio.Event().wait()
+            yield ""
+
+    said = []
+    run = _stopped_case(Hangs(), said)
+    finished = [e for e in said if e["event"] == "case_finished"]
+    assert [(e["status"], e["runId"]) for e in finished] == [("cancelled", run["id"])]
+
+
+def test_stop_does_not_overrule_a_verdict_the_case_reached():
+    """A case that failed on its own before Stop reached it failed."""
+    control = runner._RunControl()
+    control.stop.set()
+    assert runner._stopped_or("failed", "failed", control) == "failed"
+    assert runner._stopped_or("passed", "passed", control) == "passed"
+    # No verdict of its own — an error, or cut off — and Stop was pressed.
+    assert runner._stopped_or("failed", None, control) == "cancelled"
+    # Without a Stop, a case that errored is as failed as it ever was.
+    assert runner._stopped_or("failed", None, runner._RunControl()) == "failed"
+    assert runner._stopped_or("failed", None, None) == "failed"
 
 
 # --------------------------------------------------------------------------- #
@@ -720,6 +989,107 @@ def test_an_execution_defaults_to_web_when_no_platform_is_given():
     finally:
         with storage._connect() as conn:
             conn.execute("DELETE FROM suite_runs WHERE id = ?", (suite_run_id,))
+
+
+# --------------------------------------------------------------------------- #
+# Redesign / Dönüşüm
+# --------------------------------------------------------------------------- #
+
+def test_a_new_test_set_goes_to_redesign_unless_it_says_otherwise():
+    """Redesign is the tab the pages open on, so it is where new work lands."""
+    assert storage.get_suite(storage.create_suite("Otel arama"))["track"] == "redesign"
+    assert storage.get_suite(storage.create_suite("Uçuş", track="donusum"))["track"] == "donusum"
+
+
+def test_the_track_is_understood_however_it_is_spelt():
+    assert storage.clean_track("Dönüşüm") == "donusum"
+    assert storage.clean_track(" REDESIGN ") == "redesign"
+    assert storage.clean_track("ikisi") is None
+    assert storage.clean_track(None) is None
+
+
+def test_every_set_and_execution_from_before_the_split_is_donusum():
+    """What a row reads as when it was written by something that did not know
+    the column — which is every set and execution that predates the split."""
+    with storage._connect() as conn:
+        conn.execute("INSERT INTO suites (id, name, kind, created_at) "
+                     "VALUES ('old', 'Eski set', 'web', 1)")
+        conn.execute("INSERT INTO suite_runs (id, suite_id, status, workers, started_at) "
+                     "VALUES ('old-run', 'old', 'passed', 1, 1)")
+    assert storage.get_suite("old")["track"] == "donusum"
+    assert storage.get_suite_run("old-run")["track"] == "donusum"
+    assert next(r for r in storage.list_suite_runs() if r["id"] == "old-run")["track"] == "donusum"
+
+
+def test_a_set_moves_between_tracks_and_a_rename_leaves_it_where_it_is():
+    suite_id = storage.create_suite("Otel arama")
+    storage.update_suite(suite_id, track="Dönüşüm")
+    assert storage.get_suite(suite_id)["track"] == "donusum"
+    storage.update_suite(suite_id, name="Otel arama alanı")
+    assert storage.get_suite(suite_id)["track"] == "donusum"
+    storage.update_suite(suite_id, track="nereye")
+    assert storage.get_suite(suite_id)["track"] == "donusum", "a misspelt track moves nothing"
+
+
+def test_an_unknown_track_is_refused_by_the_api_rather_than_filed_somewhere():
+    from fastapi.testclient import TestClient
+    import main
+
+    client = TestClient(main.app, base_url="http://localhost")
+    assert client.post("/api/suites", json={"name": "x", "track": "ikisi"}).status_code == 400
+    created = client.post("/api/suites", json={"name": "Otel", "track": "Dönüşüm"}).json()
+    assert created["track"] == "donusum"
+    assert client.patch(f"/api/suites/{created['id']}", json={"track": "x"}).status_code == 400
+    moved = client.patch(f"/api/suites/{created['id']}", json={"track": "redesign"}).json()
+    assert moved["track"] == "redesign"
+
+
+def _track_of_execution(suite_id=None, cases=None, suite=None):
+    """Run an execution with nothing behind it and return the track it was
+    opened with."""
+    import asyncio
+
+    opened = {}
+
+    def create_suite_run(*_args, **kwargs):
+        opened.update(kwargs)
+        return "sr"
+
+    async def fake_case(execution, target, suite_run_id, options, emit):
+        result = {"caseId": execution["case"]["id"], "runId": None, "label": "l",
+                  "status": "passed", "error": None, "durationMs": 1}
+        await emit.put(runner._event("case_finished", **result))
+        return result
+
+    async def collect():
+        with patch.object(runner.storage, "get_suite", lambda i: suite), \
+             patch.object(runner.storage, "select_cases", lambda i, t=None: suite["cases"]), \
+             patch.object(runner.storage, "create_suite_run", create_suite_run), \
+             patch.object(runner.storage, "finish_suite_run", lambda *a, **k: None), \
+             patch.object(runner, "_connected_device", lambda: _phone()), \
+             patch.object(runner, "_run_mobile_case", fake_case):
+            return [line async for line in runner.run_suite(suite_id, cases=cases)]
+
+    asyncio.run(collect())
+    return opened.get("track")
+
+
+def _phone_case(case_id, **extra):
+    return {"id": case_id, "idx": 1, "name": case_id, "goal": "g", "enabled": True,
+            "tags": [], "dataset": None, "url": None, "suite_kind": "mobile", **extra}
+
+
+def test_an_execution_is_filed_on_the_track_of_the_set_it_ran():
+    """Copied when it starts, like kind and os: the set may be deleted later,
+    and the execution must stay on its tab."""
+    suite = {"id": "m", "name": "Uçuş", "kind": "mobile", "track": "donusum",
+             "cases": [_phone_case("c1")]}
+    assert _track_of_execution("m", suite=suite) == "donusum"
+
+
+def test_a_hand_picked_execution_is_filed_where_its_first_scenario_came_from():
+    cases = [_phone_case("c1", suite_track="redesign"), _phone_case("c2", suite_track="donusum")]
+    assert _track_of_execution(cases=cases) == "redesign"
 
 
 # --- scenario steps -------------------------------------------------------

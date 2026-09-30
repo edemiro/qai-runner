@@ -35,6 +35,9 @@ export function PlatformTabs({
   // lighter so the two read as a question and a follow-up rather than as two
   // competing choices.
   sub = false,
+  // What a screen reader announces the strip as, for a strip that is neither
+  // the platform nor the OS.
+  label = null,
 }) {
   const tabs = useRef([]);
   const fallback = options[0]?.id;
@@ -59,7 +62,7 @@ export function PlatformTabs({
     <div
       className={`platform-tabs ${sub ? 'sub' : ''}`}
       role="tablist"
-      aria-label={sub ? 'Operating system' : 'Platform'}
+      aria-label={label || (sub ? 'Operating system' : 'Platform')}
       onKeyDown={disabled ? undefined : onKeyDown}
     >
       {options.map(({ id, label, icon: Icon }, i) => {

@@ -26,3 +26,6 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+
+# One person's Claude Code permissions, not the team's
+.claude/settings.local.json

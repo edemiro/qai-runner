@@ -127,6 +127,8 @@ cd backend && python main.py          # http://127.0.0.1:8000  (/docs API dökü
 cd frontend && npm run dev            # http://localhost:5173
 ```
 
+Backend bir `.py` dosyası değişince birkaç saniye içinde kendini yeniden başlatır; elle yeniden başlatmak gerekmez. Windows'ta bu uvicorn'un kendi reload'u ile değil `watchfiles` ile yapılır: uvicorn, Windows'ta yeniden yüklenen sunucuyu alt süreç açamayan bir event loop'la çalıştırır, Playwright ise tarayıcı sürücüsünü alt süreç olarak başlatır — öyle olsaydı her web sayfası `NotImplementedError` ile açılamazdı. Yeniden başlama o an süren koşuları keser.
+
 Sonra arayüzde:
 
 1. **Settings** → **Model provider** kartından Gemini / Claude / ChatGPT'den birini seçin, API anahtarını girin, *Test connection* ile doğrulayıp kaydedin. Anahtarlar sağlayıcı başına saklanır — sonradan aralarında geçiş yaparken yeniden yazmanız gerekmez.
@@ -183,9 +185,10 @@ Hepsi `backend/.env` üzerinden ([`config.py`](backend/config.py)):
 | `GEMINI_API_KEY` | — | Sadece kullandığınız sağlayıcı(lar) için gerekli. |
 | `ANTHROPIC_API_KEY` | — | Anahtarlar sağlayıcı başına saklanır; geçiş yapmak diğerlerini silmez. |
 | `OPENAI_API_KEY` | — | |
-| `APPIUM_HOST` | `http://localhost:4723` | Appium başka porttaysa. |
+| `APPIUM_HOST` | `http://127.0.0.1:4723` | Appium başka porttaysa. QAi'nin başlattığı Appium yalnızca `127.0.0.1`'i dinler ve CORS kapalıdır: tarayıcı Appium'a hiç bağlanmaz, backend sunucudan sunucuya konuşur. |
 | `MAX_AGENT_STEPS` | `40` | Sunucu tarafı mutlak adım tavanı. |
 | `ALLOWED_ORIGINS` | Vite portları | CORS. Wildcard **kullanmayın** — herhangi bir web sitesi telefonunuzu sürebilir hale gelir. |
+| `ALLOWED_HOSTS` | — | Backend'e `localhost` ve `127.0.0.1` dışında bir adla erişiliyorsa o ad (virgülle ayrılmış). Başka bir adla gelen istek reddedilir: bu, bir sitenin kendi adını bu makineye yönlendirip (DNS rebinding) backend'i kullanmasını engeller. |
 
 Frontend `VITE_API_BASE` ile backend adresini değiştirebilir (varsayılan `http://localhost:8000`).
 

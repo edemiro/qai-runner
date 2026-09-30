@@ -1,9 +1,10 @@
 /* ==========================================================================
    Bug Report
-   The page's own sheet, for the one thing only this page has: the row that
-   carries the search and the status chips together, over the list they both
-   narrow. Everything else here — the list, the detail, the badges — is shared
-   furniture and is left in App.css, where the other pages read it from.
+   The page's own sheet, for what only this page has: the row that carries the
+   search and the status chips together, the bugs grouped under their Test
+   Set, and the detail read as labelled parts. The badges and the bare list
+   item are shared furniture and are left in App.css, where the other pages
+   read them from.
 
    App.jsx pulls this page in before it imports App.css, so the shared sheet
    lands after this one in the bundle. Nothing here restates a shared rule at
@@ -72,4 +73,532 @@
 .bug-tools .segmented {
   height: var(--control-h);
   align-items: center;
+}
+
+/* --- the list, one group per Test Set ------------------------------------- */
+
+/* A hundred bugs in one column read as a hundred unrelated things. Grouped,
+   the page opens on a handful of lines — which area, how many, how many still
+   open — and the one being worked on unfolds. */
+.bug-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bug-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.bug-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bug-group-head:hover { background: var(--bg-hover); }
+.bug-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bug-group.open .bug-group-head { border-bottom: 1px solid var(--border-subtle); }
+
+.bug-group-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.bug-group.open .bug-group-chevron { transform: rotate(90deg); }
+
+.bug-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bug-group-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.bug-group-open {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
+.bug-group .bug-list {
+  gap: 2px;
+  padding: 6px;
+}
+
+/* Inside a group the rows are lines, not cards: the group is the card. */
+.bug-group .bug-item {
+  align-items: flex-start;
+  padding: 9px 10px;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+}
+
+.bug-group .bug-item-main { gap: 3px; }
+
+/* What is broken, in at most two lines. */
+.bug-group .bug-item-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+/* Where it was found, in one line under it. The whole name is on hover. */
+.bug-item-scenario {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bug-item-idx {
+  margin-right: 5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.bug-item-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex: none;
+}
+
+.bug-item-when {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* Dealt with: still here, so a fix that did not hold can be found, but quiet. */
+.bug-group .bug-item.settled { opacity: 0.58; }
+.bug-group .bug-item.settled:hover,
+.bug-group .bug-item.settled.active { opacity: 1; }
+
+/* Where a bug stands, as a dot the eye can run down a column of. */
+.bug-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--neutral);
+}
+
+.bug-dot.s-open { background: var(--danger); }
+.bug-dot.s-triaged { background: var(--warning); }
+.bug-dot.s-fixed { background: var(--success); }
+.bug-dot.s-not-a-bug { background: transparent; box-shadow: inset 0 0 0 1.5px var(--neutral); }
+
+/* --- the bug being read ---------------------------------------------------- */
+
+/* It stays in view while the list scrolls under it: picking the fortieth bug
+   of a set should not mean scrolling back up to read it. */
+.bugs-layout > .bug-detail {
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  gap: 14px;
+}
+
+.bug-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bug-detail-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.bug-detail-set {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.bug-detail-idx { font-variant-numeric: tabular-nums; }
+
+.bug-detail-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.bug-detail-scenario {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.bug-detail-scenario svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.bug-detail .bug-actions .bug-dot { margin-top: 0; }
+.bug-actions-gap { flex: 1 1 auto; }
+
+/* Sized to its words. Every select is full width by default, which took this
+   one's row for itself and left its status dot alone on the line above. */
+.bug-detail .bug-actions select {
+  width: auto;
+  min-width: 118px;
+  flex: none;
+}
+
+.bug-auto {
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* "This describes the run rather than the product" — said before the facts,
+   because it changes how every one of them should be read. */
+.bug-callout {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.bug-callout svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning-ink);
+}
+
+.bug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bug-section-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.bug-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bug-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+}
+
+/* Green for a step that held, red for the one that did not. */
+.bug-step-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success-ink);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.bug-step.failed { background: var(--danger-soft); }
+.bug-step.failed .bug-step-idx { background: var(--danger); color: var(--text-inverse); }
+
+.bug-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.bug-step-action {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.bug-step-expected {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.bug-step-expected-label {
+  margin-right: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--success-ink);
+}
+
+.bug-step.failed .bug-step-expected-label { color: var(--danger-ink); }
+
+.bug-events {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.bug-events > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.bug-events > summary::-webkit-details-marker { display: none; }
+
+.bug-events-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.bug-events[open] .bug-events-chevron { transform: rotate(90deg); }
+.bug-events > summary .tab-count { margin-left: 0; }
+.bug-events > summary .muted { font-weight: 400; }
+.bug-events > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bug-events.level-error .bug-events-title { color: var(--danger-ink); }
+.bug-events.level-warning .bug-events-title { color: var(--warning-ink); }
+
+.bug-events ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0 12px 10px;
+  list-style: none;
+}
+
+.bug-event {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bug-event-kind {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.bug-event-text {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.bug-event-url {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* Whatever the parts above did not recognise, whole and in plain type. */
+.bug-rest {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bug-shot-button { align-self: flex-start; }
+
+/* The scenarios one error was found in, each opening its own bug. */
+.bug-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+  list-style: none;
+}
+
+.bug-member {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bug-member:hover { background: var(--bg-hover); }
+.bug-member:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.bug-member-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bug-member-name {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.bug-member-step {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bug-member-go {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+/* Back from one of them to the error they share. */
+.bug-back {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px 10px 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.bug-back:hover { background: var(--bg-hover); color: var(--text-primary); }
+.bug-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.bug-foot {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* One column: the pane follows the list rather than sitting beside it, so it
+   has nothing to stay in view over. And the status chips wrap here, so the
+   row gives up the one-line height it keeps beside the search — held at 34px,
+   the second line of chips slid under the first group. */
+@media (max-width: 720px) {
+  .bugs-layout > .bug-detail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .bug-tools .segmented { height: auto; }
+}
+
+/* A phone: labels over their values, and a row's badges on a line of their
+   own under its title rather than squeezing it to a word per line. The title
+   keeps its dot: sized from nothing, it takes what is left of the first line
+   instead of wrapping below it. */
+@media (max-width: 560px) {
+  .bug-group .bug-item { flex-wrap: wrap; row-gap: 6px; }
+  .bug-group .bug-item-main { flex: 1 1 0; }
+  .bug-item-side {
+    flex: 1 0 100%;
+    flex-direction: row;
+    align-items: center;
+    padding-left: 18px;
+  }
+  .bug-events > summary .muted { display: none; }
 }

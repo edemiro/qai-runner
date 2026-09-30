@@ -10,7 +10,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
 
 from config import DB_PATH
 
@@ -240,6 +240,9 @@ CREATE TABLE IF NOT EXISTS test_data (
 # Columns added after the first release. SQLite cannot express "add if missing"
 # in DDL, so they are applied one at a time against the live table.
 MIGRATIONS = [
+    # When a video began, so a step's place in it is its start time minus
+    # this (see recording.py). Null for anything that is not a video.
+    ("artifacts", "started_at", "REAL"),
     ("suites", "module", "TEXT"),
     # What the run actually cost the model quota. Cache reads and writes are
     # kept apart from fresh input: a cached prompt is billed at a fraction, so
@@ -290,8 +293,9 @@ MIGRATIONS = [
     # it — but a pass rate that counts it as a failure describes the site's
     # bot protection, not the product under test.
     ("runs", "blocked", "INTEGER NOT NULL DEFAULT 0"),
-    # Positive / Negative / Boundary. A suite of happy paths proves the feature
-    # works when used correctly and nothing about what happens when it is not.
+    # Positive / Negative / Boundary / Edge Case. A suite of happy paths proves
+    # the feature works when used correctly and nothing about what happens when
+    # it is not.
     ("suite_cases", "scenario_type", "TEXT"),
     # The state the scenario needs before its first step: signed in as whom,
     # which data already exists, what the previous search left behind. Without
@@ -332,6 +336,12 @@ MIGRATIONS = [
     # see. Stored as JSON on the case: a step has no identity of its own and is
     # only ever read with the scenario it belongs to.
     ("suite_cases", "steps", "TEXT"),
+    # Redesign or Dönüşüm (see TRACKS). The default is what every row that
+    # predates the split gets: all of that work was Dönüşüm. A new set says
+    # which it is when it is created, and an execution copies it from its sets
+    # when it starts, for the same reason it copies kind and os.
+    ("suites", "track", "TEXT NOT NULL DEFAULT 'donusum'"),
+    ("suite_runs", "track", "TEXT NOT NULL DEFAULT 'donusum'"),
 ]
 
 
@@ -384,14 +394,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
     """Add columns introduced after a database was first created."""
+    # First, because it rebuilds suite_runs from its original columns: run
+    # after the loop, it threw away every column the loop had just added to
+    # that table — kind, os, track — and the backfill below then failed on the
+    # kind it was about to fill.
+    _detach_executions_from_suites(conn)
     for table, column, coltype in MIGRATIONS:
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
-    _detach_executions_from_suites(conn)
     _backfill_execution_kind(conn)
     _backfill_execution_os(conn)
     _backfill_bug_kind(conn)
+    _backfill_bug_sources(conn)
 
 
 def _backfill_execution_os(conn: sqlite3.Connection) -> None:
@@ -420,6 +435,31 @@ def _backfill_bug_kind(conn: sqlite3.Connection) -> None:
                (SELECT r.kind FROM runs r WHERE r.id = bugs.run_id),
                'web')
            WHERE kind IS NULL"""
+    )
+
+
+def _backfill_bug_sources(conn: sqlite3.Connection) -> None:
+    """Give a bug the execution and the Test Set it came from, where the run
+    and the scenario still say.
+
+    Bug Report groups bugs under their Test Set, and 47 of 107 web bugs could
+    name their scenario but not its set: the runner copied the set's name off
+    the case, and a case read out of its own set does not carry it — only one
+    picked into an execution by hand does. Nor was the execution kept on any
+    bug the runner filed. Copied while the sources exist, for the reason the
+    names are copied at all; what can no longer be found stays empty.
+    """
+    conn.execute(
+        """UPDATE bugs SET suite_run_id = (
+               SELECT r.suite_run_id FROM runs r WHERE r.id = bugs.run_id)
+           WHERE suite_run_id IS NULL AND run_id IS NOT NULL"""
+    )
+    conn.execute(
+        """UPDATE bugs SET suite_name = COALESCE(
+               (SELECT s.name FROM suite_cases c JOIN suites s ON s.id = c.suite_id
+                 WHERE c.id = bugs.case_id),
+               (SELECT sr.name FROM suite_runs sr WHERE sr.id = bugs.suite_run_id))
+           WHERE suite_name IS NULL"""
     )
 
 
@@ -522,10 +562,16 @@ def create_run(
     suite_run_id: Optional[str] = None,
     case_id: Optional[str] = None,
     dataset_row: Optional[Dict[str, Any]] = None,
+    # The store keys the run was handed — see `_secrets_for`.
+    store_keys: Iterable[str] = (),
 ) -> str:
     run_id = uuid.uuid4().hex[:16]
-    title = goal.strip().split("\n")[0][:80] or "Untitled run"
     with _connect() as conn:
+        # Named rather than spelled, like everything else a run keeps: the goal
+        # arrives with the store already filled in, and the title is read off
+        # it into every list of runs.
+        goal = _named(goal, _secrets_for(conn, store_keys))
+        title = goal.strip().split("\n")[0][:80] or "Untitled run"
         conn.execute(
             """INSERT INTO runs (id, title, goal, status, platform, device_name,
                                  device_udid, app_id, model, started_at,
@@ -546,6 +592,7 @@ def finish_run(
     error: Optional[str] = None,
     verdict_note: Optional[str] = None,
     blocked: bool = False,
+    store_keys: Iterable[str] = (),
 ) -> None:
     with _connect() as conn:
         if status == "passed":
@@ -572,6 +619,10 @@ def finish_run(
                     f"Step {red['idx']} did not pass: "
                     f"{red['message'] or 'no reason was given'}"
                 )
+        # A reason can quote what was typed or looked for, and the run was
+        # handed the store's values filled in.
+        secrets = _secrets_for(conn, store_keys)
+        error, verdict_note = _named(error, secrets), _named(verdict_note, secrets)
         conn.execute(
             # COALESCE on the error too, not only the note: a run is finished
             # twice — the agent closes it with the reason it failed, then the
@@ -701,6 +752,65 @@ def _secrets(conn) -> List[Any]:
     return conn.execute("SELECT key, value FROM test_data WHERE secret = 1").fetchall()
 
 
+# From this length a secret is named wherever it is spelled out; below it,
+# only where it stands as a word of its own (see `_named`).
+LONG_SECRET = 6
+
+
+def _secrets_for(conn, store_keys: Iterable[str] = ()) -> List[Any]:
+    """The secrets to name in a run's own words: every long one, and a short
+    one only when the run was handed it.
+
+    A card number spelled out is that card, whoever typed it. "240" is a CVV
+    only in a run that filled `{{kart.cvv}}` in; anywhere else it is a price,
+    a page number, a seat count. Named everywhere, it rewrote "240 TL" in run
+    titles, and the `?page=240` a proposed scenario was then saved with.
+    """
+    keys = set(store_keys or ())
+    return [row for row in _secrets(conn)
+            if len(str(row["value"] or "")) >= LONG_SECRET or row["key"] in keys]
+
+
+def referenced_keys(*parts: Any) -> Set[str]:
+    """Every `{{key}}` named anywhere in `parts` — text, steps, recordings."""
+    keys: Set[str] = set()
+
+    def walk(value):
+        if isinstance(value, str):
+            keys.update(PLACEHOLDER.findall(value))
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    for part in parts:
+        walk(part)
+    return keys
+
+
+def named(text: Optional[str], store_keys: Iterable[str] = ()) -> Optional[str]:
+    """`text` with the secrets named that a run handed `store_keys` would
+    have named — the rule `create_run` and `finish_run` follow, for text that
+    goes out rather than into the database."""
+    if not text:
+        return text
+    with _connect() as conn:
+        return _named(text, _secrets_for(conn, store_keys))
+
+
+def test_data_secrets(store_keys: Iterable[str] = ()) -> List[Dict[str, Any]]:
+    """The secrets to name in what the server streams out for a run handed
+    `store_keys` — the same ones its record names (`_secrets_for`).
+
+    Read once per stream rather than per line: a run streams a line per
+    model token.
+    """
+    with _connect() as conn:
+        return [dict(row) for row in _secrets_for(conn, store_keys)]
+
+
 def _named(text: Optional[str], secrets) -> Optional[str]:
     """`text` with each secret in it replaced by the store's name for it."""
     if not text:
@@ -711,14 +821,19 @@ def _named(text: Optional[str], secrets) -> Optional[str]:
         if not spelled:
             continue
         name = "{{" + row["key"] + "}}"
-        if len(spelled) >= 6:
+        if len(spelled) >= LONG_SECRET:
             out = out.replace(spelled, name)
         else:
             # A short secret — a CVV — only where it stands as a word of its
             # own. "123" inside 1123 is not a card; "Type 123 into the
             # security code field" is, and that sentence is what a scenario
             # step becomes once the store has been filled into it.
-            out = re.sub(rf"\b{re.escape(spelled)}\b", name, out)
+            #
+            # Written as "no word character either side" rather than \b: \b
+            # needs a word character beside a secret's edge, so one that
+            # starts or ends in a mark — "P@ss!", "+90" — was named only when
+            # a letter touched it, and spelled out when it stood alone.
+            out = re.sub(rf"(?<!\w){re.escape(spelled)}(?!\w)", name, out)
     return out
 
 
@@ -885,9 +1000,22 @@ def list_runs(
                       -- with both the detail view and the run's own verdict.
                       (SELECT COUNT(*) FROM page_events e
                         WHERE e.run_id = r.id AND e.level = 'error'
-                          AND e.third_party = 0) AS page_error_count
+                          AND e.third_party = 0) AS page_error_count,
+                      -- A written scenario is judged on its own steps, not on
+                      -- the clicks under them: every click can pass while the
+                      -- step they served fails, and "8/8" beside a red verdict
+                      -- read as a contradiction on every failed row.
+                      (SELECT COUNT(*) FROM scenario_steps ss
+                        WHERE ss.run_id = r.id) AS scenario_total,
+                      (SELECT COUNT(*) FROM scenario_steps ss
+                        WHERE ss.run_id = r.id AND ss.status = 'passed') AS scenario_passed,
+                      -- The execution it belonged to, by name, so the list can
+                      -- be read an execution at a time.
+                      sr.name AS suite_run_name,
+                      sr.started_at AS suite_run_started_at
                FROM runs r
-               LEFT JOIN suite_cases c ON c.id = r.case_id"""
+               LEFT JOIN suite_cases c ON c.id = r.case_id
+               LEFT JOIN suite_runs sr ON sr.id = r.suite_run_id"""
     where, params = [], []
     _kind_filter("r.kind", kind, where, params)
     _run_os_filter("r.platform", os, where, params, kind)
@@ -917,7 +1045,59 @@ def list_runs(
 
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
-    return [_row_to_run(row) for row in rows]
+        runs = [_row_to_run(row) for row in rows]
+        # How many runs each execution on this page holds in all. A page of
+        # fifty can end halfway through an execution of fifty-six, and a group
+        # heading that counted only what was loaded would call it complete.
+        executions = sorted({run["suite_run_id"] for run in runs if run.get("suite_run_id")})
+        sizes: Dict[str, int] = {}
+        if executions:
+            marks = ",".join("?" * len(executions))
+            sizes = {
+                row["suite_run_id"]: row["n"]
+                for row in conn.execute(
+                    f"SELECT suite_run_id, COUNT(*) AS n FROM runs"
+                    f" WHERE suite_run_id IN ({marks}) GROUP BY suite_run_id",
+                    executions,
+                ).fetchall()
+            }
+    for run in runs:
+        run["suite_run_size"] = sizes.get(run.get("suite_run_id")) if run.get("suite_run_id") else None
+    return runs
+
+
+def failure_evidence(run_ids: List[str]) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    """The failed scenario steps and failed driver actions of these runs.
+
+    What a list needs to say why each run failed without opening it — only the
+    failures, and never a screenshot: a row of fifty runs does not need the
+    passing steps or the frames of any of them.
+    """
+    wanted = [run_id for run_id in dict.fromkeys(run_ids) if run_id]
+    found: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+        run_id: {"scenarioSteps": [], "steps": []} for run_id in wanted
+    }
+    if not wanted:
+        return found
+    marks = ",".join("?" * len(wanted))
+    with _connect() as conn:
+        for row in conn.execute(
+            f"""SELECT run_id, idx, action, expected, status, message
+                  FROM scenario_steps
+                 WHERE run_id IN ({marks}) AND status = 'failed'
+                 ORDER BY run_id, idx""",
+            wanted,
+        ).fetchall():
+            found[row["run_id"]]["scenarioSteps"].append(dict(row))
+        for row in conn.execute(
+            f"""SELECT run_id, idx, action, target, status, message, scenario_idx
+                  FROM steps
+                 WHERE run_id IN ({marks}) AND status = 'failed'
+                 ORDER BY run_id, idx""",
+            wanted,
+        ).fetchall():
+            found[row["run_id"]]["steps"].append(dict(row))
+    return found
 
 
 def get_run(run_id: str, include_screenshots: bool = False) -> Optional[Dict[str, Any]]:
@@ -926,6 +1106,11 @@ def get_run(run_id: str, include_screenshots: bool = False) -> Optional[Dict[str
         if row is None:
             return None
         run = _row_to_run(row)
+        # The execution's name, for the report to say which one it came from.
+        execution = conn.execute(
+            "SELECT name FROM suite_runs WHERE id = ?", (run.get("suite_run_id"),)
+        ).fetchone() if run.get("suite_run_id") else None
+        run["suite_run_name"] = execution["name"] if execution else None
         step_rows = conn.execute(
             "SELECT * FROM steps WHERE run_id = ? ORDER BY idx ASC", (run_id,)
         ).fetchall()
@@ -1186,10 +1371,14 @@ def list_bugs(
     # stored again: bugs carry the run, and the run carries what the driver
     # reported. One filed by hand has no run and so no OS, which puts it on
     # both sub-tabs — the same rule everything else here follows.
+    # The scenario's number is read from the scenario while it exists — it is
+    # how the Test Sets page names it — and simply left off once it is gone.
     query = ("SELECT b.*,"
              "       CASE WHEN LOWER(COALESCE(r.platform, '')) IN ('ios', 'android')"
-             "            THEN LOWER(r.platform) END AS os"
-             "  FROM bugs b LEFT JOIN runs r ON r.id = b.run_id")
+             "            THEN LOWER(r.platform) END AS os,"
+             "       sc.idx AS case_idx"
+             "  FROM bugs b LEFT JOIN runs r ON r.id = b.run_id"
+             "  LEFT JOIN suite_cases sc ON sc.id = b.case_id")
     where, params = [], []
     _kind_filter("b.kind", kind, where, params)
     _bug_os_filter(os, where, params, kind)
@@ -1354,6 +1543,11 @@ def add_page_events(run_id: str, events: List[Dict[str, Any]], step_idx: Optiona
         return 0
     now = time.time()
     with _connect() as conn:
+        # Named like the steps are (see `add_step`): a page that logs the card
+        # it was just given, or puts it in a request URL, would otherwise carry
+        # it into the report, the JUnit file and the bug draft. Named before
+        # the text is cut short, so the cut cannot leave half a card behind.
+        secrets = _secrets(conn)
         conn.executemany(
             """INSERT INTO page_events (run_id, step_idx, kind, level, text, url, status,
                                         created_at, resource_type, third_party)
@@ -1364,8 +1558,8 @@ def add_page_events(run_id: str, events: List[Dict[str, Any]], step_idx: Optiona
                     event.get("stepIdx", step_idx),
                     event.get("kind", "console"),
                     event.get("level"),
-                    (event.get("text") or "")[:2000],
-                    event.get("url"),
+                    (_named(event.get("text"), secrets) or "")[:2000],
+                    _named(event.get("url"), secrets),
                     event.get("status"),
                     event.get("at", now),
                     event.get("resourceType"),
@@ -1375,6 +1569,19 @@ def add_page_events(run_id: str, events: List[Dict[str, Any]], step_idx: Optiona
             ],
         )
     return len(events)
+
+
+def named_page_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`events` as `add_page_events` keeps them, for showing them live."""
+    with _connect() as conn:
+        secrets = _secrets(conn)
+    if not secrets:
+        return events
+    return [
+        {**event, **{field: _named(event[field], secrets)
+                     for field in ("text", "url") if event.get(field)}}
+        for event in events
+    ]
 
 
 def list_page_events(run_id: str) -> List[Dict[str, Any]]:
@@ -1396,13 +1603,14 @@ def list_page_events(run_id: str) -> List[Dict[str, Any]]:
 
 def add_artifact(
     run_id: str, kind: str, path: str, label: Optional[str] = None,
-    size_bytes: Optional[int] = None,
+    size_bytes: Optional[int] = None, started_at: Optional[float] = None,
 ) -> int:
     with _connect() as conn:
         cursor = conn.execute(
-            """INSERT INTO artifacts (run_id, kind, label, path, size_bytes, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (run_id, kind, label, path, size_bytes, time.time()),
+            """INSERT INTO artifacts (run_id, kind, label, path, size_bytes, created_at,
+                                      started_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, kind, label, path, size_bytes, time.time(), started_at),
         )
         return cursor.lastrowid
 
@@ -1439,25 +1647,45 @@ def clean_os(value: Optional[str], kind: str = "mobile") -> Optional[str]:
     return os_name if os_name in MOBILE_OS else None
 
 
+# Which of the two programmes a set belongs to: the redesigned site, or the
+# transformation work every set before the split was written for. A new set
+# goes to Redesign, the tab the pages open on; every set and execution that
+# existed before the split is Dönüşüm (see the migration).
+TRACKS = ("redesign", "donusum")
+DEFAULT_TRACK = "redesign"
+
+
+def clean_track(value: Optional[str]) -> Optional[str]:
+    """"redesign" or "donusum", however it was spelt, or None if it is neither."""
+    name = (value or "").strip().lower()
+    for turkish, plain in (("ö", "o"), ("ü", "u"), ("ş", "s")):
+        name = name.replace(turkish, plain)
+    return name if name in TRACKS else None
+
+
 def create_suite(
     name: str, description: Optional[str] = None, kind: str = "web",
     tags: Optional[List[str]] = None, module: Optional[str] = None,
-    os: Optional[str] = None,
+    os: Optional[str] = None, track: Optional[str] = None,
 ) -> str:
     suite_id = uuid.uuid4().hex[:16]
     module = " ".join((module or "").split())[:80] or None
     with _connect() as conn:
         conn.execute(
-            """INSERT INTO suites (id, name, description, kind, tags, module, os, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO suites (id, name, description, kind, tags, module, os, track, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (suite_id, name[:120], description, kind, _dump_tags(tags), module,
-             clean_os(os, kind), time.time()),
+             clean_os(os, kind), clean_track(track) or DEFAULT_TRACK, time.time()),
         )
     return suite_id
 
 
 def update_suite(suite_id: str, **fields: Any) -> bool:
-    allowed = {"name", "description", "kind", "module", "os"}
+    allowed = {"name", "description", "kind", "module", "os", "track"}
+    # Not written at all rather than written as nothing: a misspelt track would
+    # otherwise move the set onto a tab that does not exist.
+    if "track" in fields:
+        fields["track"] = clean_track(fields["track"])
     sets, values = [], []
     for key, value in fields.items():
         if key in allowed and value is not None:
@@ -2241,7 +2469,33 @@ def lend_recordings(cases: List[Dict[str, Any]]) -> int:
     return lent
 
 
-def promote_recording(run_id: str, case_id: str) -> int:
+def _where_it_ran(
+    steps: List[Dict[str, Any]], ran_steps: Optional[List[Dict[str, Any]]],
+) -> Dict[int, int]:
+    """Each of the scenario's steps now, by position, and where the run that
+    carried out `ran_steps` had it.
+
+    The same place, unless the scenario was edited while the run was going.
+    Then a step put in at the top took the recording of the step the run had
+    carried out there, and the next run "verified" it without ever carrying
+    it out. Matched on what the step says, as drop_stale_recordings matches;
+    a step the run never had keeps whatever it has.
+    """
+    if ran_steps is None:
+        return {position: position for position in range(1, len(steps) + 1)}
+    free: Dict[Any, List[int]] = {}
+    for position, step in enumerate(ran_steps, start=1):
+        free.setdefault((step.get("action"), step.get("expected")), []).append(position)
+    where = {}
+    for position, step in enumerate(steps, start=1):
+        slots = free.get((step.get("action"), step.get("expected")))
+        if slots:
+            where[position] = slots.pop(0)
+    return where
+
+
+def promote_recording(run_id: str, case_id: str,
+                      ran_steps: Optional[List[Dict[str, Any]]] = None) -> int:
     """Keep what worked, step by step.
 
     Every execution re-derived the same clicks from the same screens: a
@@ -2346,15 +2600,19 @@ def promote_recording(run_id: str, case_id: str) -> int:
             "SELECT s.kind FROM suite_cases c JOIN suites s ON s.id = c.suite_id"
             " WHERE c.id = ?", (case_id,)).fetchone() or {"kind": ""})["kind"] == "mobile"
 
+        where = _where_it_ran(steps, ran_steps)
         kept = 0
         for position, step in enumerate(steps, start=1):
+            ran_at = where.get(position)
+            if ran_at is None:
+                continue
             proved = (
-                verdicts.get(position, "passed" if run["status"] == "passed" else "failed")
+                verdicts.get(ran_at, "passed" if run["status"] == "passed" else "failed")
                 == "passed"
-                and position not in spoiled
+                and ran_at not in spoiled
             )
             recorded = named_not_spelled(
-                clean_recorded(by_step.get(position) or [], on_a_phone), step, store)
+                clean_recorded(by_step.get(ran_at) or [], on_a_phone), step, store)
             if recorded and holds_a_secret(recorded, secrets):
                 # Written down, and not ours to write down. The step costs a
                 # model call every run, which is the price of not keeping a
@@ -2375,7 +2633,7 @@ def promote_recording(run_id: str, case_id: str) -> int:
                 step["recorded"] = recorded
                 kept += 1
                 continue
-            if position in disproved:
+            if ran_at in disproved:
                 step.pop("recorded", None)
 
         conn.execute(
@@ -2427,7 +2685,8 @@ def cases_by_id(case_ids: List[str]) -> List[Dict[str, Any]]:
             # by hand has no set of its own to ask, and without the OS it lands
             # on neither phone tab — or, because an execution that does not say
             # shows on both, on both at once.
-            f"""SELECT c.*, s.name AS suite_name, s.kind AS suite_kind, s.os AS suite_os
+            f"""SELECT c.*, s.name AS suite_name, s.kind AS suite_kind, s.os AS suite_os,
+                       s.track AS suite_track
                 FROM suite_cases c LEFT JOIN suites s ON s.id = c.suite_id
                 WHERE c.id IN ({marks})""",
             wanted,
@@ -2445,12 +2704,15 @@ def create_suite_run(
     sources: Optional[List[Dict[str, Any]]] = None,
     kind: Optional[str] = None,
     os: Optional[str] = None,
+    track: Optional[str] = None,
 ) -> str:
     """Open an execution.
 
     `sources` records every Test Set that fed it, because an execution can be
     assembled from more than one. `name` is stored rather than looked up so the
-    record still reads correctly after those sets are gone.
+    record still reads correctly after those sets are gone. `track` is copied
+    for the same reason: the tab an execution is read on must not depend on a
+    set that may since have been deleted.
     """
     suite_run_id = uuid.uuid4().hex[:16]
     contributing = sources or ([{"suite_id": suite_id}] if suite_id else [])
@@ -2468,14 +2730,15 @@ def create_suite_run(
             source["suite_name"] = label
 
         conn.execute(
-            """INSERT INTO suite_runs (id, suite_id, name, kind, os, status, workers, started_at)
-               VALUES (?, ?, ?, ?, ?, 'running', ?, ?)""",
+            """INSERT INTO suite_runs (id, suite_id, name, kind, os, track, status, workers, started_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)""",
             (
                 suite_run_id,
                 suite_id or (contributing[0].get("suite_id") if contributing else None),
                 name or " + ".join(dict.fromkeys(labels)) or "Execution",
                 kind or "web",
                 clean_os(os, kind or "web"),
+                clean_track(track) or DEFAULT_TRACK,
                 workers,
                 time.time(),
             ),
@@ -2819,13 +3082,16 @@ def delete_test_data(key: str) -> bool:
             "DELETE FROM test_data WHERE key = ?", (key,)).rowcount > 0
 
 
-def test_data_values() -> Dict[str, str]:
+def test_data_values(secrets: bool = True) -> Dict[str, str]:
     """The store as a plain mapping, for filling {{placeholders}}.
 
     Unmasked by definition — this is what the run actually types in — and
     deliberately a separate call from the one the UI lists with, so reading the
-    store for display can never hand back a secret by accident.
+    store for display can never hand back a secret by accident. `secrets=False`
+    leaves the secrets out, for filling in something the browser is shown.
     """
     with _connect() as conn:
-        rows = conn.execute("SELECT key, value FROM test_data").fetchall()
+        rows = conn.execute(
+            "SELECT key, value FROM test_data" + ("" if secrets else " WHERE secret = 0")
+        ).fetchall()
     return {row["key"]: row["value"] for row in rows}

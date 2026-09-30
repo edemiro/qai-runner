@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Bug, Camera, ChevronRight, ExternalLink, Loader2, Search, Trash2,
+  AlertTriangle, Bug, Camera, ChevronLeft, ChevronRight, ExternalLink, Folder, Layers,
+  ListChecks, Loader2, Search, Trash2,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -26,6 +27,31 @@ const STATUS_LABEL = {
   'not-a-bug': 'Not a bug',
 };
 
+// Dealt with, one way or another. Still listed — a fix that did not hold is
+// found by looking here — but quieter than the ones that need someone.
+const SETTLED = new Set(['fixed', 'closed', 'not-a-bug']);
+
+// A row standing for several bugs takes the state of the one that most needs
+// someone, and the severity of the worst.
+const STATUS_URGENCY = ['open', 'triaged', 'fixed', 'closed', 'not-a-bug'];
+const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+
+// Bugs whose scenario belonged to no Test Set: raised from a chat run, or by
+// hand with nothing to point back to.
+const NO_SET = 'Outside any Test Set';
+
+/* The labelled parts of a bug's body, in the order a reader wants them: what
+   should have happened and what did first, then why the tool thinks so, then
+   where. Each label has its own colour so the eye finds "Actual" without
+   reading the others. */
+const FACTS = [
+  { key: 'expected', label: 'Expected', tone: 'success' },
+  { key: 'actual', label: 'Actual', tone: 'danger' },
+  { key: 'failing', label: 'Failing action', tone: 'warning' },
+  { key: 'cause', label: 'Cause', tone: 'purple' },
+  { key: 'where', label: 'Where', tone: 'info' },
+];
+
 function when(seconds) {
   if (!seconds) return '—';
   // The reader's own locale, not one written into the source. Pinned to
@@ -34,6 +60,77 @@ function when(seconds) {
   return new Date(seconds * 1000).toLocaleString(undefined, {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
   });
+}
+
+// The end of a span that began the same day needs only its time.
+function until(first, last) {
+  if (!last || last <= first) return '';
+  const start = new Date(first * 1000);
+  const end = new Date(last * 1000);
+  const sameDay = start.toDateString() === end.toDateString();
+  return ` – ${sameDay
+    ? end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : when(last)}`;
+}
+
+function severityLabel(severity) {
+  return severity[0].toUpperCase() + severity.slice(1).toLowerCase();
+}
+
+/* One group per Test Set — which is also what its executions are named
+   after — in the order of each set's newest bug, so the set that just broke
+   is the one on top. A flat list of a hundred bugs read as a hundred
+   unrelated things; most of them are a handful of areas breaking in a
+   handful of ways. Within a set the ones still needing someone come first,
+   newest first; the settled ones follow, so closing fourteen stale bugs does
+   not leave them sitting over the one that is real. */
+function groupBugs(bugs) {
+  const groups = new Map();
+  for (const bug of bugs) {
+    const name = bug.suite_name || NO_SET;
+    if (!groups.has(name)) groups.set(name, { key: name, name, bugs: [], open: 0 });
+    const group = groups.get(name);
+    group.bugs.push(bug);
+    if (bug.status === 'open') group.open += 1;
+  }
+  for (const group of groups.values()) {
+    const same = new Map();
+    for (const bug of group.bugs) {
+      const key = sameErrorKey(bug);
+      if (!same.has(key)) same.set(key, []);
+      same.get(key).push(bug);
+    }
+    // Stable: the server's newest-first order holds within each half.
+    group.rows = [...same.values()].map(rowOf)
+      .sort((a, b) => Number(SETTLED.has(a.status)) - Number(SETTLED.has(b.status)));
+  }
+  return [...groups.values()];
+}
+
+/* One execution that failed fourteen scenarios on the same error filed
+   fourteen bugs, and the list showed fourteen identical rows. They are one
+   finding, so they are one row — but only within one execution: the same
+   words from two executions are two findings. Each bug is kept whole
+   underneath, with its own steps and screen, and is opened from the row. */
+function sameErrorKey(bug) {
+  if (!bug.suite_run_id) return `bug:${bug.id}`;
+  return `${bug.suite_run_id}::${bug.title.trim().toLowerCase().replace(/\s+/g, ' ')}`;
+}
+
+function rowOf(bugs) {
+  const lead = bugs[0];
+  if (bugs.length === 1) {
+    return { key: lead.id, bugs, lead, status: lead.status, severity: lead.severity, many: false };
+  }
+  const status = STATUS_URGENCY.find((s) => bugs.some((b) => b.status === s)) || lead.status;
+  const severity = bugs.map((b) => b.severity).filter(Boolean).sort(
+    (a, b) => (SEVERITY_RANK[b.toLowerCase()] || 0) - (SEVERITY_RANK[a.toLowerCase()] || 0),
+  )[0] || null;
+  return { key: sameErrorKey(lead), bugs, lead, status, severity, many: true };
+}
+
+function holds(row, key) {
+  return row.key === key || row.bugs.some((bug) => bug.id === key);
 }
 
 /* A screenshot belongs to its bug, so this panel is keyed by the bug at the
@@ -72,10 +169,380 @@ function BugShot({ bugId }) {
     return <span className="muted small">{state}</span>;
   }
   return (
-    <button className="btn btn-ghost btn-sm" onClick={load} disabled={state === 'loading'}>
+    <button className="btn btn-ghost btn-sm bug-shot-button" onClick={load}
+            disabled={state === 'loading'}>
       {state === 'loading' ? <Loader2 size={14} className="spin" /> : <Camera size={14} />}
       Show the screen
     </button>
+  );
+}
+
+/* A row says what is broken, then where it was found. The scenario used to be
+   the title — "Hotel - Guests | [Jolly: IST] adults per room 5 - raise
+   adults to the limit and control a… — step 4: Yetişkin…", 161 characters at
+   the median — and the defect was nowhere in it. */
+function BugRow({ bug, active, notApp, codeText, onSelect }) {
+  const scenario = bug.case_name || bug.parts?.fields?.scenario;
+  const settled = SETTLED.has(bug.status);
+  return (
+    <button
+      type="button"
+      className={`bug-item ${active ? 'active' : ''} ${settled ? 'settled' : ''}`}
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+    >
+      <span className={`bug-dot s-${bug.status}`} title={STATUS_LABEL[bug.status] || bug.status}>
+        <span className="visually-hidden">{STATUS_LABEL[bug.status] || bug.status}: </span>
+      </span>
+      <span className="bug-item-main">
+        <span className="bug-item-title">{bug.title}</span>
+        {scenario && (
+          <span className="bug-item-scenario" title={scenario}>
+            {bug.case_idx != null && <span className="bug-item-idx">#{bug.case_idx}</span>}
+            {scenario}
+          </span>
+        )}
+      </span>
+      <span className="bug-item-side">
+        {bug.severity && (
+          <span className={`priority-tag p-${bug.severity.toLowerCase()}`}>
+            {severityLabel(bug.severity)}
+          </span>
+        )}
+        {/* Only when the cause is the run's rather than the app's: saying
+            "expected result did not hold" on every row said nothing. */}
+        {notApp && <span className="bug-code soft" title={codeText}>Run issue</span>}
+        <span className="bug-item-when">{when(bug.created_at)}</span>
+      </span>
+    </button>
+  );
+}
+
+/* One error, several scenarios: the row says how many and which, and opens
+   the list of them. */
+function SameErrorRow({ row, active, notApp, codeText, onSelect }) {
+  const settled = SETTLED.has(row.status);
+  const numbers = row.bugs.map((bug) => bug.case_idx).filter((idx) => idx != null);
+  const names = row.bugs.map((bug) => bug.case_name || bug.parts?.fields?.scenario).filter(Boolean);
+  return (
+    <button
+      type="button"
+      className={`bug-item ${active ? 'active' : ''} ${settled ? 'settled' : ''}`}
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+    >
+      <span className={`bug-dot s-${row.status}`} title={STATUS_LABEL[row.status] || row.status}>
+        <span className="visually-hidden">{STATUS_LABEL[row.status] || row.status}: </span>
+      </span>
+      <span className="bug-item-main">
+        <span className="bug-item-title">{row.lead.title}</span>
+        <span className="bug-item-scenario" title={names.join('\n')}>
+          <span className="same-count">{row.bugs.length} scenarios</span>
+          {numbers.map((idx) => `#${idx}`).join(' · ')}
+        </span>
+      </span>
+      <span className="bug-item-side">
+        {row.severity && (
+          <span className={`priority-tag p-${row.severity.toLowerCase()}`}>
+            {severityLabel(row.severity)}
+          </span>
+        )}
+        {notApp && <span className="bug-code soft" title={codeText}>Run issue</span>}
+        <span className="bug-item-when">{when(row.lead.created_at)}</span>
+      </span>
+    </button>
+  );
+}
+
+/* What the scenarios share is said once — the error, why, where — and what
+   each has of its own, the steps and the screen, is one click further. */
+function SameErrorDetail({ row, meta, onStatus, onDelete, onPick }) {
+  const { lead, bugs } = row;
+  const fields = lead.parts?.fields || {};
+  const shared = FACTS.filter((fact) => ['actual', 'cause', 'where'].includes(fact.key)
+    && fields[fact.key] && fields[fact.key] !== '—');
+  const notes = new Set(bugs.map((bug) => bug.note || ''));
+  const note = notes.size === 1 ? lead.note : null;
+  const times = bugs.map((bug) => bug.created_at || 0);
+  const first = Math.min(...times);
+  const last = Math.max(...times);
+
+  return (
+    <>
+      <div className="bug-detail-head">
+        <div className="bug-detail-crumbs">
+          <span className="bug-detail-set"><Folder size={13} /> {lead.suite_name || NO_SET}</span>
+          <span>One execution · {when(first)}{until(first, last)}</span>
+        </div>
+        <h2 className="bug-detail-title">{lead.title}</h2>
+        <p className="bug-detail-scenario">
+          <Layers size={14} aria-hidden="true" />
+          <span>
+            The same error in {bugs.length} scenarios of one execution. Each keeps its own
+            steps and screen — open one below.
+          </span>
+        </p>
+      </div>
+
+      <div className="bug-actions">
+        <span className={`bug-dot s-${row.status}`} aria-hidden="true" />
+        <select
+          value={row.status}
+          onChange={(event) => onStatus(row, event.target.value)}
+          aria-label={`Status of all ${bugs.length} bugs`}
+        >
+          {(meta.statuses || []).map((value) => (
+            <option key={value} value={value}>{STATUS_LABEL[value] || value}</option>
+          ))}
+        </select>
+        <span className="muted small">for all {bugs.length}</span>
+        {row.severity && (
+          <span className={`priority-tag p-${row.severity.toLowerCase()}`}>
+            {severityLabel(row.severity)}
+          </span>
+        )}
+        {lead.parts?.autoRaised && (
+          <span className="bug-auto" title="Filed by the run when the scenarios failed, before anybody had read them.">
+            Auto-raised
+          </span>
+        )}
+        <span className="bug-actions-gap" />
+        <button className="btn btn-danger btn-sm" onClick={() => onDelete(row)}>
+          <Trash2 size={14} /> Delete all {bugs.length}
+        </button>
+      </div>
+
+      {(lead.parts?.notes || []).map((text) => (
+        <p key={text} className="bug-callout">
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>{text}</span>
+        </p>
+      ))}
+
+      {(shared.length > 0 || note) && (
+        <dl className="facts">
+          {note && (
+            <div className="fact">
+              <dt className="fact-label tone-accent">Note</dt>
+              <dd className="fact-value">{note}</dd>
+            </div>
+          )}
+          {shared.map((fact) => (
+            <div className="fact" key={fact.key}>
+              <dt className={`fact-label tone-${fact.tone}`}>{fact.label}</dt>
+              <dd className="fact-value">
+                <FactValue fact={fact} value={fields[fact.key]} bug={lead} meta={meta} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      <section className="bug-section">
+        <h3 className="bug-section-title">Affected scenarios ({bugs.length})</h3>
+        <ul className="bug-members">
+          {bugs.map((bug) => {
+            const failed = (bug.parts?.steps || []).find((step) => step.failed);
+            return (
+              <li key={bug.id}>
+                <button type="button" className="bug-member" onClick={() => onPick(bug.id)}>
+                  <span className={`bug-dot s-${bug.status}`} title={STATUS_LABEL[bug.status] || bug.status} />
+                  <span className="bug-member-main">
+                    <span className="bug-member-name">
+                      {bug.case_idx != null && <span className="bug-item-idx">#{bug.case_idx}</span>}
+                      {bug.case_name || bug.parts?.fields?.scenario || bug.title}
+                    </span>
+                    {failed && (
+                      <span className="bug-member-step" title={failed.action}>
+                        Step {failed.idx}: {failed.action}
+                      </span>
+                    )}
+                  </span>
+                  <span className="bug-item-when">{when(bug.created_at)}</span>
+                  <ChevronRight size={14} className="bug-member-go" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    </>
+  );
+}
+
+function FactValue({ fact, value, bug, meta }) {
+  if (fact.key === 'where' && /^https?:\/\//.test(value)) {
+    return <a href={value} target="_blank" rel="noreferrer">{value}</a>;
+  }
+  if (fact.key === 'cause') {
+    // The sentence, with the code on hover: the code is for grouping, the
+    // sentence is for reading.
+    const code = bug.code || value.split(' — ')[0];
+    const notApp = (meta.notAppDefects || []).includes(code);
+    return (
+      <>
+        <span title={code}>{meta.codes?.[code] || value}</span>
+        {notApp && <span className="fact-flag">Not an app defect</span>}
+      </>
+    );
+  }
+  if (fact.key === 'failing' && value.includes(' — ')) {
+    const [action, ...said] = value.split(' — ');
+    return (
+      <>
+        <code className="fact-code">{action}</code> {said.join(' — ')}
+      </>
+    );
+  }
+  return value;
+}
+
+function BugDetail({ bug, meta, onOpenRun, onStatus, onDelete, sameError = null, onBack = null }) {
+  const parts = bug.parts || {};
+  const fields = parts.fields || {};
+  const scenario = bug.case_name || fields.scenario;
+  const facts = FACTS.filter((fact) => fields[fact.key] && fields[fact.key] !== '—');
+  const steps = parts.steps || [];
+  const events = parts.events || [];
+
+  return (
+    <>
+      {sameError && onBack && (
+        <button type="button" className="bug-back" onClick={onBack}>
+          <ChevronLeft size={14} aria-hidden="true" />
+          One of {sameError.bugs.length} scenarios with this error
+        </button>
+      )}
+      <div className="bug-detail-head">
+        <div className="bug-detail-crumbs">
+          <span className="bug-detail-set"><Folder size={13} /> {bug.suite_name || NO_SET}</span>
+          {bug.case_idx != null && <span className="bug-detail-idx">#{bug.case_idx}</span>}
+        </div>
+        <h2 className="bug-detail-title">{bug.title}</h2>
+        {scenario && (
+          <p className="bug-detail-scenario">
+            <ListChecks size={14} aria-hidden="true" />
+            <span>{scenario}</span>
+          </p>
+        )}
+      </div>
+
+      <div className="bug-actions">
+        <span className={`bug-dot s-${bug.status}`} aria-hidden="true" />
+        <select
+          value={bug.status}
+          onChange={(event) => onStatus(bug, event.target.value)}
+          aria-label="Bug status"
+        >
+          {(meta.statuses || []).map((value) => (
+            <option key={value} value={value}>{STATUS_LABEL[value] || value}</option>
+          ))}
+        </select>
+        {bug.severity && (
+          <span className={`priority-tag p-${bug.severity.toLowerCase()}`}>
+            {severityLabel(bug.severity)}
+          </span>
+        )}
+        {parts.autoRaised && (
+          <span className="bug-auto" title="Filed by the run when the scenario failed, before anybody had read it.">
+            Auto-raised
+          </span>
+        )}
+        <span className="muted small">{when(bug.created_at)}</span>
+        <span className="bug-actions-gap" />
+        {onOpenRun && bug.run_id && (
+          <button className="btn btn-ghost btn-sm" onClick={() => onOpenRun(bug.run_id)}>
+            <ExternalLink size={14} /> Open the run
+          </button>
+        )}
+        <button className="btn btn-danger btn-sm" onClick={() => onDelete(bug)}>
+          <Trash2 size={14} /> Delete
+        </button>
+      </div>
+
+      {(parts.notes || []).map((note) => (
+        <p key={note} className="bug-callout">
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>{note}</span>
+        </p>
+      ))}
+
+      {(facts.length > 0 || bug.note) && (
+        <dl className="facts">
+          {bug.note && (
+            <div className="fact">
+              <dt className="fact-label tone-accent">Note</dt>
+              <dd className="fact-value">{bug.note}</dd>
+            </div>
+          )}
+          {facts.map((fact) => (
+            <div className="fact" key={fact.key}>
+              <dt className={`fact-label tone-${fact.tone}`}>{fact.label}</dt>
+              <dd className="fact-value">
+                <FactValue fact={fact} value={fields[fact.key]} bug={bug} meta={meta} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {steps.length > 0 && (
+        <section className="bug-section">
+          <h3 className="bug-section-title">Steps to reproduce</h3>
+          <ol className="bug-steps">
+            {steps.map((step) => (
+              <li key={step.idx} className={`bug-step ${step.failed ? 'failed' : ''}`}>
+                <span className="bug-step-idx">{step.idx}</span>
+                <div className="bug-step-body">
+                  <span className="bug-step-action">{step.action}</span>
+                  {step.expected && (
+                    <span className="bug-step-expected">
+                      <span className="bug-step-expected-label">Expected</span> {step.expected}
+                    </span>
+                  )}
+                </div>
+                <span className="visually-hidden">{step.failed ? 'failed' : 'passed'}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      {/* Folded: they are the evidence for a bug about a 404, and noise on
+          every other one — the page answers a dozen 4xx on a good day. */}
+      {events.map((section) => (
+        <details key={section.label} className={`bug-events level-${section.level}`}>
+          <summary>
+            <ChevronRight size={14} className="bug-events-chevron" aria-hidden="true" />
+            <span className="bug-events-title">
+              {section.level === 'error' ? 'Page errors' : 'Page warnings'}
+            </span>
+            <span className="tab-count">{section.count || section.items.length}</span>
+            {section.level !== 'error' && (
+              <span className="muted small">They do not decide the verdict</span>
+            )}
+          </summary>
+          <ul>
+            {section.items.map((item, index) => (
+              <li key={`${index}-${item.text}`} className="bug-event">
+                <span className="bug-event-kind">{item.kind}</span>
+                <span className="bug-event-text">{item.text}</span>
+                {item.url && <span className="bug-event-url">{item.url}</span>}
+              </li>
+            ))}
+            {section.more && <li className="bug-event muted small">{section.more}</li>}
+          </ul>
+        </details>
+      ))}
+
+      {/* Anything the parts above did not recognise — a bug typed by hand, or
+          a body edited out of shape — is shown whole rather than dropped. */}
+      {parts.rest && <p className="bug-rest">{parts.rest}</p>}
+
+      {bug.hasScreenshot && <BugShot key={bug.id} bugId={bug.id} />}
+
+      {parts.runId && <p className="bug-foot">Raised from run {parts.runId}</p>}
+    </>
   );
 }
 
@@ -87,8 +554,12 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
   const [meta, setMeta] = useState({ codes: {}, notAppDefects: [], statuses: [] });
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState(null);
+  // A bug's id, or the key of a row standing for several bugs with one error.
+  const [selectedKey, setSelectedKey] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Groups the tester opened or closed. The rest follow the default: the
+  // newest set open, the others folded to one line each.
+  const [folded, setFolded] = useState({});
   /* The platform is above the status filter, not beside it: a web bug and a
      mobile bug are fixed by different people in different code, so "everything
      open" is a question worth asking one platform at a time. The status counts
@@ -138,7 +609,25 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
     return () => { cancelled = true; };
   }, [status, search, platform, os, reload, toast]);
 
-  const selected = bugs.find((b) => b.id === selectedId) || null;
+  const groups = useMemo(() => groupBugs(bugs), [bugs]);
+  const rows = groups.flatMap((group) => group.rows);
+  // A row of several is read as the error they share; one of its bugs, opened
+  // from it, is read on its own with the way back to the others.
+  const selectedRow = rows.find((row) => row.many && row.key === selectedKey) || null;
+  const selected = selectedRow ? null : bugs.find((b) => b.id === selectedKey) || null;
+  const sameError = selected
+    ? rows.find((row) => row.many && row.bugs.some((bug) => bug.id === selected.id)) || null
+    : null;
+
+  /* Open by default: the newest set, and the one holding the bug being read.
+     While searching, every set that matched — a match folded out of sight is
+     a match not found. */
+  const isOpen = (group, index) => {
+    if (search) return true;
+    if (group.key in folded) return !folded[group.key];
+    return index === 0 || group.rows.some((row) => holds(row, selectedKey));
+  };
+  const toggle = (group, open) => setFolded((current) => ({ ...current, [group.key]: open }));
 
   /* A search box and a filter row are for narrowing something. Before the
      first bug is raised they narrow nothing, so a first visit is the empty
@@ -160,11 +649,38 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
   const remove = async (bug) => {
     try {
       await api.deleteBug(bug.id);
-      setSelectedId((current) => (current === bug.id ? null : current));
+      setSelectedKey((current) => (current === bug.id ? null : current));
       refresh();
       toast.success('Bug deleted.');
     } catch (err) {
       toast.error(err.message);
+    }
+  };
+
+  // Said once for the error, done for every bug that carries it.
+  const setRowStatus = async (row, next) => {
+    try {
+      await Promise.all(row.bugs.filter((bug) => bug.status !== next)
+        .map((bug) => api.updateBug(bug.id, { status: next })));
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      refresh();
+    }
+  };
+
+  const removeRow = async (row) => {
+    if (!window.confirm(`Delete all ${row.bugs.length} bugs with this error? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await Promise.all(row.bugs.map((bug) => api.deleteBug(bug.id)));
+      setSelectedKey(null);
+      toast.success(`${row.bugs.length} bugs deleted.`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      refresh();
     }
   };
 
@@ -174,8 +690,8 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
         <div>
           <h1 className="page-title">Bug Report</h1>
           <p className="page-subtitle">
-            What the failures turned out to mean. Raised from a scenario, kept
-            after the run that found it is gone.
+            What the failures turned out to mean, grouped by the Test Set that
+            found them. Kept after the run that found them is gone.
           </p>
         </div>
         <PlatformTabs value={platform} onChange={setPlatform} counts={platformCounts} />
@@ -250,91 +766,80 @@ export function BugsPage({ onOpenRun = null, initialPlatform = null,
         </div>
       ) : (
         <div className="bugs-layout">
-          <ul className="bug-list">
-            {bugs.map((bug) => {
-              const notApp = (meta.notAppDefects || []).includes(bug.code);
+          <div className="bug-groups">
+            {groups.map((group, index) => {
+              const open = isOpen(group, index);
+              const listId = `bug-group-${index}`;
               return (
-                <li key={bug.id}>
+                <section key={group.key} className={`bug-group ${open ? 'open' : ''}`}>
                   <button
-                    className={`bug-item ${bug.id === selectedId ? 'active' : ''}`}
-                    onClick={() => setSelectedId(bug.id)}
+                    type="button"
+                    className="bug-group-head"
+                    aria-expanded={open}
+                    aria-controls={listId}
+                    onClick={() => toggle(group, open)}
                   >
-                    <div className="bug-item-main">
-                      <span className="bug-item-title">{bug.title}</span>
-                      <span className="bug-item-meta">
-                        <span className={`bug-status s-${bug.status}`}>
-                          {STATUS_LABEL[bug.status] || bug.status}
-                        </span>
-                        {bug.severity && (
-                          <span className={`priority-tag p-${bug.severity.toLowerCase()}`}>
-                            {bug.severity[0].toUpperCase() + bug.severity.slice(1).toLowerCase()}
-                          </span>
-                        )}
-                        {/* The sentence, not the token. Every row carried
-                            EXPECTATION_NOT_MET while the panel beside it
-                            already showed what that means. */}
-                        {bug.code && (
-                          <span className={`bug-code ${notApp ? 'soft' : ''}`}
-                                title={bug.code}>
-                            {meta.codes?.[bug.code] || bug.code}
-                          </span>
-                        )}
-                        <span className="muted small">{when(bug.created_at)}</span>
+                    <ChevronRight size={15} className="bug-group-chevron" aria-hidden="true" />
+                    <span className="bug-group-name" title={group.name}>{group.name}</span>
+                    <span className="bug-group-counts">
+                      {group.open > 0 && (
+                        <span className="bug-group-open">{group.open} open</span>
+                      )}
+                      <span className="tab-count" aria-label={`${group.bugs.length} bugs`}>
+                        {group.bugs.length}
                       </span>
-                    </div>
-                    <ChevronRight size={15} />
+                    </span>
                   </button>
-                </li>
+                  {open && (
+                    <ul className="bug-list" id={listId}>
+                      {group.rows.map((row) => {
+                        const { lead } = row;
+                        const shared = {
+                          active: holds(row, selectedKey),
+                          notApp: (meta.notAppDefects || []).includes(lead.code),
+                          codeText: meta.codes?.[lead.code] || lead.code,
+                          onSelect: () => setSelectedKey(row.key),
+                        };
+                        return (
+                          <li key={row.key}>
+                            {row.many
+                              ? <SameErrorRow row={row} {...shared} />
+                              : <BugRow bug={lead} {...shared} />}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
               );
             })}
-          </ul>
+          </div>
 
           <section className="card bug-detail">
-            {!selected ? (
+            {selectedRow ? (
+              <SameErrorDetail
+                row={selectedRow}
+                meta={meta}
+                onStatus={setRowStatus}
+                onDelete={removeRow}
+                onPick={setSelectedKey}
+              />
+            ) : selected ? (
+              <BugDetail
+                key={selected.id}
+                bug={selected}
+                meta={meta}
+                onOpenRun={onOpenRun}
+                onStatus={setBugStatus}
+                onDelete={remove}
+                sameError={sameError}
+                onBack={sameError ? () => setSelectedKey(sameError.key) : null}
+              />
+            ) : (
               <div className="empty-panel">
                 <Bug size={24} />
                 <p>Pick a bug to read it.</p>
               </div>
-            ) : (
-              <>
-                <div className="card-head stacked">
-                  <h2 className="card-title">{selected.title}</h2>
-                  <p className="muted small">
-                    {selected.code && (meta.codes[selected.code] || selected.code)}
-                    {selected.url && ` · ${selected.url}`}
-                  </p>
-                </div>
-
-                <div className="bug-actions">
-                  <select
-                    value={selected.status}
-                    onChange={(event) => setBugStatus(selected, event.target.value)}
-                    aria-label="Bug status"
-                  >
-                    {(meta.statuses || []).map((value) => (
-                      <option key={value} value={value}>{STATUS_LABEL[value] || value}</option>
-                    ))}
-                  </select>
-                  {onOpenRun && selected.run_id && (
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onOpenRun(selected.run_id)}
-                    >
-                      <ExternalLink size={14} /> Open the run
-                    </button>
-                  )}
-                  <button className="btn btn-danger btn-sm" onClick={() => remove(selected)}>
-                    <Trash2 size={14} /> Delete
-                  </button>
-                </div>
-
-                {/* The body is written as plain text with a few bold labels;
-                    shown as-is rather than parsed, so nothing a run produced
-                    can be swallowed by a markdown rule. */}
-                <pre className="bug-body">{selected.detail}</pre>
-
-                {selected.hasScreenshot && <BugShot key={selected.id} bugId={selected.id} />}
-              </>
             )}
           </section>
         </div>

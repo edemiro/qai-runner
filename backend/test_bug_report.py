@@ -34,8 +34,9 @@ def sstep(idx, status, action, expected=None, message=None):
             "expected": expected, "message": message}
 
 
-def astep(status, action, message, screenshot=None):
-    return {"status": status, "action": action, "message": message, "screenshot": screenshot}
+def astep(status, action, message, screenshot=None, scenario_idx=None):
+    return {"status": status, "action": action, "message": message, "screenshot": screenshot,
+            "scenario_idx": scenario_idx}
 
 
 # --- what went wrong ------------------------------------------------------- #
@@ -73,6 +74,37 @@ def test_the_failing_action_is_more_specific_than_the_step_around_it():
                              "Step 1 used 12 actions without reaching its expected result.")],
     )
     assert bug_report.classify(r) == "ACTION_TIMEOUT"
+
+
+def test_a_timeout_under_a_verdict_is_how_the_model_found_out():
+    """TC-32 on the hotel set: the + at the limit was greyed out, so pressing
+    it timed out, and the model judged the step — the limit held, but the
+    warning the analysis asks for never appeared. Read from the timeout, the
+    finding was filed as "an action timed out", not the app's, and dropped."""
+    verdict = ("Oda 2 çocuk sayısı 0'da kaldı ve artırma butonu devre dışıydı, ancak "
+               "beklenen 'max. kişi sayısına ulaştınız.' uyarı metni ekranda gösterilmedi")
+    r = run(
+        steps=[astep("passed", "click", "ok", scenario_idx=4),
+               astep("failed", "click", "Timeout 12000ms exceeded", scenario_idx=5)],
+        scenarioSteps=[sstep(4, "passed", "Fill room 1"),
+                       sstep(5, "failed", "Add a child to room 2", "the warning shows", verdict)],
+    )
+    assert bug_report.classify(r) == "EXPECTATION_NOT_MET"
+    draft = bug_report.compose(r)
+    assert draft["isAppDefect"] is True
+    assert draft["title"] == ("Beklenen 'max. kişi sayısına ulaştınız.' uyarı metni "
+                              "ekranda gösterilmedi")
+
+
+def test_a_retry_that_failed_in_an_earlier_step_is_no_evidence_about_a_later_one():
+    r = run(
+        steps=[astep("failed", "click", '"Oda Ekle" is no longer on the page', scenario_idx=1),
+               astep("passed", "click", "ok", scenario_idx=1)],
+        scenarioSteps=[sstep(1, "passed", "Add a room"),
+                       sstep(2, "failed", "Check the total", "2 rooms", "toplam 1 oda gösteriyor")],
+    )
+    assert bug_report.classify(r) == "EXPECTATION_NOT_MET"
+    assert "Failing action" not in bug_report.compose(r)["detail"]
 
 
 def test_each_agent_failure_shape_gets_its_own_code():
@@ -116,15 +148,145 @@ def test_page_errors_are_recognised_when_nothing_else_failed():
     ) == "PAGE_ERRORS"
 
 
+class TestAModelThatDidNotAnswerIsNotTheApp:
+    """Fourteen hotel search bugs said only "Anthropic rate limit reached",
+    and every one was filed against the app as an expectation that did not
+    hold. The step was closed without anybody looking at the screen."""
+
+    def test_a_rate_limited_step_is_the_model_not_the_app(self):
+        r = run(error="Anthropic rate limit reached. Wait and retry.", scenarioSteps=[
+            sstep(1, "passed", "Open the page"),
+            sstep(2, "failed", "Add a room", "3 rooms",
+                  "Anthropic rate limit reached. Wait and retry."),
+        ])
+        assert bug_report.classify(r) == "MODEL_UNAVAILABLE"
+        draft = bug_report.compose(r)
+        assert draft["isAppDefect"] is False
+        assert "did not answer" in draft["detail"]
+
+    def test_a_spent_gateway_budget_is_the_model_not_the_app(self):
+        said = ("The model gateway's spending budget is used up (spent 201.04 of "
+                "201.00). Waiting will not lift it: raise the budget or wait for it "
+                "to reset, then run again.")
+        r = run(error=said, scenarioSteps=[sstep(3, "failed", "Pick a date", "shown", said)])
+        assert bug_report.classify(r) == "MODEL_UNAVAILABLE"
+
+    def test_a_finding_before_the_outage_still_decides(self):
+        """A failed check no longer ends the run, so a real finding can sit in
+        an earlier step than the outage that stopped it. The outage must not
+        hide it — and the bug is named after the finding."""
+        r = run(scenarioSteps=[
+            sstep(1, "failed", "Type ant", "Antalya is suggested",
+                  "'ant' için Antalya önerisi listede yer almıyor"),
+            sstep(2, "failed", "Pick it", "Antalya shows",
+                  "Anthropic rate limit reached. Wait and retry."),
+        ])
+        assert bug_report.classify(r) == "EXPECTATION_NOT_MET"
+        draft = bug_report.compose(r)
+        assert draft["title"] == "'ant' için Antalya önerisi listede yer almıyor"
+        assert "Antalya is suggested" in draft["detail"]
+
+    def test_a_step_left_open_when_the_run_ended_proves_nothing(self):
+        r = run(scenarioSteps=[sstep(4, "failed", "Open the calendar", "it opens",
+                                     "The run ended before this step closed.")])
+        assert bug_report.classify(r) == "STEP_UNPROVEN"
+        assert bug_report.compose(r)["isAppDefect"] is False
+
+
 # --- what the report says -------------------------------------------------- #
 
-def test_the_title_names_the_scenario_and_the_step():
-    r = run(scenarioSteps=[
-        sstep(1, "passed", "Open the app"),
-        sstep(2, "failed", "Set the second segment to London", "LHR shows as origin", "olmadı"),
-    ])
-    title = bug_report.compose(r)["title"]
-    assert "Booking" in title and "step 2" in title and "London" in title
+class TestTheTitleSaysWhatWentWrong:
+    """Titles were "<scenario> — step N: <action>": 161 characters at the
+    median, and what was broken was not in them at all. A bug is now named
+    after the defect, and the scenario is kept beside it."""
+
+    def test_the_title_is_the_failure_and_the_scenario_travels_beside_it(self):
+        r = run(scenarioSteps=[
+            sstep(1, "passed", "Open the app"),
+            sstep(2, "failed", "Set the second segment to London", "LHR shows as origin",
+                  "Yenileme sonrası son geçerli form korunmadı: Nereye alanı (el_40) "
+                  "İstanbul IST yerine 'Seçiniz' gösteriyor; tarihler de boş"),
+        ])
+        draft = bug_report.compose(r)
+        assert draft["title"] == "Yenileme sonrası son geçerli form korunmadı"
+        assert draft["caseName"] == r["title"]
+        assert "Booking" not in draft["title"]
+
+    def test_a_step_that_ran_out_is_named_after_the_action_under_it(self):
+        """"Step 1 used 12 actions" says the step ended, not what was wrong."""
+        r = run(
+            steps=[astep("failed", "assert_text",
+                         'Expected "1 Misafir, 1 Oda" on screen but it is not there. '
+                         'Visible text: Otel, Nereye')],
+            scenarioSteps=[sstep(1, "failed", "Open the panel", "1 Misafir, 1 Oda",
+                                 "Step 1 used 12 actions without reaching its expected result.")],
+        )
+        assert bug_report.compose(r)["title"] == '"1 Misafir, 1 Oda" is not on the screen'
+
+    def test_with_nothing_said_the_title_is_what_the_cause_means(self):
+        assert bug_report.compose(run())["title"] == bug_report.CODES["UNCLASSIFIED"]
+
+    def test_each_shape_of_failure_is_cut_to_its_finding(self):
+        for said, title in [
+            # The first clause is the finding; the rest is the evidence.
+            ("Yenileme sonrası son geçerli form korunmadı: Nereye alanı (el_40) İstanbul "
+             "IST yerine 'Seçiniz' gösteriyor",
+             "Yenileme sonrası son geçerli form korunmadı"),
+            # What worked comes first; the finding is after the "ancak".
+            ("IST yazıldığında öneriler geldi ancak ülke adları okunur metin yerine ham "
+             "çeviri anahtarı olarak görünüyor: 'İstanbul countrylookup.TR (26)'",
+             "Ülke adları okunur metin yerine ham çeviri anahtarı olarak görünüyor"),
+            # The finding is the second clause.
+            ("'ant' yazıldıktan sonra öneriler ANTWERP (BRU) ve ANTWERPEN (BRU, RTM) "
+             "olarak listelendi; beklenen Antalya (AYT) önerisi listede yer almıyor.",
+             "Beklenen Antalya (AYT) önerisi listede yer almıyor"),
+            # What should have happened is not what did.
+            ("Beklenen TO alanının boş (Select) olması ve Search Flight butonunun pasif "
+             "olmasıydı; ancak TO alanı ESB - Ankara Esenboga Airport ile dolu, FROM "
+             "alanı ise Select olarak boş.",
+             "TO alanı ESB - Ankara Esenboga Airport ile dolu, FROM alanı ise Select olarak boş"),
+            # The tool's pointers into the page mean nothing to a reader.
+            ("Sonraki ay okunun aria-label değeri Türkçe 'Sonraki ay' yerine 'Next month' "
+             "olarak geliyor (el_140 üzerinde doğrulandı)",
+             "Sonraki ay okunun aria-label değeri Türkçe 'Sonraki ay' yerine 'Next month' "
+             "olarak geliyor"),
+            # An apostrophe before a suffix is not a closing quote.
+            ("EcoFly paketi seçilip 'EcoFly'da kal' onaylandı ve uçuş 'ECONOMY EcoFly B' "
+             "olarak işaretlendi, ancak alt bardaki 'Devam et' butonu gri/pasif durumda "
+             "kaldı ve tıklanabilir bir öğe olarak sunulmadı; tekrarlanan bekleme",
+             "Alt bardaki 'Devam et' butonu gri/pasif durumda kaldı ve tıklanabilir bir "
+             "öğe olarak sunulmadı"),
+            # A long quotation is cut inside its quotes, not the sentence around it.
+            ("Uçuş ara tıklandı ancak uygunluk sayfası yerine 'Seçmiş olduğunuz seyahat "
+             "tarihleri için bu parkurda çoklu uçuş seçeneği mevcut değildir' uyarısı "
+             "çıktı; üç segment listelenmedi",
+             "Uygunluk sayfası yerine 'Seçmiş olduğunuz seyahat tarihleri…' uyarısı çıktı"),
+            # The tool's own sentences, said shorter.
+            ('Expected "portcitylookup.IST IST" to contain "İstanbul" but it holds '
+             '"portcitylookup.IST IST", and "İstanbul" is nowhere on the screen.',
+             'Expected "İstanbul", found "portcitylookup.IST IST"'),
+            ('Expected "button" to contain "01" but it holds "".',
+             'Expected "01", found nothing'),
+            ("1 page error(s). First: pageerror: Loading chunk 387 failed.",
+             "Page error: Loading chunk 387 failed"),
+            ("Element el_308 never became actionable within 10s",
+             "Element never became actionable within 10s"),
+            ("Anthropic rate limit reached. Wait and retry.", "Anthropic rate limit reached"),
+            # Turkish capitals: a title starting with i starts with İ.
+            ("istanbul araması boş döndü", "İstanbul araması boş döndü"),
+        ]:
+            assert bug_report.headline(said) == title, said
+
+    def test_a_line_that_only_says_the_step_ended_is_no_title(self):
+        for said in ("Step 3 used 24 actions without reaching its expected result.",
+                     "The run ended before this step closed.", "—", "", None):
+            assert bug_report.headline(said) is None, said
+
+    def test_a_title_fits_a_list_row_however_long_the_verdict(self):
+        said = "Arama sonrası sonuçlar gelmedi " + "ve sayfa uzun uzun açıklama yaptı " * 12
+        line = bug_report.headline(said)
+        assert len(line) <= bug_report.TITLE_LIMIT
+        assert line.endswith("…")
 
 
 def test_reproduction_stops_at_the_failure():
@@ -446,3 +608,245 @@ class TestTheEvidenceIsInTheReport:
 
     def test_a_clean_run_adds_no_section_at_all(self):
         assert "Sayfa" not in bug_report.compose(self._run([]))["detail"]
+
+
+# --- why a run failed, for Test Runs ---------------------------------------- #
+
+class TestARunSaysWhyItFailed:
+    """Test Runs says on each row why the run did not pass, read the same way
+    a bug is, so the row and the bug raised from it never disagree."""
+
+    def test_a_run_that_passed_or_is_still_going_has_nothing_to_say(self):
+        assert bug_report.run_failure(run(status="passed")) is None
+        assert bug_report.run_failure(run(status="running")) is None
+
+    def test_the_failure_is_the_step_the_model_judged(self):
+        r = run(
+            steps=[astep("failed", "click", "Timeout 12000ms exceeded", scenario_idx=2)],
+            scenarioSteps=[sstep(1, "passed", "Open the page"),
+                           sstep(2, "failed", "Add a room", "3 rooms",
+                                 "Oda eklenmedi; sayaç 2'de kaldı")],
+        )
+        failure = bug_report.run_failure(r)
+        assert failure["headline"] == "Oda eklenmedi"
+        assert (failure["step"], failure["expected"]) == (2, "3 rooms")
+        assert failure["actual"].startswith("Oda eklenmedi")
+        assert failure["failingAction"] == {"action": "click",
+                                            "message": "Timeout 12000ms exceeded"}
+        assert failure["isAppDefect"] is True
+
+    def test_a_model_that_did_not_answer_is_said_to_be_the_run(self):
+        r = run(scenarioSteps=[sstep(3, "failed", "Pick a date", "shown",
+                                     "Anthropic rate limit reached. Wait and retry.")])
+        failure = bug_report.run_failure(r)
+        assert failure["headline"] == "Anthropic rate limit reached"
+        assert failure["code"] == "MODEL_UNAVAILABLE"
+        assert failure["isAppDefect"] is False
+
+    def test_a_stopped_run_says_it_was_stopped_not_what_stop_cut_off(self):
+        r = run(status="cancelled", error="Stopped by the user.",
+                steps=[astep("failed", "click", "Timeout 12000ms exceeded", scenario_idx=3)],
+                scenarioSteps=[sstep(3, "cancelled", "Pick a date", "shown",
+                                     "Run stopped before this step closed.")])
+        failure = bug_report.run_failure(r)
+        assert failure["code"] == "RUN_CANCELLED"
+        assert failure["headline"] == bug_report.CODES["RUN_CANCELLED"]
+        assert failure["step"] is None
+
+    def test_a_run_stopped_after_a_finding_keeps_the_finding(self):
+        r = run(status="cancelled", scenarioSteps=[
+            sstep(1, "failed", "Type ant", "Antalya", "Antalya önerilmedi"),
+            sstep(2, "cancelled", "Pick it", "shown", "Run stopped before this step closed."),
+        ])
+        failure = bug_report.run_failure(r)
+        assert (failure["headline"], failure["step"]) == ("Antalya önerilmedi", 1)
+
+    def test_the_list_carries_the_steps_the_execution_and_the_evidence(
+        self, tmp_path, monkeypatch,
+    ):
+        import storage
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "runs.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        suite_id = storage.create_suite("Otel arama alanı")
+        case_id = storage.add_case(suite_id, "Hotel - Guests | [Jolly: IST] room maximum 2", "g")
+        execution = storage.create_suite_run(suite_id, name="Otel arama alanı")
+
+        failed = storage.create_run("g", suite_run_id=execution, case_id=case_id)
+        opened = storage.start_scenario_step(failed, 1, "Open", "the form")
+        storage.finish_scenario_step(opened, "passed")
+        opened = storage.start_scenario_step(failed, 2, "Add a room", "3 rooms")
+        storage.add_step(failed, "click", "passed", target="Oda Ekle", scenario_idx=2)
+        storage.add_step(failed, "click", "failed", target="Oda Ekle",
+                         message="Timeout 12000ms exceeded", scenario_idx=2)
+        storage.finish_scenario_step(opened, "failed", message="Oda eklenmedi")
+        storage.finish_run(failed, "failed", error="1 of 2 steps failed")
+        passed = storage.create_run("g", suite_run_id=execution, case_id=case_id)
+        storage.finish_run(passed, "passed")
+
+        rows = {row["id"]: row for row in storage.list_runs()}
+        row = rows[failed]
+        assert (row["scenario_passed"], row["scenario_total"]) == (1, 2)
+        assert row["suite_run_name"] == "Otel arama alanı"
+        assert row["suite_run_size"] == 2
+        assert rows[passed]["scenario_total"] == 0
+
+        evidence = storage.failure_evidence([failed, passed])
+        assert [s["idx"] for s in evidence[failed]["scenarioSteps"]] == [2]
+        assert [(s["action"], s["scenario_idx"]) for s in evidence[failed]["steps"]] == [("click", 2)]
+        assert evidence[passed] == {"scenarioSteps": [], "steps": []}
+
+        failure = bug_report.run_failure({**row, **evidence[failed]})
+        assert (failure["headline"], failure["step"]) == ("Oda eklenmedi", 2)
+
+
+# --- the body read back into its parts ------------------------------------- #
+
+class TestTheBodyReadsBackIntoItsParts:
+    """The page shows a bug as labelled parts, each label in its own colour
+    beside what it says. The body stays text — it is what a tracker takes and
+    what a tester edits — so the parts are read back out of it."""
+
+    def _body(self):
+        r = run(
+            steps=[astep("failed", "assert_text", 'Expected "IST" on screen but it is not there')],
+            scenarioSteps=[
+                sstep(1, "passed", "Open the page", "The form shows"),
+                sstep(2, "failed", "Type IST", "İstanbul is suggested",
+                      "Step 2 used 12 actions without reaching its expected result."),
+            ],
+            pageEvents=[
+                {"kind": "httperror", "level": "warning", "text": "HTTP 404 ", "status": 404,
+                 "resourceType": "document", "url": "https://nuat.test/hotel",
+                 "thirdParty": False},
+                {"kind": "pageerror", "level": "error", "text": "TypeError: x is undefined",
+                 "thirdParty": False},
+            ],
+        )
+        return bug_report.AUTO_RAISED + "\n\n" + bug_report.compose(r)["detail"]
+
+    def test_every_labelled_line_comes_back_under_its_own_name(self):
+        parts = bug_report.parse_detail(self._body())
+        fields = parts["fields"]
+        assert parts["autoRaised"] is True
+        assert fields["scenario"].startswith("Booking | RT")
+        assert fields["where"] == "https://nuat.turkishairlines.com/"
+        assert fields["cause"].startswith("TEXT_NOT_FOUND")
+        assert fields["expected"] == "İstanbul is suggested"
+        assert "used 12 actions" in fields["actual"]
+        assert fields["failing"].startswith("assert_text — ")
+        assert parts["runId"] == "run1"
+        assert parts["rest"] is None
+
+    def test_the_steps_keep_their_order_their_verdict_and_what_they_expected(self):
+        steps = bug_report.parse_detail(self._body())["steps"]
+        assert [(s["idx"], s["failed"]) for s in steps] == [(1, False), (2, True)]
+        assert steps[0]["expected"] == "The form shows"
+        assert steps[1]["action"] == "Type IST"
+
+    def test_the_pages_complaints_come_back_by_level_with_their_addresses(self):
+        events = {e["level"]: e for e in bug_report.parse_detail(self._body())["events"]}
+        assert events["error"]["count"] == 1
+        assert "TypeError" in events["error"]["items"][0]["text"]
+        warning = events["warning"]["items"][0]
+        assert warning["kind"] == "network"
+        assert warning["url"] == "https://nuat.test/hotel"
+
+    def test_the_run_not_the_product_note_is_kept_to_say_first(self):
+        r = run(scenarioSteps=[sstep(1, "failed", "Type IST", "suggested",
+                                     "Step 1 used 12 actions without reaching its expected result.")])
+        notes = bug_report.parse_detail(bug_report.compose(r)["detail"])["notes"]
+        assert notes and "describes the run rather than the product" in notes[0]
+        # An app defect carries no such note.
+        assert bug_report.parse_detail(self._body())["notes"] == []
+
+    def test_a_body_typed_by_hand_is_kept_whole(self):
+        typed = "Menü açılınca Corporate Club 404 dönüyor.\n\nAdımlar:\n1. Menüyü aç"
+        parts = bug_report.parse_detail(typed)
+        assert parts["fields"] == {}
+        assert parts["rest"] == typed
+
+    def test_a_value_that_runs_onto_the_next_line_stays_with_its_label(self):
+        parts = bug_report.parse_detail("**Actual**  ilk satır\nikinci satır\n\nsonra")
+        assert parts["fields"]["actual"] == "ilk satır\nikinci satır"
+        assert parts["rest"] == "sonra"
+
+
+class TestBugsFiledBeforeAreRenamed:
+    """The bugs already in the list were named after their scenario. They are
+    renamed once, from the body they carry; a title someone typed is theirs."""
+
+    @staticmethod
+    def _db(tmp_path, monkeypatch):
+        import storage
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "renamed.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        return storage
+
+    @staticmethod
+    def _old_title(r):
+        failed = bug_report._failed_scenario_step(r)
+        return (f"{bug_report._summarise(r['title'], 90)} — step {failed['idx']}: "
+                f"{bug_report._summarise(failed['action'], 70)}")
+
+    def test_an_old_title_is_renamed_after_the_failure_once(self, tmp_path, monkeypatch):
+        db = self._db(tmp_path, monkeypatch)
+        r = run(scenarioSteps=[sstep(1, "failed", "Refresh the page", "the form is kept",
+                                     "Yenileme sonrası son geçerli form korunmadı: alanlar boş")])
+        bug_id = db.create_bug(title=self._old_title(r), code="EXPECTATION_NOT_MET",
+                               detail=bug_report.compose(r)["detail"])
+
+        assert bug_report.refresh_titles() == 1
+        assert db.get_bug(bug_id)["title"] == "Yenileme sonrası son geçerli form korunmadı"
+        assert bug_report.refresh_titles() == 0
+
+    def test_a_title_somebody_typed_is_left_alone(self, tmp_path, monkeypatch):
+        db = self._db(tmp_path, monkeypatch)
+        r = run(scenarioSteps=[sstep(1, "failed", "Refresh", "kept", "korunmadı")])
+        bug_id = db.create_bug(title="Refresh drops the search form", code="EXPECTATION_NOT_MET",
+                               detail=bug_report.compose(r)["detail"])
+
+        assert bug_report.refresh_titles() == 0
+        assert db.get_bug(bug_id)["title"] == "Refresh drops the search form"
+
+
+class TestABugKnowsItsTestSet:
+    """Bug Report groups bugs under their Test Set. 47 of 107 web bugs could
+    name their scenario but not its set: a case read out of its own set does
+    not carry the set's name, and the runner copied it off the case."""
+
+    def test_an_older_bug_is_given_its_set_and_execution_from_its_run(
+        self, tmp_path, monkeypatch,
+    ):
+        import storage
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "sources.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        suite_id = storage.create_suite("Otel arama alanı")
+        case_id = storage.add_case(suite_id, "Hotel - Search | refresh", "refresh keeps it")
+        suite_run_id = storage.create_suite_run(suite_id, name="Otel arama alanı")
+        run_id = storage.create_run("refresh keeps it", suite_run_id=suite_run_id, case_id=case_id)
+        bug_id = storage.create_bug(title="it broke", run_id=run_id, case_id=case_id)
+        orphan = storage.create_bug(title="typed by hand")
+
+        with storage._connect() as conn:
+            storage._backfill_bug_sources(conn)
+
+        bug = storage.get_bug(bug_id)
+        assert bug["suite_name"] == "Otel arama alanı"
+        assert bug["suite_run_id"] == suite_run_id
+        assert storage.get_bug(orphan)["suite_name"] is None
+
+    def test_the_list_says_which_scenario_number_it_was(self, tmp_path, monkeypatch):
+        import storage
+        monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "idx.db"))
+        monkeypatch.setattr(storage, "_schema_ready", False)
+        storage.init_db()
+        suite_id = storage.create_suite("Otel arama alanı")
+        storage.add_case(suite_id, "first", "one")
+        case_id = storage.add_case(suite_id, "second", "two")
+        storage.create_bug(title="it broke", case_id=case_id)
+
+        [bug] = storage.list_bugs()
+        assert bug["case_idx"] == 2

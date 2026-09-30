@@ -25,6 +25,7 @@ import asyncio
 import base64
 import json
 import os
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Union
 
@@ -33,6 +34,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -59,7 +61,7 @@ import suggestions
 import suite_runner
 import tracker
 import visual
-from config import ALLOWED_ORIGINS, ARTIFACT_DIR, WDA_BUNDLE_ID
+from config import ALLOWED_HOSTS, ALLOWED_ORIGINS, ARTIFACT_DIR, WDA_BUNDLE_ID
 from drivers import MobileTarget, WebTarget
 from drivers import web as web_driver
 from drivers.web import (
@@ -97,6 +99,15 @@ async def lifespan(_: FastAPI):
         print("[startup] browsers will not be cleaned up after a hard kill "
               "on this platform")
     storage.init_db()
+    # Bugs filed before titles said what went wrong were named after their
+    # scenario. Renamed from the body they carry; a title someone typed is
+    # left alone, and one already renamed is not picked up again.
+    try:
+        renamed = bug_report.refresh_titles()
+        if renamed:
+            print(f"[startup] renamed {renamed} bug(s) after what went wrong")
+    except Exception as exc:  # noqa: BLE001 — a title is not worth failing to start
+        print(f"[startup] could not rename the older bugs: {exc}")
     yield
     await drivers.close_all()
     await appium.close_client()
@@ -111,6 +122,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last, so it is the outermost: a request named for another host is
+# turned away before anything else sees it. See ALLOWED_HOSTS.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +146,13 @@ class ProviderTestRequest(BaseModel):
     extra: Optional[str] = None
 
 
+def _busy() -> bool:
+    """Whether a run, a replay or an execution is in flight — what a restart
+    would kill. Read by the reloader in `__main__` before it restarts."""
+    return (any(state.running for state in list(agent._sessions.values()))
+            or bool(suite_runner._RUNNING))
+
+
 @app.get("/api/health")
 async def health_check():
     state = providers.status()
@@ -139,12 +160,14 @@ async def health_check():
         return {
             "status": "warning",
             "llm_connected": False,
+            "busy": _busy(),
             **state,
             "message": f"No API key saved for {state['providerLabel']}. Add one in Settings.",
         }
     return {
         "status": "healthy",
         "llm_connected": True,
+        "busy": _busy(),
         **state,
         "message": f"Using {state['providerLabel']} · {state['model']}.",
     }
@@ -587,7 +610,12 @@ def _explain_navigation_failure(url: str, exc: Union[Exception, str]) -> str:
 
 @app.post("/api/web/session")
 async def create_web_session(req: WebSessionRequest):
-    url = req.url.strip()
+    # A scenario's address can name the store — `{{site.base}}/login` — and an
+    # execution fills it in before opening it. Run here opens the scenario
+    # through here, so it has to as well, or it opens a different page. Not
+    # the secrets: the address goes back to the browser.
+    url = suite_runner.substitute(
+        req.url.strip(), None, storage.test_data_values(secrets=False))
     if not url:
         raise HTTPException(status_code=400, detail="A URL is required.")
     if not url.startswith(("http://", "https://")):
@@ -687,6 +715,9 @@ async def list_sessions():
             # run and the scenario. The workspace watches those read-only; the
             # tester's own pages have no owner and behave as before.
             "watching": drivers.owner(session_id),
+            # A phone an execution is using: {suiteRunId, name}. The workspace
+            # holds its composer and Disconnect while it is.
+            "busyWith": suite_runner.claimed_by(session_id),
             "device": {
                 "udid": info.get("udid"),
                 "platform": info.get("platform"),
@@ -698,9 +729,21 @@ async def list_sessions():
     return {"sessions": out}
 
 
+def _busy_with(claim: Dict[str, Any]) -> str:
+    return (f"This device is running the execution “{claim.get('name') or claim['suiteRunId']}”. "
+            "Stop it, or wait for it to finish.")
+
+
 @app.delete("/api/session/{session_id}")
 @app.delete("/api/appium/session/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, force: bool = False):
+    # Closing it under an execution pulled the phone out from beneath the
+    # scenario running on it. Asked for anyway, the execution is stopped first.
+    claim = suite_runner.claimed_by(session_id)
+    if claim and not force:
+        raise HTTPException(status_code=409, detail=_busy_with(claim))
+    if claim:
+        await suite_runner.cancel(claim["suiteRunId"])
     agent.cancel(session_id)
     agent.reset(session_id)
     platform_cache.pop(session_id, None)
@@ -760,9 +803,33 @@ async def stream_screen(websocket: WebSocket, session_id: str):
     both slower for a picture that would not have changed in between anyway.
     It instead reads whatever the run last published.
     """
+    # CORS does not cover sockets, so without this any page the tester has
+    # open could watch the device. A client that sends no Origin is not a
+    # page in a browser, and is let in.
+    origin = websocket.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     interval = 1 / _MIRROR_DEFAULT_FPS
     last_digest = None
+    # Set the moment the client goes. A still page sends nothing for seconds
+    # at a time, and a pump that only learned of it on its next send held on
+    # to the screencast that long after its viewer had left.
+    gone = asyncio.Event()
+
+    async def next_frame(frames: "asyncio.Queue[str]", timeout: float) -> Optional[str]:
+        """The next frame, or None when the time runs out or the client goes."""
+        getting = asyncio.ensure_future(frames.get())
+        leaving = asyncio.ensure_future(gone.wait())
+        try:
+            await asyncio.wait({getting, leaving}, timeout=timeout,
+                               return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            leaving.cancel()
+            if not getting.done():
+                getting.cancel()
+        return getting.result() if getting.done() and not getting.cancelled() else None
 
     async def pump_screencast(target) -> bool:
         """Forward Chromium's own frames for as long as the page is alive.
@@ -783,9 +850,10 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                 if drivers.get(session_id) is None:
                     await websocket.send_text(json.dumps({"dead": True, "reason": "session closed"}))
                     return True
-                try:
-                    frame = await asyncio.wait_for(frames.get(), timeout=5.0)
-                except asyncio.TimeoutError:
+                frame = await next_frame(frames, 5.0)
+                if gone.is_set():
+                    return True
+                if frame is None:
                     # Nothing painted. That is the normal state of a still page,
                     # but it is also what a dead one looks like, so check.
                     if not target.is_alive():
@@ -801,7 +869,9 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                 # be made to decode fifteen.
                 await asyncio.sleep(max(0.0, interval - 0.005))
         finally:
-            await target.stop_screencast()
+            # This viewer only: another may be watching the same page, and
+            # stopping the cast for all of them froze theirs.
+            await target.stop_screencast(frames)
 
     async def read_control():
         nonlocal interval
@@ -815,6 +885,8 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                     pass
         except Exception:
             pass
+        finally:
+            gone.set()
 
     control_task = asyncio.create_task(read_control())
     try:
@@ -837,7 +909,10 @@ async def stream_screen(websocket: WebSocket, session_id: str):
                 await asyncio.sleep(interval)
                 continue
 
-            if agent.is_running(session_id):
+            # A phone an execution is on is driven the same way, by a state
+            # no registry knows (see suite_runner._CLAIMED); polling on top of
+            # the cases' own captures only slowed both.
+            if agent.is_running(session_id) or suite_runner.claimed_by(session_id):
                 screenshot = agent.get_live_frame(session_id)
                 if screenshot:
                     digest = hash(screenshot)
@@ -1113,6 +1188,9 @@ class AgentRunRequest(BaseModel):
     # straight on through every step after one that went wrong left the
     # tester a choice between stopping the run and watching it finish.
     stepping: bool = False
+    # A saved scenario's required starting state. Put in front of the goal
+    # the same way an execution puts it there.
+    precondition: Optional[str] = None
 
 
 @app.post("/api/session/{session_id}/agent/run")
@@ -1122,10 +1200,30 @@ async def agent_run(session_id: str, req: AgentRunRequest):
         raise HTTPException(status_code=400, detail="A test goal is required.")
 
     target = require_target(session_id)
+    # A phone an execution is on: a second agent there fought the cases for it.
+    claim = suite_runner.claimed_by(session_id)
+    if claim:
+        raise HTTPException(status_code=409, detail=_busy_with(claim))
+    # The store is filled in here, exactly as an execution fills it, because
+    # the verdict must not depend on which button started the scenario. Run
+    # here typed `{{yolcu.ad}}` into the name field, and its recordings typed
+    # `{{kart.numara}}` into the card one. On the server, so the store's
+    # secrets never have to be sent to the browser.
+    shared = storage.test_data_values()
+    dumped = [step.model_dump() for step in req.steps] if req.steps else None
+    # What the run is handed from the store. A short secret among it is named
+    # in everything the run streams and keeps; one it was not handed is just
+    # a number (see `storage._secrets_for`).
+    store_keys = storage.referenced_keys(req.goal, req.precondition, dumped)
+    goal = suite_runner.with_precondition(
+        suite_runner.substitute(req.goal.strip(), None, shared),
+        suite_runner.substitute(req.precondition, None, shared),
+    )
+    steps = suite_runner.substitute_steps(dumped, None, shared)
     stream = agent.run_agent(
         target=target,
-        goal=req.goal.strip(),
-        steps=[step.model_dump() for step in req.steps] if req.steps else None,
+        goal=goal,
+        steps=steps,
         max_steps=req.maxSteps,
         use_vision=req.useVision,
         model=req.model,
@@ -1135,14 +1233,119 @@ async def agent_run(session_id: str, req: AgentRunRequest):
         # of them, which is what makes holding at a failure safe here and not
         # in the suite runner.
         attended=True,
+        store_keys=store_keys,
     )
     return StreamingResponse(
-        _with_page_events(stream, target, req.tags, req.failOnPageError),
+        _secrets_named(
+            _with_page_events(stream, target, req.tags, req.failOnPageError, store_keys),
+            storage.test_data_secrets(store_keys),
+        ),
         media_type="application/x-ndjson",
     )
 
 
-async def _with_page_events(stream, target, tags: List[str], fail_on_page_error: bool):
+async def _secrets_named(stream, secrets):
+    """The run's events with `secrets` named, never spelled.
+
+    Filling the store in on the server keeps it out of the browser only if
+    the run does not then stream it there: what it typed, what it read back,
+    the goal it was given. Storage already names secrets in everything it
+    keeps (see `storage.add_step`); this does the same for what is streamed.
+    `secrets` is `storage.test_data_secrets` for what the run was handed.
+
+    The model's reply arrives a token at a time, and a card number can be
+    split across two tokens. So the reply so far is named as a whole and
+    only the part the next token cannot change is sent. Holding back a fixed
+    width instead named "240" at the end of "Toplam 240" before the "0" that
+    followed it arrived, and a long secret held back the whole reply.
+    """
+    if not secrets:
+        async for line in stream:
+            yield line
+        return
+
+    spelled = [value for value in (str(entry["value"] or "") for entry in secrets) if value]
+    short = [value for value in spelled if len(value) < storage.LONG_SECRET]
+    said, sent, said_event = "", "", None
+
+    def settled(text):
+        """How much of `text` can be named without the next token changing it."""
+        end = len(text)
+        if short:
+            # A short secret is named only where it stands on its own, and
+            # whether the reply's last word does — or a secret ending it on a
+            # mark, "P@ss!" — depends on what comes after it.
+            while end and (text[end - 1].isalnum() or text[end - 1] == "_"):
+                end -= 1
+            for value in short:
+                if text.endswith(value):
+                    end = min(end, len(text) - len(value))
+        # Nor where it ends on the first part of a secret.
+        longest = 0
+        for value in spelled:
+            for size in range(min(len(value) - 1, end), longest, -1):
+                if text.endswith(value[:size], 0, end):
+                    longest = size
+                    break
+        return end - longest
+
+    def rest_of_reply():
+        nonlocal said, sent
+        rest = storage._named(said, secrets)[len(sent):]
+        said, sent = "", ""
+        return rest
+
+    def named(value):
+        if isinstance(value, str):
+            return storage._named(value, secrets)
+        if isinstance(value, list):
+            return [named(item) for item in value]
+        if isinstance(value, dict):
+            return {key: named(item) for key, item in value.items()}
+        return value
+
+    def line_of(payload):
+        return json.dumps(payload, ensure_ascii=False) + "\n"
+
+    async for line in stream:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            yield storage._named(line, secrets)
+            continue
+        if payload.get("event") == "token":
+            if said and said_event.get("step") != payload.get("step"):
+                rest = rest_of_reply()
+                if rest:
+                    yield line_of({**said_event, "text": rest})
+            said_event = payload
+            said += payload.get("text") or ""
+            # Only as far as naming the settled part and naming the whole
+            # reply agree. The cut can fall inside a secret that is already
+            # complete — a card ending in the "1" another secret starts with —
+            # and the settled part alone would then send all of it but the
+            # last digit.
+            text = os.path.commonprefix([
+                storage._named(said[:settled(said)], secrets),
+                storage._named(said, secrets),
+            ])
+            if len(text) > len(sent):
+                yield line_of({**payload, "text": text[len(sent):]})
+                sent = text
+            continue
+        if said:
+            rest = rest_of_reply()
+            if rest:
+                yield line_of({**said_event, "text": rest})
+        yield line_of(named(payload))
+    if said:
+        rest = rest_of_reply()
+        if rest:
+            yield line_of({**said_event, "text": rest})
+
+
+async def _with_page_events(stream, target, tags: List[str], fail_on_page_error: bool,
+                            store_keys=()):
     """Fold the page's own errors into the run as it closes.
 
     The agent loop is target-agnostic and knows nothing about consoles or HTTP
@@ -1166,7 +1369,9 @@ async def _with_page_events(stream, target, tags: List[str], fail_on_page_error:
 
         # Hold the closing event back until the verdict has been revised.
         if payload.get("event") == "run_closed" and run_id:
-            events = _drain(target)
+            # Named before the note below cuts the first one short — see the
+            # same line in suite_runner.
+            events = storage.named_page_events(_drain(target))
             storage.add_page_events(run_id, events)
             if tags:
                 storage.set_run_tags(run_id, tags)
@@ -1180,7 +1385,8 @@ async def _with_page_events(stream, target, tags: List[str], fail_on_page_error:
                     f"{len(errors)} page error(s) while the run was otherwise green — "
                     f"first: {(errors[0].get('text') or '')[:160]}"
                 )
-                storage.finish_run(run_id, "failed", note, verdict_note=note)
+                storage.finish_run(run_id, "failed", note, verdict_note=note,
+                                   store_keys=store_keys)
                 payload["status"] = "failed"
                 payload["pageErrors"] = len(errors)
                 yield json.dumps(
@@ -1279,6 +1485,13 @@ async def get_runs(
     )
     has_more = len(runs) > limit
     runs = runs[:limit]
+    # Why each one that did not pass failed, so a row can say it without being
+    # opened — read the way a bug is, so the two never disagree.
+    evidence = storage.failure_evidence(
+        [run["id"] for run in runs if run.get("status") in ("failed", "cancelled")])
+    for run in runs:
+        seen = evidence.get(run["id"])
+        run["failure"] = bug_report.run_failure({**run, **seen}) if seen is not None else None
     return {
         "runs": runs,
         "hasMore": has_more,
@@ -1298,6 +1511,7 @@ async def get_run(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found.")
     # The UI offers only the formats this run's target can actually produce.
     run["exportFormats"] = exporters.formats_for(run)
+    run["failure"] = bug_report.run_failure(run)
     return run
 
 
@@ -1352,17 +1566,22 @@ async def replay_run(run_id: str, session_id: str, heal: bool = True):
         raise HTTPException(status_code=404, detail="Run not found.")
 
     target = require_target(session_id)
-    replay_id = storage.create_run(
-        goal=f"Replay of {run['title']}",
-        platform=run.get("platform"),
-        device_name=run.get("device_name"),
-        device_udid=run.get("device_udid"),
-        app_id=run.get("app_id"),
-        model="replay",
-        kind=run.get("kind"),
-        tags=(run.get("tags") or []) + ["replay"],
-        case_id=run.get("case_id"),
-    )
+    # On its own kind of target only. A web run's clicks on a phone went to
+    # whatever there had a similar label — the phone's "Search" for the page's
+    # — and the free re-match reported the step as healed.
+    recorded_on = run.get("kind") or {
+        "web": "web", "android": "mobile", "ios": "mobile",
+    }.get((run.get("platform") or "").lower())
+    if recorded_on and recorded_on != target.kind:
+        raise HTTPException(status_code=400, detail=(
+            f"This run was recorded on {'a web page' if recorded_on == 'web' else 'a device'}; "
+            "replay it on one."
+        ))
+    if agent.is_running(session_id):
+        raise HTTPException(status_code=409, detail="An agent run is already in progress for this session.")
+    claim = suite_runner.claimed_by(session_id)
+    if claim:
+        raise HTTPException(status_code=409, detail=_busy_with(claim))
 
     # Resolved once, up front: a missing provider should degrade healing to the
     # free semantic pass, not fail the replay on its first broken step.
@@ -1374,17 +1593,98 @@ async def replay_run(run_id: str, session_id: str, heal: bool = True):
         except Exception as exc:
             print(f"[replay] healing limited to semantic matching: {exc}")
 
+    # A recorded run names the store's secrets rather than spelling them — it
+    # typed the card, and its log says it typed {{kart.numara}} — so they are
+    # filled back in before anything is typed, as an execution fills them.
+    shared = storage.test_data_values()
+    store_keys = storage.referenced_keys([step.get("value") for step in run["steps"]])
+
     async def stream():
+        # Claimed the way a run claims its session, so a run started meanwhile
+        # is refused and Stop reaches the replay. A replay used to share the
+        # session with anything, and Stop answered that nothing was running.
+        # Nothing is awaited between the check and the claim.
+        state = agent.get_session(session_id)
+        if state.running:
+            yield json.dumps({"event": "error",
+                              "message": "An agent run is already in progress for this session."}) + "\n"
+            return
+        state.running = True
+        state.cancel.clear()
+
+        replay_id, status, note, crashed = None, "passed", None, None
+        stats = healing.HealStats()
+        try:
+            replay_id = storage.create_run(
+                goal=f"Replay of {run['title']}",
+                platform=run.get("platform"),
+                device_name=run.get("device_name"),
+                device_udid=run.get("device_udid"),
+                app_id=run.get("app_id"),
+                model="replay",
+                kind=run.get("kind"),
+                tags=(run.get("tags") or []) + ["replay"],
+                case_id=run.get("case_id"),
+                store_keys=store_keys,
+            )
+            state.run_id = replay_id
+            verdict = {"status": "passed"}
+            async for line in replaying(replay_id, state, stats, verdict):
+                yield line
+            _capture_page_events(target, replay_id)
+            if stats.healed:
+                note = (
+                    f"{stats.healed} step(s) were repaired against the current page. "
+                    "Re-export the script to pick up the new selectors."
+                )
+            status = verdict["status"]
+        except (asyncio.CancelledError, GeneratorExit):
+            # The browser went away, or started another replay, which aborts
+            # this one's stream. Re-raised; the row is closed below all the
+            # same, where it used to be left at "running".
+            status = "cancelled"
+            raise
+        except Exception as exc:
+            status, crashed = "failed", f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                if replay_id:
+                    storage.finish_run(replay_id, status, crashed, verdict_note=note,
+                                       store_keys=store_keys)
+            except Exception:
+                print(f"[replay] could not record the end of {replay_id}:\n"
+                      f"{traceback.format_exc()}")
+            finally:
+                state.running = False
+                state.cancel.clear()
+
+        # Not from `finally`: a stream being closed cannot take another line.
+        if crashed:
+            yield json.dumps({"event": "error", "message": crashed}, ensure_ascii=False) + "\n"
+        if replay_id is None:
+            return
+        if status != "cancelled":
+            yield json.dumps({
+                "event": "finished", "status": status,
+                "healed": stats.healed, "healDetails": stats.details,
+            }, ensure_ascii=False) + "\n"
+        yield json.dumps({"event": "run_closed", "runId": replay_id, "status": status}) + "\n"
+
+    async def replaying(replay_id, state, stats, verdict):
+        """The recorded steps, carried out again; the outcome goes in `verdict`."""
         yield json.dumps({
             "event": "run_started", "runId": replay_id,
             "goal": f"Replay of {run['title']}", "healing": bool(llm),
         }, ensure_ascii=False) + "\n"
+        # The mirror shows what a claimed session publishes (see stream_screen).
+        agent.publish_live_frame(session_id, await target.screenshot())
 
-        stats = healing.HealStats()
-        status = "passed"
         steps = [s for s in run["steps"] if s["status"] == "passed" and s["action"] != "done"]
-
         for index, step in enumerate(steps, start=1):
+            if state.cancel.is_set():
+                verdict["status"] = "cancelled"
+                yield json.dumps({"event": "cancelled", "message": "Replay stopped by the user."}) + "\n"
+                return
             snapshot = await target.snapshot()
 
             resolution = healing.HealResult(
@@ -1404,18 +1704,20 @@ async def replay_run(run_id: str, session_id: str, heal: bool = True):
                     }, ensure_ascii=False) + "\n"
 
             if not resolution.ok:
+                shot = await target.screenshot()
+                agent.publish_live_frame(session_id, shot)
                 step_id = storage.add_step(
                     replay_id, action=step["action"], status="failed",
                     target=step.get("target"), value=step.get("value"),
                     reason="replay", message=resolution.message,
-                    screenshot=await target.screenshot(),
+                    screenshot=shot,
                 )
                 yield json.dumps({
                     "event": "step_finished", "step": index, "stepId": step_id,
                     "action": step["action"], "status": "failed", "message": resolution.message,
                 }, ensure_ascii=False) + "\n"
-                status = "failed"
-                break
+                verdict["status"] = "failed"
+                return
 
             result = await agent._execute_action(
                 target,
@@ -1423,11 +1725,12 @@ async def replay_run(run_id: str, session_id: str, heal: bool = True):
                     "action": step["action"],
                     "elementId": resolution.element_id,
                     "xpath": resolution.selector,
-                    "value": step.get("value"),
+                    "value": suite_runner.substitute(step.get("value"), None, shared),
                 },
                 snapshot,
             )
             shot = await target.screenshot()
+            agent.publish_live_frame(session_id, shot)
             step_status = "passed" if result["ok"] else "failed"
             message = result["message"]
             if resolution.healed and result["ok"]:
@@ -1447,26 +1750,14 @@ async def replay_run(run_id: str, session_id: str, heal: bool = True):
             }, ensure_ascii=False) + "\n"
 
             if not result["ok"]:
-                status = "failed"
-                break
+                verdict["status"] = "failed"
+                return
             await asyncio.sleep(0.5)
 
-        _capture_page_events(target, replay_id)
-
-        note = None
-        if stats.healed:
-            note = (
-                f"{stats.healed} step(s) were repaired against the current page. "
-                "Re-export the script to pick up the new selectors."
-            )
-        storage.finish_run(replay_id, status, verdict_note=note)
-        yield json.dumps({
-            "event": "finished", "status": status,
-            "healed": stats.healed, "healDetails": stats.details,
-        }, ensure_ascii=False) + "\n"
-        yield json.dumps({"event": "run_closed", "runId": replay_id, "status": status}) + "\n"
-
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        _secrets_named(stream(), storage.test_data_secrets(store_keys)),
+        media_type="application/x-ndjson",
+    )
 
 
 def _capture_page_events(target, run_id: str) -> int:
@@ -1489,6 +1780,9 @@ class SuiteBody(BaseModel):
     # Which phone OS a mobile set is written against. Ignored for a web set,
     # where the question does not arise.
     os: Optional[str] = None
+    # Redesign or Dönüşüm — the tab the set is listed on. Left out, a new set
+    # goes to Redesign, the tab the pages open on.
+    track: Optional[str] = None
 
 
 class SuitePatchBody(BaseModel):
@@ -1504,6 +1798,7 @@ class SuitePatchBody(BaseModel):
     tags: Optional[List[str]] = None
     module: Optional[str] = None
     os: Optional[str] = None
+    track: Optional[str] = None
 
 
 class CaseBody(BaseModel):
@@ -1530,8 +1825,8 @@ class CaseBody(BaseModel):
     enabled: Optional[bool] = None
     priority: Optional[str] = None
     layer: Optional[str] = None
-    # Positive / Negative / Boundary — what kind of check this is. `type` is
-    # what the generator calls it.
+    # Positive / Negative / Boundary / Edge Case — what kind of check this is.
+    # `type` is what the generator calls it.
     scenarioType: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("scenarioType", "type"),
     )
@@ -1588,11 +1883,21 @@ async def get_suites():
     return {"suites": storage.list_suites()}
 
 
+def _check_track(track: Optional[str]) -> None:
+    """Refuse a track that is neither tab, rather than filing the set on one."""
+    if track is not None and storage.clean_track(track) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown track {track!r}: use one of {', '.join(storage.TRACKS)}.",
+        )
+
+
 @app.post("/api/suites")
 async def post_suite(body: SuiteBody):
+    _check_track(body.track)
     suite_id = storage.create_suite(
         body.name, body.description, body.kind, body.tags, module=body.module,
-        os=body.os,
+        os=body.os, track=body.track,
     )
     return storage.get_suite(suite_id)
 
@@ -1617,9 +1922,11 @@ async def patch_suite(suite_id: str, body: SuitePatchBody):
     """
     if storage.get_suite(suite_id) is None:
         raise HTTPException(status_code=404, detail="Suite not found.")
+    _check_track(body.track)
     storage.update_suite(
         suite_id, name=body.name, description=body.description,
         kind=body.kind, tags=body.tags, module=body.module, os=body.os,
+        track=body.track,
     )
     return storage.get_suite(suite_id)
 
@@ -2143,6 +2450,12 @@ async def get_bug_draft(run_id: str):
     return draft
 
 
+def _with_parts(bug: Dict[str, Any]) -> Dict[str, Any]:
+    """The bug, with its body read back into labelled parts for the page.
+    The text stays as it is: it is what a tracker takes and what gets edited."""
+    return {**bug, "parts": bug_report.parse_detail(bug.get("detail"))}
+
+
 @app.get("/api/bugs")
 async def list_bugs(
     status: Optional[str] = None,
@@ -2153,8 +2466,8 @@ async def list_bugs(
     phone_os: Optional[str] = Query(None, alias="os"),
 ):
     return {
-        "bugs": storage.list_bugs(status=status, code=code, search=search,
-                                  limit=limit, kind=kind, os=phone_os),
+        "bugs": [_with_parts(bug) for bug in storage.list_bugs(
+            status=status, code=code, search=search, limit=limit, kind=kind, os=phone_os)],
         "counts": storage.bug_counts(kind, phone_os),
         "platformCounts": storage.platform_counts("bugs"),
         "osCounts": storage.bug_os_counts(),
@@ -2181,7 +2494,7 @@ async def get_bug(bug_id: str):
     bug = storage.get_bug(bug_id)
     if bug is None:
         raise HTTPException(status_code=404, detail="Bug not found.")
-    return bug
+    return _with_parts(bug)
 
 
 @app.get("/api/bugs/{bug_id}/screenshot")
@@ -2314,10 +2627,15 @@ async def download_artifact(artifact_id: int = Path(..., ge=0, le=2**62)):
     if not os.path.realpath(full).startswith(root) or not os.path.exists(full):
         raise HTTPException(status_code=404, detail="The artifact file is no longer on disk.")
 
+    extension = os.path.splitext(full)[1].lower()
+    media_type = {".webm": "video/webm", ".mp4": "video/mp4",
+                  ".zip": "application/zip"}.get(extension, "application/octet-stream")
     return FileResponse(
         full,
-        filename=f"{artifact['kind']}-{artifact['run_id']}{os.path.splitext(full)[1]}",
-        media_type="application/octet-stream",
+        filename=f"{artifact['kind']}-{artifact['run_id']}{extension}",
+        media_type=media_type,
+        # A video is played in the report, beside its steps, as well as saved.
+        content_disposition_type="inline" if media_type.startswith("video/") else "attachment",
     )
 
 
@@ -2477,7 +2795,7 @@ async def get_session_page_events(session_id: str):
     target = require_target(session_id)
     if not hasattr(target, "peek_events"):
         return {"events": []}
-    return {"events": target.peek_events()}
+    return {"events": storage.named_page_events(target.peek_events())}
 
 
 # --------------------------------------------------------------------------- #
@@ -2718,7 +3036,57 @@ async def post_scan_accessibility(session_id: str):
     return result
 
 
+def _wait_until_idle(changes) -> None:
+    """Hold a restart the code asked for until nothing is running.
+
+    A restart kills whatever is in flight: a run stopped mid-scenario with
+    "the connection to the backend dropped", every time a file was saved
+    while a tester was using the app. Held here, the change is picked up the
+    moment the run ends — or after half an hour, for a run that never does.
+    """
+    import json as _json
+    import time as _time
+    import urllib.request
+
+    until = _time.monotonic() + 30 * 60
+    told = False
+    while _time.monotonic() < until:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as answer:
+                if not _json.load(answer).get("busy"):
+                    return
+        except Exception:
+            return  # Not answering: there is nothing left to protect.
+        if not told:
+            print("[reload] the code changed; restarting once the run in progress ends",
+                  flush=True)
+            told = True
+        _time.sleep(3)
+
+
 if __name__ == "__main__":
+    import sys
+
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    if sys.platform == "win32":
+        # Not uvicorn's own reloader. On Windows it runs the server on a
+        # SelectorEventLoop (uvicorn/loops/asyncio.py), which cannot start a
+        # subprocess — and Playwright starts its driver as one, so every web
+        # page failed to open with NotImplementedError. Here the server runs
+        # plainly, in a process of its own that is restarted whenever a .py
+        # file changes: a change is live a couple of seconds after it is
+        # saved, and nobody has to restart anything by hand. Only .py files:
+        # the database and the logs change on every run.
+        from watchfiles import PythonFilter, run_process
+
+        run_process(
+            os.path.dirname(os.path.abspath(__file__)),
+            target=uvicorn.run,
+            kwargs={"app": "main:app", "host": "127.0.0.1", "port": 8000},
+            watch_filter=PythonFilter(),
+            # Not in the middle of a run: see _wait_until_idle.
+            callback=_wait_until_idle,
+        )
+    else:
+        uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

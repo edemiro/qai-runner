@@ -518,6 +518,15 @@ TRANSIENT_SIGNATURES = (
 NAVIGATION_ATTEMPTS = 3
 RETRY_DELAYS = (1.5, 3.5)
 
+# A page that turns its first visit away and lets the second in. Measured on the
+# hotel standalone page (nuat2-coreservices, 30 Sep 2026): the first GET, with
+# no cookies, answers 404 and sets the session cookies (JSESSIONID,
+# TAFSessionId); the same GET carrying them answers 200 with the page. A person
+# gets past that with one refresh, so an opening does the same, once. A page
+# that is really missing answers 404 again and is left on screen, for the
+# scenario to judge as it always was.
+REFRESHED_PAST_404 = "it answered 404 on the first visit; one refresh loaded it"
+
 
 class NavigationError(RuntimeError):
     """A navigation that did not end on the page that was asked for."""
@@ -540,7 +549,24 @@ async def settle(page, timeout: int = 6000) -> None:
         pass
 
 
-async def goto_with_retry(page, url: str, attempts: int = NAVIGATION_ATTEMPTS) -> None:
+def _explain_refreshed_404(events: Optional[List[Dict[str, Any]]]) -> None:
+    """Say, on the 404 a refresh got past, that it was got past — so the
+    report still shows what the site did without reading as a page that never
+    opened."""
+    for event in reversed(events or []):
+        if (event.get("kind") == "httperror" and event.get("status") == 404
+                and event.get("resourceType") == "document"):
+            # Stripped: over HTTP/2 there is no status text, so the event
+            # reads "HTTP 404 " with the space it would have gone after.
+            said = (event.get("text") or "HTTP 404").strip()
+            event["text"] = f"{said} — first visit only; a refresh loaded the page"
+            return
+
+
+async def goto_with_retry(
+    page, url: str, attempts: int = NAVIGATION_ATTEMPTS,
+    events: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[str]:
     """Navigate, retrying while the failure looks like the intermittent kind.
 
     Raises NavigationError with the last reason if every attempt fails. Three
@@ -549,16 +575,27 @@ async def goto_with_retry(page, url: str, attempts: int = NAVIGATION_ATTEMPTS) -
     passes the initial check and only then falls back to an error document
     while its scripts run. The verdict is therefore taken after the page has
     settled, not the instant navigation reports done.
+
+    A page that answers 404 is refreshed once (see REFRESHED_PAST_404). When
+    that is what got it open, this returns the note saying so, and marks the
+    404 in `events`; otherwise it returns None.
     """
     last = "the page did not load"
+    note = None
 
     for attempt in range(attempts):
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            if getattr(response, "status", None) == 404:
+                print(f"[web] {url} answered 404; refreshing once")
+                response = await page.reload(wait_until="domcontentloaded", timeout=45000)
+                if response is not None and response.status < 400:
+                    note = REFRESHED_PAST_404
+                    _explain_refreshed_404(events)
             if not is_error_page(page.url):
                 await settle(page)
                 if not is_error_page(page.url):
-                    return
+                    return note
                 last = f"{url} loaded and then fell back to an error page"
             else:
                 last = f"{url} returned an error page instead of content"
@@ -599,6 +636,11 @@ KEY_MAP = {
     "end": "End",
 }
 
+# How long a CDP call made for the live mirror may take. They are made under
+# the screencast lock, so one that never answers would otherwise hold every
+# later viewer, and the page's own close, behind it.
+CDP_TIMEOUT_S = 5.0
+
 
 class WebTarget:
     kind = "web"
@@ -624,7 +666,11 @@ class WebTarget:
         # a browser rather than like a slideshow of polled screenshots.
         self._cdp = None
         self._screencasting = False
-        self._frames: "Optional[asyncio.Queue]" = None
+        # One queue per viewer. A single slot let each new viewer take the
+        # frames from the last, and the last one leaving stopped the cast
+        # under everybody: switching tabs and back froze the mirror.
+        self._frames: "set[asyncio.Queue]" = set()
+        self._screencast_lock = asyncio.Lock()
         self._frame_listener = False
         # Acks are fire-and-forget tasks, and a task nothing holds can be
         # collected before it runs. Chromium sends no further frame until the
@@ -632,6 +678,101 @@ class WebTarget:
         # it stops the stream. Measured: 14.8 fps, then 2.0, then 0.2 across
         # three viewers until these were kept.
         self._acks: set = set()
+        # How the cast was asked for, so it can be started again on a new tab.
+        self._cast_options = (85, None, None)
+        # The tabs to go back to, newest last (see _follow_new_tabs), and the
+        # tasks that move the mirror between them, held for the same reason as
+        # the acks.
+        self._tabs: List[Any] = []
+        self._tab_tasks: set = set()
+        self._closing = False
+
+    # --- tabs ------------------------------------------------------------ #
+
+    def _follow_new_tabs(self, page) -> None:
+        """Go where the page sends the user when it opens a tab.
+
+        "Otel Bul" on the hotel page opens Booking.com in a new tab and leaves
+        the page itself exactly as it was, so a run that stayed put saw nothing
+        happen and judged the search broken. A browser takes the user to the
+        new tab, so this does too — and the mirror and the recording go with
+        it. When the tab closes, the one that opened it is where things
+        continue, as in a browser.
+        """
+        on = getattr(page, "on", None)
+        if callable(on):
+            on("popup", lambda tab: self._on_new_tab(tab, page))
+
+    def _on_new_tab(self, tab, opener) -> None:
+        # All of it at once, not after the tab has loaded: the step that opened
+        # it is judged on the next look at the screen, which comes straight
+        # after the click. Listening first means an error while it loads is
+        # this run's to report.
+        if self._closing:
+            return
+        self._attach_listeners(tab)
+        self._follow_new_tabs(tab)
+        tab.on("close", lambda _page: self._later(self._tab_closed(tab)))
+        try:
+            tab.set_default_timeout(15000)
+        except Exception:
+            pass
+        self._tabs.append(opener)
+        self.page = tab
+        # Every bound in them belongs to the tab that was left.
+        self._snapshots.clear()
+        print(f"[web] followed a new tab: {getattr(tab, 'url', '')}")
+        self._later(self._settle_new_tab(tab))
+
+    async def _settle_new_tab(self, tab) -> None:
+        # A new window, rather than a tab, would otherwise open in front of
+        # whatever the tester is doing.
+        config = self.config or {}
+        if (not config.get("headless", True) and config.get("offscreen", True)
+                and config.get("browser", "chromium") == "chromium"):
+            await park_window(tab)
+        await self._move_screencast()
+
+    async def _tab_closed(self, tab) -> None:
+        self._tabs = [page for page in self._tabs if page is not tab]
+        if self._closing or tab is not self.page:
+            return
+        while self._tabs:
+            back = self._tabs.pop()
+            if not back.is_closed():
+                self.page = back
+                self._snapshots.clear()
+                await self._move_screencast()
+                return
+
+    def _later(self, coroutine) -> None:
+        task = asyncio.ensure_future(coroutine)
+        self._tab_tasks.add(task)
+        task.add_done_callback(self._tab_tasks.discard)
+
+    async def _move_screencast(self) -> None:
+        """Point the live mirror, and the run's recording, at the tab in use.
+
+        A CDP session belongs to one page, so the cast is stopped on the old
+        tab's session and started on a new one for this tab. The viewers'
+        queues stay as they are: nobody watching has to notice it moved.
+        """
+        async with self._screencast_lock:
+            old, self._cdp = self._cdp, None
+            self._frame_listener = False
+            was_casting, self._screencasting = self._screencasting, False
+            if old is not None:
+                if was_casting:
+                    try:
+                        await asyncio.wait_for(old.send("Page.stopScreencast"), CDP_TIMEOUT_S)
+                    except Exception:
+                        pass
+                try:
+                    await asyncio.wait_for(old.detach(), CDP_TIMEOUT_S)
+                except Exception:
+                    pass
+            if was_casting and self._frames:
+                await self._start_screencast(*self._cast_options)
 
     # --- what the page complained about ---------------------------------- #
 
@@ -642,8 +783,16 @@ class WebTarget:
         attach_page_listeners(page, self._events)
 
     def drain_events(self) -> List[Dict[str, Any]]:
-        """Hand over everything seen since the last call and start fresh."""
-        events, self._events = self._events, []
+        """Hand over everything seen since the last call and start fresh.
+
+        Emptied in place, not swapped for a new list: the page's listeners hold
+        this very list. Swapping left them writing into the one just handed
+        over, so every run after a session's first saw no page events at all —
+        no refusal, nothing for assert_no_errors, nothing in its record. A
+        38-step NUAT run that recorded none was how it showed.
+        """
+        events = list(self._events)
+        self._events.clear()
         return events
 
     def peek_events(self) -> List[Dict[str, Any]]:
@@ -817,8 +966,9 @@ class WebTarget:
             # Handles every way this fails — goto() raising, goto() quietly
             # landing on Chromium's error document, and a page that only falls
             # back to one once its scripts run — waits for the page to settle,
-            # and retries the kind of refusal that clears on its own.
-            await goto_with_retry(page, url)
+            # retries the kind of refusal that clears on its own, and refreshes
+            # a page that turns its first visit away with 404.
+            await goto_with_retry(page, url, events=events)
 
             # Before the agent is shown anything, so the first screenshot it
             # reasons about is the page rather than the page behind a banner.
@@ -836,7 +986,7 @@ class WebTarget:
             await playwright.stop()
             raise
 
-        return cls(
+        target = cls(
             session_id=f"web-{uuid.uuid4().hex[:12]}",
             playwright=playwright,
             browser=browser,
@@ -854,6 +1004,8 @@ class WebTarget:
             },
             events=events,
         )
+        target._follow_new_tabs(page)
+        return target
 
     def is_alive(self) -> bool:
         """Is the page still there?
@@ -898,13 +1050,13 @@ class WebTarget:
             # leaves an error document behind without raising, exactly as it
             # does on the first load, and reporting that as a success is how a
             # session ends up sitting on "Bu siteye ulaşılamıyor".
-            await goto_with_retry(self.page, target)
+            note = await goto_with_retry(self.page, target, events=self._events)
         except Exception as exc:
             return ActionResult(False, f"Could not open {target}: {exc}")
         # Every bound in them belongs to the page that just left.
         self._snapshots.clear()
         self.config["url"] = target
-        return ActionResult(True, f"Opened {self.page.url}")
+        return ActionResult(True, f"Opened {self.page.url}" + (f" ({note})" if note else ""))
 
     async def reopen(self) -> Dict[str, Any]:
         """Bring a dead page back at the same URL, keeping the session id.
@@ -950,13 +1102,16 @@ class WebTarget:
         self._snapshots.clear()
         self._events.clear()
         self._tracing = False
+        # The old browser's tabs went with it.
+        self._tabs = []
         # The old page's listeners died with it; without re-subscribing, the
         # reopened page reports no console or network errors at all.
         self._attach_listeners(page)
+        self._follow_new_tabs(page)
         if self._routes:
             await self.set_routes(self._routes)
 
-        await goto_with_retry(page, url)
+        await goto_with_retry(page, url, events=self._events)
         self.config["url"] = url
         return {"url": page.url, "title": await page.title()}
 
@@ -972,6 +1127,8 @@ class WebTarget:
         return size
 
     async def close(self) -> None:
+        # Tabs closing with the browser are not tabs to go back from.
+        self._closing = True
         await self.stop_screencast()
         # An unstopped trace is discarded when the context goes, so drop it
         # rather than leaving the recorder running into a closed browser.
@@ -1055,16 +1212,35 @@ class WebTarget:
 
         Returns False when the browser has no CDP (a non-Chromium engine), and
         the caller falls back to polling.
+
+        Every viewer passes its own queue and gets every frame. The cast is
+        started for the first and stopped after the last (`stop_screencast`).
         """
-        self._frames = queue
-        if self._screencasting:
-            return True
+        async with self._screencast_lock:
+            self._frames.add(queue)
+            if self._screencasting:
+                return True
+            started = False
+            self._cast_options = (quality, max_width, max_height)
+            try:
+                started = await self._start_screencast(quality, max_width, max_height)
+            finally:
+                # Off again unless the cast started — including when the viewer
+                # was cancelled while it was starting. Left in, it was a viewer
+                # nobody would remove, and the cast never stopped after the
+                # last real one left.
+                if not started:
+                    self._frames.discard(queue)
+            return started
+
+    async def _start_screencast(self, quality: int, max_width: Optional[int],
+                                max_height: Optional[int]) -> bool:
         try:
             if self._cdp is None:
-                self._cdp = await self._context.new_cdp_session(self.page)
+                self._cdp = await asyncio.wait_for(
+                    self._context.new_cdp_session(self.page), CDP_TIMEOUT_S)
         except Exception as exc:
             print(f"[web] screencast unavailable: {exc}")
-            self._frames = None
             return False
 
         cdp = self._cdp
@@ -1085,23 +1261,23 @@ class WebTarget:
                 task = asyncio.create_task(ack(session))
                 self._acks.add(task)
                 task.add_done_callback(self._acks.discard)
-            queue_now = self._frames
             data = params.get("data")
-            if queue_now is None or not data:
+            if not data:
                 return
-            try:
-                queue_now.put_nowait(data)
-            except asyncio.QueueFull:
-                # A viewer that has fallen behind wants the newest frame, not a
-                # backlog of stale ones, so the oldest goes.
+            for queue_now in list(self._frames):
                 try:
-                    queue_now.get_nowait()
                     queue_now.put_nowait(data)
-                except Exception:
-                    pass
+                except asyncio.QueueFull:
+                    # A viewer that has fallen behind wants the newest frame,
+                    # not a backlog of stale ones, so the oldest goes.
+                    try:
+                        queue_now.get_nowait()
+                        queue_now.put_nowait(data)
+                    except Exception:
+                        pass
 
-        # Registered once for the life of the target, reading the current queue
-        # each time rather than closing over one: removing and re-adding a CDP
+        # Registered once per CDP session, reading the current viewers each
+        # time rather than closing over one: removing and re-adding a CDP
         # listener between viewers failed silently, and every frame after the
         # first viewer left went to a queue nobody was reading.
         if not self._frame_listener:
@@ -1110,43 +1286,50 @@ class WebTarget:
 
         size = self.config or {}
         try:
-            await cdp.send("Page.startScreencast", {
+            await asyncio.wait_for(cdp.send("Page.startScreencast", {
                 "format": "jpeg",
                 "quality": max(30, min(int(quality), 95)),
                 "maxWidth": int(max_width or size.get("width") or 1440),
                 "maxHeight": int(max_height or size.get("height") or 900),
                 "everyNthFrame": 1,
-            })
+            }), CDP_TIMEOUT_S)
         except Exception as exc:
             print(f"[web] could not start the screencast: {exc}")
-            self._frames = None
             return False
         self._screencasting = True
         return True
 
-    async def stop_screencast(self) -> None:
-        """Stop the push and drop the CDP session with it.
+    async def stop_screencast(self, queue: "Optional[asyncio.Queue]" = None) -> None:
+        """Take a viewer off the cast, and stop it once nobody is watching.
 
-        Restarting a screencast on a session that has already run one does not
-        resume: measured across four viewers on the same session it fell 14.2
-        fps, 1.5, 0.2, 0.2. A session costs a millisecond to make, so each
-        viewer gets a fresh one rather than inheriting whatever state the last
-        one left behind.
+        Without a queue — the target closing — every viewer goes at once.
+
+        The CDP session goes with the cast. Restarting a screencast on a
+        session that has already run one does not resume: measured across four
+        viewers on the same session it fell 14.2 fps, 1.5, 0.2, 0.2. A session
+        costs a millisecond to make, so a cast started after the last viewer
+        left gets a fresh one rather than whatever state that one left behind.
         """
-        self._frames = None
-        cdp, self._cdp = self._cdp, None
-        self._frame_listener = False
-        if not self._screencasting or cdp is None:
-            return
-        self._screencasting = False
-        try:
-            await cdp.send("Page.stopScreencast")
-        except Exception:
-            pass
-        try:
-            await cdp.detach()
-        except Exception:
-            pass
+        async with self._screencast_lock:
+            if queue is None:
+                self._frames.clear()
+            else:
+                self._frames.discard(queue)
+            if self._frames:
+                return
+            cdp, self._cdp = self._cdp, None
+            self._frame_listener = False
+            if not self._screencasting or cdp is None:
+                return
+            self._screencasting = False
+            try:
+                await asyncio.wait_for(cdp.send("Page.stopScreencast"), CDP_TIMEOUT_S)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(cdp.detach(), CDP_TIMEOUT_S)
+            except Exception:
+                pass
 
     async def mirror_frame(self) -> Optional[str]:
         """A fast frame for the live panel: JPEG straight from Chromium, no
@@ -1182,6 +1365,40 @@ class WebTarget:
 
     # --- acting ---------------------------------------------------------- #
 
+    # The open panel a scroll with no target means: a box that scrolls, sitting
+    # in a layer above the page (a dialog, a popover, a list), on top where it
+    # is drawn. The smallest such box wins — the innermost list is the one a
+    # person has their pointer over.
+    _OPEN_PANEL_JS = r"""() => {
+      const vw = innerWidth, vh = innerHeight;
+      const layered = (el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const role = (n.getAttribute('role') || '').toLowerCase();
+          if (['dialog', 'alertdialog', 'listbox', 'menu'].includes(role)) return true;
+          if (n.getAttribute('aria-modal') === 'true') return true;
+          const s = getComputedStyle(n);
+          if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex, 10) > 0) return true;
+        }
+        return false;
+      };
+      let best = null;
+      for (const el of document.querySelectorAll('body *')) {
+        if (el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1) continue;
+        const s = getComputedStyle(el);
+        if (!/(auto|scroll|overlay)/.test(s.overflowY + ' ' + s.overflowX)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 40 || r.height < 40 || r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) continue;
+        if (!layered(el)) continue;
+        const x = Math.min(Math.max(r.left + r.width / 2, 1), vw - 1);
+        const y = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !(hit === el || el.contains(hit))) continue;
+        const area = r.width * r.height;
+        if (!best || area < best.area) best = { x, y, width: r.width, height: r.height, area };
+      }
+      return best;
+    }"""
+
     async def scroll(self, direction: str, element_id: Optional[str] = None) -> ActionResult:
         direction = (direction or "down").lower()
         deltas = {
@@ -1205,6 +1422,17 @@ class WebTarget:
             if box is None:
                 return ActionResult(False, f'"{element.describe()}" is not visible to scroll within')
 
+        # No target named, and a panel open over the page: that panel is what
+        # a person scrolling now means. The wheel went wherever the pointer
+        # last was, so with the guests panel open it moved the page behind it
+        # and the panel's second room never came into view.
+        panel = None
+        if box is None:
+            try:
+                panel = await self.page.evaluate(self._OPEN_PANEL_JS)
+            except Exception:
+                panel = None
+
         try:
             if box:
                 # The wheel scrolls whatever is under the pointer, so hovering
@@ -1212,6 +1440,9 @@ class WebTarget:
                 # the page behind it, which a page-wide scroll would hit instead.
                 await self.page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                 width, height = box["width"], box["height"]
+            elif panel:
+                await self.page.mouse.move(panel["x"], panel["y"])
+                width, height = panel["width"], panel["height"]
             else:
                 size = self.page.viewport_size or {"width": 1440, "height": 900}
                 width, height = size["width"], size["height"]
@@ -1219,7 +1450,7 @@ class WebTarget:
             await asyncio.sleep(0.4)
         except Exception as exc:
             return ActionResult(False, f"Scroll {direction} failed: {exc}")
-        return ActionResult(True, f"Scrolled {direction}")
+        return ActionResult(True, f"Scrolled {direction}" + (" inside the open panel" if panel else ""))
 
     # --- raw pointer, for hands-on control of the page ------------------- #
     #
